@@ -24,11 +24,17 @@ PAGE_HTML = """<!doctype html>
     --unknown: #c084fc; --dead: #ef4444;
   }
   * { box-sizing: border-box; }
+  html, body { max-width: 100%; overflow-x: hidden; }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     padding: 12px 12px 32px;
   }
+  #banner {
+    display: none; background: var(--dead); color: #fff; font-size: 13px;
+    padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; text-align: center;
+  }
+  #banner.show { display: block; }
   h1 { font-size: 15px; letter-spacing: .04em; color: var(--dim); margin: 4px 4px 12px; text-transform: uppercase; }
   .host { font-size: 12px; color: var(--dim); margin: 16px 4px 6px; }
   .card {
@@ -37,6 +43,7 @@ PAGE_HTML = """<!doctype html>
     cursor: pointer;
   }
   .card.selected { border-color: var(--working); }
+  .card.attention { border-color: var(--waiting); background: #241d12; }
   .row1 { display: flex; align-items: center; gap: 8px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
   .dot.WORKING { background: var(--working); }
@@ -56,19 +63,27 @@ PAGE_HTML = """<!doctype html>
   #panel.open { display: block; }
   #panel .target { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
   #panel textarea {
-    width: 100%; min-height: 70px; background: #11141a; color: var(--fg);
-    border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; resize: vertical;
+    width: 100%; min-height: 80px; background: #11141a; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 16px; line-height: 1.4;
+    font-family: inherit; resize: vertical;
   }
   #panel .actions { display: flex; gap: 8px; margin-top: 8px; }
-  #panel button { flex: 1; padding: 10px; border-radius: 8px; border: none; font: inherit; font-weight: 600; }
+  #panel button {
+    flex: 1; min-height: 46px; padding: 10px; border-radius: 8px; border: none;
+    font: inherit; font-size: 16px; font-weight: 600;
+  }
   #send { background: var(--working); color: #041018; }
+  #send:disabled { opacity: .6; }
   #cancel { background: var(--line); color: var(--fg); }
   #pair-screen { display: flex; flex-direction: column; gap: 10px; max-width: 320px; margin: 40px auto; }
   #pair-screen input {
-    font: inherit; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
-    background: #11141a; color: var(--fg); text-align: center; letter-spacing: .2em; font-size: 20px;
+    font-size: 20px; padding: 12px; min-height: 48px; border-radius: 8px; border: 1px solid var(--line);
+    background: #11141a; color: var(--fg); text-align: center; letter-spacing: .2em;
   }
-  #pair-screen button { padding: 12px; border-radius: 8px; border: none; background: var(--working); color: #041018; font: inherit; font-weight: 600; }
+  #pair-screen button {
+    min-height: 48px; padding: 12px; border-radius: 8px; border: none;
+    background: var(--working); color: #041018; font-size: 16px; font-weight: 600;
+  }
   #pair-error { color: var(--dead); font-size: 13px; min-height: 1.2em; }
   #toast {
     position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
@@ -90,6 +105,7 @@ PAGE_HTML = """<!doctype html>
 
 <div id="main" style="display:none">
   <h1>Tmux Agent Tower</h1>
+  <div id="banner"></div>
   <div id="list"></div>
 </div>
 
@@ -113,16 +129,25 @@ PAGE_HTML = """<!doctype html>
   var pairScreen = document.getElementById("pair-screen");
   var main = document.getElementById("main");
   var list = document.getElementById("list");
+  var banner = document.getElementById("banner");
   var panel = document.getElementById("panel");
   var panelTarget = document.getElementById("panel-target");
   var promptText = document.getElementById("prompt-text");
+  var sendBtn = document.getElementById("send");
   var toast = document.getElementById("toast");
   var selected = null; // {key, project, agent}
+  var sending = false;
 
   function showToast(msg) {
     toast.textContent = msg;
     toast.style.display = "block";
     setTimeout(function () { toast.style.display = "none"; }, 2500);
+  }
+
+  function setBanner(msg) {
+    if (!msg) { banner.classList.remove("show"); return; }
+    banner.textContent = msg;
+    banner.classList.add("show");
   }
 
   function api(path, opts) {
@@ -195,7 +220,10 @@ PAGE_HTML = """<!doctype html>
         }
 
         var card = document.createElement("div");
-        card.className = "card" + (selected && selected.key === p.key ? " selected" : "");
+        var cls = "card";
+        if (p.status === "WAITING") cls += " attention";
+        if (selected && selected.key === p.key) cls += " selected";
+        card.className = cls;
         card.addEventListener("click", function () { openPanel(p); });
 
         var row1 = document.createElement("div");
@@ -242,19 +270,25 @@ PAGE_HTML = """<!doctype html>
     selected = null;
   });
 
-  document.getElementById("send").addEventListener("click", function () {
-    if (!selected) return;
+  sendBtn.addEventListener("click", function () {
+    if (!selected || sending) return;
     var text = promptText.value;
     if (!text.trim()) return;
+
+    sending = true;
+    sendBtn.disabled = true;
+    var target = selected;
 
     api("/api/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        pane_key: selected.key, text: text,
-        project: selected.project, agent: selected.agent,
+        pane_key: target.key, text: text,
+        project: target.project, agent: target.agent,
       }),
     }).then(function (res) {
+      sending = false;
+      sendBtn.disabled = false;
       if (res.status === 200 && res.body.ok) {
         showToast("Sent.");
         panel.classList.remove("open");
@@ -262,7 +296,11 @@ PAGE_HTML = """<!doctype html>
       } else {
         showToast("Could not send (" + (res.body.error || res.status) + ").");
       }
-    }).catch(function () { showToast("Could not reach Tower."); });
+    }).catch(function () {
+      sending = false;
+      sendBtn.disabled = false;
+      showToast("Could not reach Tower.");
+    });
   });
 
   var polling = false;
@@ -278,8 +316,15 @@ PAGE_HTML = """<!doctype html>
         pairScreen.style.display = "flex";
         return;
       }
+      setBanner(null); // a successful poll clears any prior "unreachable" state
       render(res.body);
-    }).catch(function () { polling = false; });
+    }).catch(function () {
+      polling = false;
+      // The PC's Tower process is unreachable (stopped, network dropped,
+      // phone lost Wi-Fi) -- say so plainly rather than silently leaving
+      // a stale screen up with no indication it's out of date.
+      setBanner("Tower unreachable — last update above may be stale.");
+    });
   }
 
   if (token) {
