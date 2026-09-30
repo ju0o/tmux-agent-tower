@@ -24,6 +24,15 @@ def test_codex_waiting(fixture_lines):
     assert adapter.classify(ctx).status == "WAITING"
 
 
+def test_codex_first_run_trust_prompt_is_waiting(fixture_lines):
+    # Real dogfood finding (2026-09-30 P4 launcher testing): a first-run
+    # Codex pane sat at "Trust this folder?" and was misreported as IDLE
+    # because no generic waiting pattern matched that exact phrasing.
+    adapter = resolve_adapter("codex", "")
+    ctx = _ctx(fixture_lines, "codex-trust-prompt.txt", command="codex")
+    assert adapter.classify(ctx).status == "WAITING"
+
+
 def test_codex_spinner_title_is_working(fixture_lines):
     adapter = resolve_adapter("codex", "⠙ doing a thing")
     ctx = PaneContext(title="⠙ doing a thing", command="codex", lines=("",))

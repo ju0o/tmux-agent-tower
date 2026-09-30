@@ -38,6 +38,7 @@ GENERIC_WAIT_PATTERNS = [
     r"\byes\s*/\s*no\b",
     r"do you want",
     r"would you like",
+    r"trust this (folder|directory|project|repo)",
     r"waiting for input",
     r"choose an option",
     r"select an option",

@@ -1,0 +1,11 @@
+  Folder access
+  /home/example/project
+
+  Trust this folder? Codex can read,
+  edit, and run files here, subject
+  to your permission settings.
+
+› 1. Trust and continue
+  2. Back to Agent Command Center
+
+  enter continue · esc back
