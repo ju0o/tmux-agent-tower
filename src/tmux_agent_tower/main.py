@@ -162,11 +162,15 @@ def run_serve(lan: bool, port: int) -> None:
     print(f"Pairing code: {code}  (valid 5 minutes, one-time use)")
     print("Open the address above on your phone's browser and enter this code.")
     print()
-    print("Press Ctrl+C to stop.")
+    print("Type 'r' + Enter any time for a new pairing code. Ctrl+C to stop.")
     sys.stdout.flush()
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    stdin_thread = threading.Thread(target=_watch_stdin_for_regenerate, args=(server,), daemon=True)
+    stdin_thread.start()
+
     try:
         while thread.is_alive():
             time.sleep(0.5)
@@ -176,6 +180,28 @@ def run_serve(lan: bool, port: int) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def _watch_stdin_for_regenerate(server) -> None:
+    """Local-only pairing code regeneration: typing 'r' + Enter in the
+    same terminal ``tower serve`` is running in. Deliberately never
+    exposed over HTTP (see ``server/httpapi.py`` -- no endpoint calls
+    ``PairingSession.regenerate()``), since a remote client being able to
+    mint itself a fresh pairing code on demand would defeat the whole
+    point of rate-limiting wrong guesses.
+    """
+
+    while True:
+        try:
+            line = sys.stdin.readline()
+        except Exception:
+            return
+        if not line:
+            return  # stdin closed (e.g. running under a non-interactive wrapper)
+        if line.strip().lower() == "r":
+            new_code = server.pairing.regenerate()
+            print(f"\nNew pairing code: {new_code}  (valid 5 minutes, one-time use)")
+            sys.stdout.flush()
 
 
 def cli(argv=None) -> None:
