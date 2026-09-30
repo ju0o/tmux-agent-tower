@@ -71,19 +71,53 @@ token file is deleted.
 * **Pairing**: every device needs a token, obtained once via a 6-digit
   code shown on the PC's own terminal (never transmitted anywhere else).
   The code is single-use and expires after 5 minutes.
+* **Pairing rate limit**: at most 7 wrong guesses against one code before
+  it's invalidated immediately (not just eventually, at TTL expiry). A
+  wrong, expired, and locked-out code all produce the exact same
+  `{"error": "invalid_code"}` response -- an attacker on your LAN can't
+  tell which case they hit. Getting a new code after a lockout requires
+  typing `r` + Enter in the `tower serve` terminal itself; there is no
+  HTTP path to a new code at all (see `test_no_http_endpoint_can_regenerate_pairing_code`).
 * **Tokens**: opaque random strings, persisted at
   `~/.config/tmux-agent-tower/remote-tokens.json` (gitignored, never
   committed -- same boundary as every other local state file in this
-  project).
+  project), written with owner-only `0600` permissions (and its parent
+  directory `0700`) -- an existing, more permissive file is tightened the
+  next time `tower serve` starts. Best-effort on non-POSIX filesystems
+  (Windows): a failed `chmod` there is swallowed, never a crash.
 * **Host header check**: every request's `Host` header must match an
   address this process actually printed to you (`localhost`, `127.0.0.1`,
   or the detected LAN IP for `--lan`) -- defense against DNS rebinding
-  from a malicious page open in another tab on the same network.
+  from a malicious page open in another tab on the same network. This is
+  a narrow mitigation, not a substitute for TLS -- see below.
 * **Prompt send**: literal `tmux send-keys -l` (never interpreted as a
   key name), a hard length cap (4000 chars), a request body size cap
   (8KB), and the stale/wrong-pane re-check described above. No shell is
   ever invoked with the prompt text as an argument -- it can't escape
   into a host command regardless of its content.
+
+## No TLS -- read this before using `--lan`
+
+`tower serve --lan` is **plain HTTP, unencrypted, no certificate, no
+TLS**. That is a real limitation, not a detail:
+
+* The pairing code, the bearer token, and every prompt you send travel
+  as plaintext on your local network. Anyone else who can observe that
+  network traffic (a compromised device on the same Wi-Fi, a malicious
+  access point) can read them.
+* **Use this only on a private network you trust** -- your own home
+  Wi-Fi, not a coffee shop, airport, hotel, or any shared/public Wi-Fi.
+* **Never port-forward this to the public internet.** There is no
+  authentication model here strong enough for that exposure, and this
+  project will not add one for plain HTTP -- see the Tailscale note
+  below for the intended path to off-LAN access instead.
+* The Host-header check above stops one specific attack (DNS rebinding
+  against the LAN server) -- it is **not** encryption and does not make
+  this safe on an untrusted network. Don't read it as "safe enough for
+  public Wi-Fi because of the Host check"; it isn't.
+* Off-LAN access is planned via Tailscale (see `docs/ROADMAP.md`'s Tower
+  Remote section) once the LAN MVP itself has been dogfooded enough to
+  trust -- not via opening this port to the internet.
 
 ## Known gaps (v0 MVP)
 
@@ -94,8 +128,10 @@ token file is deleted.
 * **No mDNS/`tower.local` auto-discovery.** You read the printed LAN IP
   off the PC's terminal. Fine for a first real phone connection; a nice
   quality-of-life addition later.
-* **No pairing-code regeneration without restarting.** If the 5-minute
-  window lapses before you pair, restart `tower serve` for a new one.
+* **Pairing-code regeneration** is available (type `r` + Enter in the
+  `tower serve` terminal) but requires local terminal access -- there is
+  deliberately no remote/HTTP way to do it (see the security model
+  above).
 * **Single tmux session only** -- exactly the same scope `tower` itself
   has today (the session the process is run from), not a cross-session
   view.
