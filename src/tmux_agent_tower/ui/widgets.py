@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..i18n import t
+from .render import truncate_to_width
 
 
 def read_key(stdscr):
@@ -67,13 +68,23 @@ def safe_add(stdscr, y, x, text, attr=0):
     """Write text clipped to the screen; never raises on an off-screen
     write (which curses does on the bottom-right cell of some terminals).
     The single implementation used by every screen in this package.
+
+    Pre-truncates by *display* column width (see ``render.truncate_to_width``)
+    before handing off to ``addnstr``, whose own ``n`` limit counts Python
+    characters, not terminal columns -- a string full of double-width
+    Korean characters could stay under that character-count limit while
+    still overflowing well past the terminal's right edge, wrapping onto
+    the next line. Caught live once rows started mixing Korean and English
+    text on screen.
     """
 
     height, width = stdscr.getmaxyx()
     if y < 0 or y >= height or x < 0 or x >= width:
         return
+    available = max(0, width - x - 1)
+    clipped = truncate_to_width(text, available)
     try:
-        stdscr.addnstr(y, x, text, max(0, width - x - 1), attr)
+        stdscr.addnstr(y, x, clipped, len(clipped), attr)
     except curses.error:
         pass
 
@@ -86,11 +97,21 @@ class PickResult:
     selected_keys: Set[Any] = field(default_factory=set)
 
 
-def prompt_text(stdscr, label: str, initial: str = "") -> Optional[str]:
-    """Blocking single-line text input. Returns None if the user pressed Esc."""
+def prompt_text(
+    stdscr, label: str, initial: str = "", context_lines: Optional[Sequence[str]] = None
+) -> Optional[str]:
+    """Blocking single-line text input. Returns None if the user pressed Esc.
 
+    ``context_lines`` (e.g. "Current: JuHome" / "Auto: f") are drawn above
+    the input line, on an otherwise fully cleared screen -- earlier this
+    only cleared the one input line, leaving whatever screen was open
+    before it (a menu, the main list) visible underneath as a cosmetic
+    artifact.
+    """
+
+    context_lines = list(context_lines or [])
     height, width = stdscr.getmaxyx()
-    y = height - 2
+    y = min(height - 2, 2 + len(context_lines) + 1)
     buf = list(initial)
 
     curses.curs_set(1)
@@ -98,8 +119,10 @@ def prompt_text(stdscr, label: str, initial: str = "") -> Optional[str]:
 
     try:
         while True:
-            stdscr.move(y, 0)
-            stdscr.clrtoeol()
+            stdscr.erase()
+            for i, line in enumerate(context_lines):
+                safe_add(stdscr, 2 + i, 0, line, curses.A_DIM)
+
             text = label + "".join(buf)
             safe_add(stdscr, y, 0, text, curses.A_BOLD)
             stdscr.move(y, min(width - 1, len(label) + len(buf)))

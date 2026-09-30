@@ -11,7 +11,7 @@ import curses
 import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..adapters import resolve_adapter
 from ..adapters.base import PaneContext
@@ -26,8 +26,9 @@ from ..tmux import capture as tmux_capture
 from ..tmux import discovery
 from ..tmux import registration
 from ..tmux.navigation import open_pane
+from . import render
 from .launcher_wizard import run_launcher
-from .widgets import is_ctrl_c, is_enter, matches_letter, prompt_text, read_key, run_list_picker, safe_add
+from .widgets import is_backspace, is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
 
 REFRESH_SECONDS = 2.0
 REMOTE_REFRESH_SECONDS = 6.0
@@ -38,15 +39,19 @@ CONFIG_DIR = Path.home() / ".config" / "tmux-agent-tower"
 HOST_FILE = CONFIG_DIR / "host"
 REMOTE_HOSTS_FILE = CONFIG_DIR / "remote-hosts.txt"
 
-STATUS_SYMBOL = {
-    "WORKING": "●",  # ●
-    "WAITING": "!",
-    "IDLE": "○",  # ○
-    "UNKNOWN": "?",
-    "DEAD": "×",  # ×
-}
+STATUS_SYMBOL = render.STATUS_SYMBOL
+STATUS_ORDER = render.STATUS_ORDER
 
-STATUS_ORDER = ["WORKING", "WAITING", "IDLE", "UNKNOWN", "DEAD"]
+
+def _raw_hostname() -> str:
+    """The actual OS hostname tmux/a shell would default a pane's title to
+    -- deliberately NOT ``local_host_label()``'s (possibly user-overridden)
+    display name. A pane titled after the raw hostname carries no real
+    information ("just the default"); one that happens to share text with
+    a *chosen* display label like "MAINPC" would not mean the same thing.
+    """
+
+    return os.uname().nodename
 
 
 def local_host_label() -> str:
@@ -91,10 +96,12 @@ class Tower:
         self.overrides = OverrideStore(STATE_DIR / "overrides.json")
         self.status_engine = StatusEngine()
 
-        self.rows: List[Dict] = []          # selectable data rows only
-        self.visual: List[Dict] = []        # rows incl. host headers, for drawing
-        self.selected = 0
+        self.rows: List[Dict] = []           # all selectable data rows (unfiltered)
+        self.visible_rows: List[Dict] = []   # rows after the search filter is applied
+        self.visual: List[Dict] = []         # visible_rows incl. host headers, for drawing
+        self.selected = 0                    # index into visible_rows
         self.last_refresh = 0.0
+        self.filter_text = ""
         self._remote_cache: Dict[str, Dict] = {}
         self._remote_last_fetch: Dict[str, float] = {}
 
@@ -103,23 +110,39 @@ class Tower:
     def _local_rows(self) -> List[Dict]:
         panes = discovery.list_panes(self.session, self.own_pane_id, CAPTURE_LINES)
         out = []
+        no_name = t("project.no_name")
 
         for pane in panes:
             adapter = resolve_adapter(pane["command"], pane["title"], pane["cmdline"])
             ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
             status = self.status_engine.evaluate(pane["pane_id"], pane["dead"], adapter, ctx)
             visit = self.visits.visit_label(self.session, pane["pane_id"])
-            project = self.overrides.get_project(pane["pane_id"]) or pane["auto_project"]
-            agent = self.overrides.get_agent(pane["pane_id"]) or adapter.name
+
+            key = pane["pane_id"]
+            custom_project = self.overrides.get_project(key)
+            custom_agent = self.overrides.get_agent(key)
+            effective_title = pane["title"]  # local title edits are pushed to real tmux -- see edit_selected
+
+            auto_project = render.resolve_display_project(
+                None, pane.get("git_project"), effective_title, pane.get("path_basename"), _raw_hostname(), no_name
+            )
+            project = custom_project or auto_project
+            agent = custom_agent or adapter.name
+            title_line = render.title_secondary_line(project, effective_title, _raw_hostname())
 
             out.append(
                 {
                     "host": self.local_host,
                     "project": project,
+                    "auto_project": auto_project,
                     "agent": agent,
+                    "auto_agent": adapter.name,
+                    "title_line": title_line,
+                    "pane_title": effective_title,
+                    "path": pane["path"],
                     "status": status,
                     "visit": visit,
-                    "key": pane["pane_id"],
+                    "key": key,
                     "session": pane["session"],
                     "window_index": pane["window_index"],
                     "pane_id": pane["pane_id"],
@@ -175,6 +198,7 @@ class Tower:
                 continue
 
             remote_session = f"remote:{alias}"
+            no_name = t("project.no_name")
 
             for pane in snapshot["panes"]:
                 composite_key = f"{alias}:{pane['pane_id']}"
@@ -182,14 +206,32 @@ class Tower:
                 ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
                 status = self.status_engine.evaluate(composite_key, pane["dead"], adapter, ctx)
                 visit = self.visits.visit_label(remote_session, pane["pane_id"])
-                project = self.overrides.get_project(composite_key) or Path(pane["path"] or "").name or pane["path"]
-                agent = self.overrides.get_agent(composite_key) or adapter.name
+
+                custom_project = self.overrides.get_project(composite_key)
+                custom_agent = self.overrides.get_agent(composite_key)
+                # Remote title overrides aren't pushed to the real remote
+                # tmux (no remote install -- see docs/ARCHITECTURE.md), so
+                # the override itself is the effective title here.
+                effective_title = self.overrides.get_title(composite_key) or pane["title"]
+                basename = Path(pane["path"] or "").name or pane["path"]
+
+                auto_project = render.resolve_display_project(
+                    None, None, effective_title, basename, name, no_name
+                )
+                project = custom_project or auto_project
+                agent = custom_agent or adapter.name
+                title_line = render.title_secondary_line(project, effective_title, name)
 
                 out.append(
                     {
                         "host": name,
-                        "project": project or "(unknown)",
+                        "project": project,
+                        "auto_project": auto_project,
                         "agent": agent,
+                        "auto_agent": adapter.name,
+                        "title_line": title_line,
+                        "pane_title": effective_title,
+                        "path": pane["path"],
                         "status": status,
                         "visit": visit,
                         "key": composite_key,
@@ -202,39 +244,59 @@ class Tower:
 
     def load(self) -> None:
         previous_key = None
-        if self.rows and 0 <= self.selected < len(self.rows):
-            previous_key = self.rows[self.selected]["key"]
+        if self.visible_rows and 0 <= self.selected < len(self.visible_rows):
+            previous_key = self.visible_rows[self.selected]["key"]
 
         now = time.monotonic()
-        rows = self._local_rows() + self._remote_rows(now)
-        self.rows = rows
+        self.rows = self._local_rows() + self._remote_rows(now)
+        self._apply_filter(previous_key)
 
-        if not rows:
+    def _apply_filter(self, previous_key: Optional[str] = None) -> None:
+        """Recomputes ``visible_rows``/``visual`` from ``rows`` + the
+        current search filter, trying to keep the same row selected by
+        key (falling back to clamping the index) -- called both after a
+        fresh ``load()`` and whenever the filter text itself changes.
+        """
+
+        if previous_key is None and self.visible_rows and 0 <= self.selected < len(self.visible_rows):
+            previous_key = self.visible_rows[self.selected]["key"]
+
+        self.visible_rows = [r for r in self.rows if render.row_matches_filter(r, self.filter_text)]
+
+        if not self.visible_rows:
             self.selected = 0
+            self.visual = []
             return
 
         if previous_key:
-            for idx, row in enumerate(rows):
+            for idx, row in enumerate(self.visible_rows):
                 if row["key"] == previous_key:
                     self.selected = idx
                     break
             else:
-                self.selected = min(self.selected, len(rows) - 1)
+                self.selected = min(self.selected, len(self.visible_rows) - 1)
         else:
-            self.selected = min(self.selected, len(rows) - 1)
+            self.selected = min(self.selected, len(self.visible_rows) - 1)
 
         self._build_visual()
+
+    def set_filter(self, text: str) -> None:
+        self.filter_text = text
+        self._apply_filter()
+
+    def clear_filter(self) -> None:
+        self.set_filter("")
 
     def _build_visual(self) -> None:
         visual = []
         hosts_seen = []
-        for row in self.rows:
+        for row in self.visible_rows:
             if row["host"] not in hosts_seen:
                 hosts_seen.append(row["host"])
 
         for host in hosts_seen:
             visual.append({"type": "header", "host": host})
-            for idx, row in enumerate(self.rows):
+            for idx, row in enumerate(self.visible_rows):
                 if row["host"] == host:
                     visual.append({"type": "data", "row": row, "row_index": idx})
 
@@ -243,19 +305,19 @@ class Tower:
     # -- actions --------------------------------------------------------
 
     def move_up(self) -> None:
-        if not self.rows:
+        if not self.visible_rows:
             return
-        self.selected = (self.selected - 1) % len(self.rows)
+        self.selected = (self.selected - 1) % len(self.visible_rows)
 
     def move_down(self) -> None:
-        if not self.rows:
+        if not self.visible_rows:
             return
-        self.selected = (self.selected + 1) % len(self.rows)
+        self.selected = (self.selected + 1) % len(self.visible_rows)
 
     def open_selected(self) -> None:
-        if not self.rows:
+        if not self.visible_rows:
             return
-        row = self.rows[self.selected]
+        row = self.visible_rows[self.selected]
         if row.get("remote") or row.get("offline"):
             return
         self.visits.mark_seen(self.session, row["pane_id"])
@@ -271,9 +333,9 @@ class Tower:
         it never changes, restarts, or sends anything to the real process.
         """
 
-        if not self.rows:
+        if not self.visible_rows:
             return
-        row = self.rows[self.selected]
+        row = self.visible_rows[self.selected]
         if row.get("offline"):
             return
 
@@ -291,8 +353,17 @@ class Tower:
 
         key = row["key"]
 
+        def _context(current: Optional[str], auto: Optional[str]) -> List[str]:
+            lines = []
+            if current:
+                lines.append(f'{t("edit.current_label")}: {current}')
+            if auto:
+                lines.append(f'{t("edit.auto_label")}: {auto}')
+            return lines
+
         if pick.selected_key == "project":
-            name = prompt_text(stdscr, t("prompt.rename"))
+            context = _context(self.overrides.get_project(key), row.get("auto_project"))
+            name = prompt_text(stdscr, t("prompt.rename"), context_lines=context)
             if name:
                 self.overrides.set_project(key, name)
 
@@ -305,7 +376,8 @@ class Tower:
             if agent_pick.cancelled or agent_pick.selected_key is None:
                 pass
             elif agent_pick.selected_key == "__custom__":
-                custom = prompt_text(stdscr, t("prompt.agent_name"))
+                context = _context(self.overrides.get_agent(key), row.get("auto_agent"))
+                custom = prompt_text(stdscr, t("prompt.agent_name"), context_lines=context)
                 if custom:
                     self.overrides.set_agent(key, custom)
             elif agent_pick.selected_key == "__auto__":
@@ -314,7 +386,8 @@ class Tower:
                 self.overrides.set_agent(key, agent_pick.selected_key)
 
         elif pick.selected_key == "title":
-            title = prompt_text(stdscr, t("prompt.pane_title"))
+            context = _context(self.overrides.get_title(key), row.get("pane_title"))
+            title = prompt_text(stdscr, t("prompt.pane_title"), context_lines=context)
             if title:
                 self.overrides.set_title(key, title)
                 if not row.get("remote"):
@@ -329,7 +402,11 @@ class Tower:
         self.load()
 
     def status_counts(self, host: Optional[str] = None) -> Dict[str, int]:
-        rows = self.rows if host is None else [r for r in self.rows if r["host"] == host]
+        """Counts reflect the search filter (if any) -- see the module
+        docstring's note on ``visible_rows`` vs. ``rows``.
+        """
+
+        rows = self.visible_rows if host is None else [r for r in self.visible_rows if r["host"] == host]
         return {name: sum(1 for r in rows if r["status"] == name) for name in STATUS_ORDER}
 
 
@@ -361,113 +438,189 @@ def status_attr(status: str) -> int:
     }.get(status, 0)
 
 
-def summary_line(tower: Tower) -> str:
-    counts = tower.status_counts()
-    return "  ".join(f"{STATUS_SYMBOL[s]} {t('status.' + s)} {counts[s]}" for s in STATUS_ORDER)
+def _hosts_in_order(tower: Tower) -> List[str]:
+    hosts: List[str] = []
+    for row in tower.visible_rows:
+        if row["host"] not in hosts:
+            hosts.append(row["host"])
+    return hosts
 
 
-def host_summary(tower: Tower, host: str) -> str:
-    counts = tower.status_counts(host)
-    return "  ".join(f"{STATUS_SYMBOL[s]}{counts[s]}" for s in STATUS_ORDER)
+def _status_label(status: str) -> str:
+    return t("status." + status)
 
 
-def draw(stdscr, tower: Tower) -> None:
+def _project_text(row: Dict) -> str:
+    return row["project"] if row.get("project") is not None else t(row.get("placeholder", "remote.unreachable"))
+
+
+def _build_detail_fields(row: Dict) -> List[Tuple[str, str]]:
+    status = row["status"]
+    status_text = f'{STATUS_SYMBOL.get(status, "?")} {t("status." + status)}'
+
+    fields = [
+        (t("detail.project"), _project_text(row)),
+        (t("detail.agent"), row.get("agent")),
+        (t("detail.pane_title"), row.get("pane_title")),
+        (t("detail.path"), row.get("path")),
+        (t("detail.status"), status_text),
+        (t("detail.host"), row.get("host")),
+    ]
+    if row.get("pane_id"):
+        fields.append((t("detail.pane_id"), row["pane_id"]))
+    return fields
+
+
+def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
+    """Flattens ``tower.visual`` (header/data items) into one entry per
+    *physical* terminal line, since a data row can now take 1-3 lines
+    (project / agent+status in narrow layout / pane-title secondary line)
+    -- viewport scrolling paginates over this list, not over ``visual``.
+    """
+
+    physical: List[Dict] = []
+
+    for i, item in enumerate(tower.visual):
+        if item["type"] == "header":
+            physical.append({"kind": "header", "item_index": i, "host": item["host"]})
+            continue
+
+        row = item["row"]
+        row_index = item["row_index"]
+        physical.append({"kind": "primary", "row": row, "row_index": row_index})
+
+        if narrow:
+            physical.append({"kind": "agent_status", "row": row, "row_index": row_index})
+
+        if row.get("title_line"):
+            physical.append({"kind": "secondary", "row": row, "row_index": row_index})
+
+    return physical
+
+
+def draw(stdscr, tower: Tower, filtering: bool = False) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
+    narrow = render.use_narrow_layout(width)
 
-    safe_add(stdscr, 0, 2, t("app.title"), curses.A_BOLD)
-    safe_add(stdscr, 1, 2, summary_line(tower), curses.A_BOLD)
-    hint_line = "   ".join(
-        [
-            t("hint.move"), t("hint.open"), t("hint.rename"),
-            t("hint.add_project"), t("hint.new_workspace"),
-            t("hint.refresh"), t("hint.quit"),
-        ]
-    )
-    safe_add(stdscr, 2, 2, hint_line, curses.A_DIM)
+    # -- row 0: title + per-host mini summaries (right-aligned) ---------
 
-    project_x = 2
-    agent_x = max(30, width - 40)
-    status_x = max(44, width - 26)
-    visit_x = max(60, width - 10)
+    title = t("app.title")
+    safe_add(stdscr, 0, 2, title, curses.A_BOLD)
 
-    safe_add(stdscr, 3, project_x, t("column.project"), curses.A_BOLD | curses.A_DIM)
-    safe_add(stdscr, 3, agent_x, t("column.agent"), curses.A_BOLD | curses.A_DIM)
-    safe_add(stdscr, 3, status_x, t("column.status"), curses.A_BOLD | curses.A_DIM)
-    safe_add(stdscr, 3, visit_x, t("column.visit"), curses.A_BOLD | curses.A_DIM)
+    host_bits = [
+        f"{host} {summary}"
+        for host in _hosts_in_order(tower)
+        for summary in [render.format_host_summary(tower.status_counts(host), _status_label)]
+        if summary
+    ]
+    host_line = "   ".join(host_bits)
+    if host_line and not narrow:
+        x = max(len(title) + 6, width - render.display_width(host_line) - 2)
+        safe_add(stdscr, 0, x, host_line, curses.A_BOLD)
 
-    start_y = 4
-    max_rows = max(0, height - start_y - 3)
+    # -- row 1: hint line, or the live search-filter input ---------------
 
-    if not tower.visual:
-        safe_add(stdscr, start_y, 2, t("empty.no_panes"))
+    if filtering:
+        safe_add(stdscr, 1, 2, f'{t("filter.label")} {tower.filter_text}_', curses.A_BOLD)
+    else:
+        hint_keys = [t("hint.move"), t("hint.open"), t("hint.rename"), t("hint.add_project"), t("hint.new_workspace")]
+        hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
+        hint_keys += [t("hint.refresh"), t("hint.quit")]
+        safe_add(stdscr, 1, 2, "   ".join(hint_keys), curses.A_DIM)
+
+    start_y = 3
+    bottom_hint_y = height - 1
+
+    # -- selected-item detail panel (bottom), skipped on a short terminal -
+
+    detail_lines: List[str] = []
+    if render.should_show_detail_panel(height) and tower.visible_rows:
+        selected_row = tower.visible_rows[tower.selected]
+        detail_lines = render.format_detail_panel(_build_detail_fields(selected_row))
+
+    detail_block = (1 + 1 + len(detail_lines)) if detail_lines else 0  # divider + title + fields
+    max_rows = max(0, bottom_hint_y - start_y - detail_block)
+
+    if not tower.visible_rows:
+        msg = t("wizard.no_matches") if tower.filter_text else t("empty.no_panes")
+        safe_add(stdscr, start_y, 2, msg)
+        safe_add(stdscr, bottom_hint_y, 2, t("footer.return_hint"), curses.A_DIM)
         stdscr.noutrefresh()
         curses.doupdate()
         return
 
-    # Ensure the selected data row is inside the visible viewport, counting
-    # header rows too (so scrolling still makes sense visually).
-    selected_visual_index = 0
-    for i, item in enumerate(tower.visual):
-        if item["type"] == "data" and item["row_index"] == tower.selected:
-            selected_visual_index = i
+    physical = _build_physical_lines(tower, narrow)
+
+    selected_phys_index = 0
+    for i, p in enumerate(physical):
+        if p["kind"] == "primary" and p["row_index"] == tower.selected:
+            selected_phys_index = i
             break
 
     top = 0
-    if selected_visual_index >= max_rows:
-        top = selected_visual_index - max_rows + 1
+    if selected_phys_index >= max_rows:
+        top = selected_phys_index - max_rows + 1
 
-    visible = tower.visual[top : top + max_rows]
+    visible_physical = physical[top : top + max_rows]
 
-    for offset, item in enumerate(visible):
+    agent_x = max(34, width - 34)
+    status_x = max(50, width - 16)
+
+    for offset, p in enumerate(visible_physical):
         y = start_y + offset
 
-        if item["type"] == "header":
-            counts_text = host_summary(tower, item["host"])
-            safe_add(stdscr, y, 0, f'▼ {item["host"]}  {counts_text}', curses.A_BOLD)
+        if p["kind"] == "header":
+            label = f'── {p["host"]} '
+            safe_add(stdscr, y, 0, label + "─" * max(0, width - len(label) - 1), curses.A_BOLD)
             continue
 
-        row = item["row"]
-        is_selected = item["row_index"] == tower.selected
+        row = p["row"]
+        is_selected = p["row_index"] == tower.selected
 
-        base_attr = curses.A_REVERSE if is_selected else 0
+        base_attr = curses.A_REVERSE
         if is_selected and curses.has_colors():
             base_attr = curses.color_pair(6) | curses.A_BOLD
 
         if is_selected:
             safe_add(stdscr, y, 0, " " * max(1, width - 1), base_attr)
-            safe_add(stdscr, y, 0, ">", base_attr)
 
-        title_width = max(10, agent_x - project_x - 2)
-        text = row["project"] if row["project"] is not None else t(row.get("placeholder", "remote.unreachable"))
-        if len(text) > title_width:
-            text = text[: max(1, title_width - 1)] + "…"
+        if p["kind"] == "primary":
+            marker = ">" if is_selected else " "
+            new_flag = t("marker.new") if row.get("visit") == "NEW" else ""
+            symbol = STATUS_SYMBOL.get(row["status"], "?")
+            prefix = f"{marker} {new_flag:<3} {symbol} "
 
-        safe_add(stdscr, y, project_x, text, base_attr)
-        safe_add(stdscr, y, agent_x, row["agent"][:11], base_attr)
+            project_width = (width - len(prefix) - 2) if narrow else max(10, agent_x - len(prefix) - 2)
+            text = render.truncate_to_width(_project_text(row), project_width)
 
-        status = row["status"]
-        symbol = STATUS_SYMBOL.get(status, "?")
-        attr = base_attr if is_selected else status_attr(status)
-        safe_add(stdscr, y, status_x, f"{symbol} {t('status.' + status)}", attr)
+            safe_add(stdscr, y, 0, prefix, base_attr if is_selected else curses.A_BOLD)
+            safe_add(stdscr, y, len(prefix), text, base_attr if is_selected else 0)
 
-        visit_text = t("visit." + row["visit"]) if row["visit"] is not None else "-"
-        safe_add(stdscr, y, visit_x, visit_text, base_attr)
+            if not narrow:
+                safe_add(stdscr, y, agent_x, row["agent"][:14], base_attr)
+                status_attr_here = base_attr if is_selected else status_attr(row["status"])
+                safe_add(stdscr, y, status_x, t("status." + row["status"]), status_attr_here)
 
-    footer_y = height - 2
-    if tower.rows:
-        selected = tower.rows[tower.selected]
-        project_text = selected["project"] if selected["project"] is not None else t(selected.get("placeholder", "remote.unreachable"))
-        footer = t("footer.selected", host=selected["host"], project=project_text)
-        safe_add(stdscr, footer_y, 2, footer, curses.A_BOLD)
+        elif p["kind"] == "agent_status":
+            text = render.agent_status_line(row["agent"], t("status." + row["status"]))
+            attr = base_attr if is_selected else curses.A_DIM
+            safe_add(stdscr, y, 4, text, attr)
 
-    safe_add(
-        stdscr,
-        height - 1,
-        2,
-        f'{t("footer.return_hint")}   {t("footer.best_effort")}',
-        curses.A_DIM,
-    )
+        elif p["kind"] == "secondary":
+            attr = base_attr if is_selected else curses.A_DIM
+            safe_add(stdscr, y, 4, row["title_line"], attr)
+
+    # -- detail panel ------------------------------------------------------
+
+    if detail_lines:
+        divider_y = start_y + max_rows
+        safe_add(stdscr, divider_y, 0, "─" * max(0, width - 1), curses.A_DIM)
+        safe_add(stdscr, divider_y + 1, 2, t("detail.title"), curses.A_BOLD)
+        for i, line in enumerate(detail_lines):
+            safe_add(stdscr, divider_y + 2 + i, 2, line)
+
+    safe_add(stdscr, bottom_hint_y, 2, f'{t("footer.return_hint")}   {t("footer.best_effort")}', curses.A_DIM)
 
     stdscr.noutrefresh()
     curses.doupdate()
@@ -526,15 +679,16 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
     tower = Tower(session, own_pane_id)
     tower.load()
     tower.last_refresh = time.monotonic()
+    filtering = False
     draw(stdscr, tower)
 
     while True:
         now = time.monotonic()
 
-        if now - tower.last_refresh >= REFRESH_SECONDS:
+        if not filtering and now - tower.last_refresh >= REFRESH_SECONDS:
             tower.load()
             tower.last_refresh = now
-            draw(stdscr, tower)
+            draw(stdscr, tower, filtering=filtering)
 
         try:
             key = read_key(stdscr)
@@ -545,11 +699,36 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if key == curses.KEY_RESIZE:
-            draw(stdscr, tower)
+            draw(stdscr, tower, filtering=filtering)
             continue
 
         if is_ctrl_c(key):
             break
+
+        # -- live search filter ("/" to start typing; Esc always clears) --
+
+        if filtering:
+            if is_escape(key):
+                tower.clear_filter()
+                filtering = False
+            elif is_enter(key):
+                filtering = False
+            elif is_backspace(key):
+                tower.set_filter(tower.filter_text[:-1])
+            elif isinstance(key, str) and key.isprintable():
+                tower.set_filter(tower.filter_text + key)
+            draw(stdscr, tower, filtering=filtering)
+            continue
+
+        if key == "/":
+            filtering = True
+            draw(stdscr, tower, filtering=filtering)
+            continue
+
+        if is_escape(key) and tower.filter_text:
+            tower.clear_filter()
+            draw(stdscr, tower)
+            continue
 
         if key == curses.KEY_UP or matches_letter(key, "k"):
             tower.move_up()
