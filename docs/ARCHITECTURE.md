@@ -12,6 +12,8 @@ src/tmux_agent_tower/
 ├── i18n/           translator layer (ko/en catalogs); UI text only, never
 │                   business logic
 ├── ui/             the curses TUI + Workspace Launcher wizard screens
+├── notify.py       opt-in, off-by-default status-transition notifications
+│                   (notify-send, falling back to tmux display-message)
 └── main.py         `tower` CLI entry point
 ```
 
@@ -28,12 +30,22 @@ read-only vs. write-capable boundary obvious at the directory level.
 tmux list-panes  ──▶  discovery.list_panes()  ──▶  for each pane:
                                                        adapters.resolve_adapter()
                                                        detection.status.StatusEngine.evaluate()
+                                                       detection.status.StatusEngine.duration_seconds()
+                                                       adapters.<agent>.extract_activity()  (v0.2.0)
                                                        state.visits.VisitStore.visit_label()
                                                        state.overrides.OverrideStore.get()
+                                                       notify.NotificationTracker.observe()  (v0.2.0)
                                                      ──▶  display row
 remote/collector (per configured host, throttled)  ──▶  display rows
                                                      ──▶  ui.tower.draw()
 ```
+
+`extract_activity()` and `duration_seconds()` are pure read/observe
+calls over data already captured for status detection -- neither adds a
+new source of I/O. `NotificationTracker.observe()` is off by default
+(see `launcher/config.py`'s `notifications` key) and, when enabled, can
+only ever call `notify.send()` (a `notify-send`/`tmux display-message`
+fire-and-forget), never anything that reaches into a monitored pane.
 
 Nothing in this path sends input to a monitored pane or touches any
 process other than `tmux` itself, `ps` (read-only process listing), and
