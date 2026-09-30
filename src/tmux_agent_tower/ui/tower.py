@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 from ..adapters import resolve_adapter
 from ..adapters.base import PaneContext
 from ..detection.status import StatusEngine, STATUS_DEAD
+from .. import i18n
 from ..i18n import t
 from ..remote.collector import fetch_remote, HOST_STATUS_ONLINE
 from ..state.overrides import OverrideStore
@@ -24,7 +25,7 @@ from ..tmux import capture as tmux_capture
 from ..tmux import discovery
 from ..tmux.navigation import open_pane
 from .launcher_wizard import run_launcher
-from .widgets import safe_add
+from .widgets import run_list_picker, safe_add
 
 REFRESH_SECONDS = 2.0
 REMOTE_REFRESH_SECONDS = 6.0
@@ -439,6 +440,26 @@ def draw(stdscr, tower: Tower) -> None:
     curses.doupdate()
 
 
+def maybe_show_language_picker(stdscr) -> None:
+    """Shown exactly once, on the very first run (see
+    ``i18n.has_language_configured``). Deliberately bilingual since we
+    don't know the answer yet.
+    """
+
+    if i18n.has_language_configured():
+        return
+
+    pick = run_list_picker(
+        stdscr,
+        "TMUX AGENT TOWER — 언어를 선택하세요 / Choose your language",
+        [("ko", "한국어 (KO)"), ("en", "English (EN)")],
+        footer_hint="Enter",
+    )
+
+    chosen = pick.selected_key if not pick.cancelled and pick.selected_key else "ko"
+    i18n.save_language(chosen)
+
+
 def main(stdscr, session: Optional[str] = None) -> None:
     setup_colors()
     stdscr.keypad(True)
@@ -450,6 +471,8 @@ def main(stdscr, session: Optional[str] = None) -> None:
         curses.curs_set(0)
     except curses.error:
         pass
+
+    maybe_show_language_picker(stdscr)
 
     session = session or tmux_capture.current_session()
     if not session:
