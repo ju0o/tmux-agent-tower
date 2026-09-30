@@ -203,6 +203,31 @@ def test_wrong_pairing_code_rejected(server):
     assert body["ok"] is False
 
 
+def test_repeated_wrong_pairing_attempts_lock_out_the_code(server):
+    from tmux_agent_tower.server.auth import MAX_PAIR_ATTEMPTS
+
+    real_code = server.pairing.current_code()
+
+    for _ in range(MAX_PAIR_ATTEMPTS):
+        status, body = _post(server, "/api/pair", {"code": "000000"})
+        assert status == 400
+        assert body["error"] == "invalid_code"
+
+    # The real code no longer works either -- locked out, not just the
+    # wrong guesses rejected.
+    status, body = _post(server, "/api/pair", {"code": real_code})
+    assert status == 400
+    assert body["error"] == "invalid_code"
+
+
+def test_no_http_endpoint_can_regenerate_pairing_code(server):
+    # Regenerating is local-only (a terminal keypress in main.py) --
+    # there must be no reachable HTTP path to it at all.
+    for path in ("/api/pair/regenerate", "/api/regenerate", "/api/pairing/new"):
+        status, _ = _get(server, path)
+        assert status == 404
+
+
 def test_invalid_host_header_rejected(server):
     status, body = _get(server, "/api/health", host_header="evil.example.com")
     assert status == 400
