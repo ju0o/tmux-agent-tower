@@ -1,0 +1,120 @@
+"""Status engine v2.
+
+Design constraints (see docs/STATUS_ENGINE.md for the full rationale):
+
+* STATUS and VISIT are completely independent. Whether a human has looked
+  at a pane yet must never change what status is reported for it. This
+  engine has no notion of "seen"/"new" at all.
+* States: WORKING, WAITING, IDLE, UNKNOWN, DEAD. There is no "CHECKING"
+  state — an unvisited-but-actively-working pane must report WORKING.
+* A wrong WORKING or wrong IDLE is worse than an honest UNKNOWN.
+* Hysteresis: a WORKING verdict is "held" for a short window after the
+  screen last changed, so a pane that pauses output for a second or two
+  (thinking, waiting on a slow tool call) doesn't flicker back to IDLE and
+  then to WORKING again on the next refresh.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Sequence
+
+from ..adapters.base import AgentAdapter, PaneContext, looks_like_generic_waiting
+
+STATUS_WORKING = "WORKING"
+STATUS_WAITING = "WAITING"
+STATUS_IDLE = "IDLE"
+STATUS_UNKNOWN = "UNKNOWN"
+STATUS_DEAD = "DEAD"
+
+DEFAULT_WORKING_HOLD_SECONDS = 8.0
+
+
+def _hash_lines(lines: Sequence[str]) -> str:
+    joined = "\n".join(lines)
+    return hashlib.sha256(joined.encode("utf-8", errors="replace")).hexdigest()
+
+
+@dataclass
+class _PaneState:
+    last_hash: Optional[str] = None
+    active_until: float = 0.0
+    observations: int = 0
+
+
+class StatusEngine:
+    """Stateful evaluator: call ``evaluate`` once per pane per refresh tick."""
+
+    def __init__(self, hold_seconds: float = DEFAULT_WORKING_HOLD_SECONDS):
+        self.hold_seconds = hold_seconds
+        self._state: Dict[str, _PaneState] = {}
+
+    def forget(self, pane_id: str) -> None:
+        self._state.pop(pane_id, None)
+
+    def evaluate(
+        self,
+        pane_id: str,
+        dead: bool,
+        adapter: AgentAdapter,
+        ctx: PaneContext,
+        now: Optional[float] = None,
+    ) -> str:
+        if dead:
+            self.forget(pane_id)
+            return STATUS_DEAD
+
+        now = now if now is not None else time.monotonic()
+        state = self._state.setdefault(pane_id, _PaneState())
+
+        digest = _hash_lines(ctx.lines)
+        changed = state.last_hash is not None and digest != state.last_hash
+        first_observation = state.observations == 0
+
+        state.last_hash = digest
+        state.observations += 1
+
+        opinion = adapter.classify(ctx)
+
+        # 1. Strong, agent-specific WORKING evidence always wins and refreshes
+        #    the hold window.
+        if opinion.status == STATUS_WORKING:
+            state.active_until = now + self.hold_seconds
+            return STATUS_WORKING
+
+        # 2. The screen is actually producing new output right now.
+        if changed:
+            state.active_until = now + self.hold_seconds
+            return STATUS_WORKING
+
+        # 3. Output paused very recently after being active -- hold WORKING
+        #    briefly instead of flapping to IDLE/UNKNOWN and back.
+        if state.active_until > now:
+            return STATUS_WORKING
+
+        # 4. Agent-specific WAITING evidence.
+        if opinion.status == STATUS_WAITING:
+            return STATUS_WAITING
+
+        # 5. Agent-specific IDLE evidence (adapter is confident it's idle-ready).
+        if opinion.status == STATUS_IDLE:
+            return STATUS_IDLE
+
+        # 6. Generic waiting-prompt fallback for agents without a specific
+        #    adapter opinion.
+        if looks_like_generic_waiting(ctx.tail(20)):
+            return STATUS_WAITING
+
+        # 7. No adapter opinion, no change, no generic signal at all.
+        blank = not ctx.lines or all(not line.strip() for line in ctx.lines)
+
+        if first_observation or blank:
+            # We have not established a stable baseline for this pane yet
+            # (or there is nothing on screen to reason about) -- an honest
+            # "don't know" beats guessing IDLE or WORKING.
+            return STATUS_UNKNOWN
+
+        # 8. Stable, non-blank, no waiting markers -> best-effort IDLE.
+        return STATUS_IDLE

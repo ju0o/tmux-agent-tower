@@ -1,0 +1,9 @@
+  Finished running tests
+
+  All tests passed.
+
+  → Add a follow-up
+
+
+  Auto Balance · 12.0%                   Run Everything
+  /home/example/project

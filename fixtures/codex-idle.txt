@@ -1,0 +1,10 @@
+• Finished task
+
+  Summary of what changed goes here.
+
+  Worked for 4m 12s • 10:00
+
+› Ask Codex to do anything
+
+  GPT-6-Luna medium · /home/example/project · Example task title
+  ← for agents · ? for shortcuts

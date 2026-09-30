@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tmux-agent-tower"
+version = "0.1.0"
+description = "A local-first TUI control tower for monitoring coding agents across tmux panes."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "ju0o" }]
+keywords = [
+    "tmux",
+    "ai-agent",
+    "coding-agent",
+    "codex",
+    "claude-code",
+    "opencode",
+    "terminal",
+    "tui",
+    "developer-tools",
+    "agent-monitor",
+    "multi-agent",
+    "cli",
+]
+classifiers = [
+    "Environment :: Console :: Curses",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Tools",
+    "Topic :: Terminals",
+]
+
+[project.urls]
+Homepage = "https://github.com/ju0o/tmux-agent-tower"
+Issues = "https://github.com/ju0o/tmux-agent-tower/issues"
+
+[project.scripts]
+tower = "tmux_agent_tower.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

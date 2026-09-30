@@ -1,0 +1,15 @@
+• Explored
+  └ Read some_config_file.yaml
+    + Show details
+
+• Called some_tool.example.run_query
+  └ {"result":"..."}
+    + Show details
+
+• Working (12m 34s • esc to interrupt)
+
+
+› g
+
+  GPT-6-Luna medium · /home/example/project · Example task title
+  tab to queue message

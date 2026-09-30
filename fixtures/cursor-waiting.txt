@@ -1,0 +1,5 @@
+  Run this command?
+
+    rm -rf ./dist
+
+  Allow? (y/n)

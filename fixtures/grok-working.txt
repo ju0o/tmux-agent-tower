@@ -1,0 +1,10 @@
+  /home/example/project        ◆ 2 │ 40K / 500K │ [Dashboard]
+
+     ▾ Tasks 1
+     ⸬ Task Example background task (2) 30s [↗][✗]
+
+    ◎ 1 loop still running · send a message
+
+  ╭────────────────────────────────────────────────────╮
+  │ ❯                                                  │
+  ╰─────────────── Grok 4.5 (medium) · always-approve ─╯

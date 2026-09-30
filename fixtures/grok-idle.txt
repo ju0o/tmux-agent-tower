@@ -1,0 +1,7 @@
+  /home/example/project        ◆ 2 │ 40K / 500K │ [Dashboard]
+
+    ◎ 0 commands · send a message
+
+  ╭────────────────────────────────────────────────────╮
+  │ ❯                                                  │
+  ╰─────────────── Grok 4.5 (medium) · always-approve ─╯

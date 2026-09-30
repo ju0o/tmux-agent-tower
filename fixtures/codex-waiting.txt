@@ -1,0 +1,8 @@
+• Calling some_tool.example.run_shell_command
+  └ rm -rf ./build
+
+Allow this command to run?
+
+  1. Yes
+  2. Yes, and don't ask again
+  3. No

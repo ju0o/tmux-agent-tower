@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# local-only evidence (may contain private pane content); never commit raw captures
+evidence/local/
+*.local.txt
+*.local.json

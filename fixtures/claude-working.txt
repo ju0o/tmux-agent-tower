@@ -1,0 +1,5 @@
+  • Read src/example.py
+
+* Synthesizing… (1m 24s · ↓ 6.3k tokens)
+
+  ⎿  Tip: Use /help to see available commands
