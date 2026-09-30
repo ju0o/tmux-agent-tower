@@ -10,6 +10,10 @@ Codex, Claude Code, OpenCode, Grok CLI, Cursor Agent CLI를 여러 tmux pane에�
 쉽습니다. Tmux Agent Tower는 이걸 한 화면에 모아 보여주고, 필요한 pane으로
 바로 이동시켜주는 작고 local-first인 TUI입니다.
 
+![Tmux Agent Tower 스크린샷: 호스트별로 묶인 pane 목록과 상태/에이전트/확인 컬럼](docs/assets/demo.png)
+
+*(일반적인 예시 프로젝트 이름을 사용한 목업입니다)*
+
 ```
 TMUX AGENT TOWER
 ● 작업 중 3  ! 입력 대기 1  ○ 대기 2  ? 확인 불가 0  × 종료됨 0

@@ -11,6 +11,11 @@ for your approval, and which one finished ten minutes ago. Tmux Agent
 Tower is a small, local-first TUI that lists them all in one screen and
 jumps you straight to the one that needs you.
 
+![Tmux Agent Tower screenshot: a host-grouped pane list showing status, agent, and visit columns](docs/assets/demo.png)
+
+*(mockup with generic placeholder project names; the Korean UI is the
+current default -- see [Language](#language) below)*
+
 ```
 AGENT CONTROL TOWER
 ● WORKING 3  ! WAITING 1  ○ IDLE 2  ? UNKNOWN 0  × DEAD 0
