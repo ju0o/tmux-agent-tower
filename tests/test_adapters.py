@@ -92,7 +92,23 @@ def test_cursor_waiting(fixture_lines):
     assert adapter.classify(ctx).status == "WAITING"
 
 
+def test_opencode_working(fixture_lines):
+    adapter = resolve_adapter("opencode", "some title")
+    ctx = _ctx(fixture_lines, "opencode-working.txt", command="opencode")
+    assert adapter.classify(ctx).status == "WORKING"
+
+
+def test_opencode_idle(fixture_lines):
+    adapter = resolve_adapter("opencode", "some title")
+    ctx = _ctx(fixture_lines, "opencode-idle.txt", command="opencode")
+    assert adapter.classify(ctx).status == "IDLE"
+
+
 def test_opencode_waiting(fixture_lines):
+    # NOTE: this fixture is a synthesized generic prompt, not a live
+    # OpenCode capture -- its own approval UI was never observed (see
+    # adapters/opencode.py's module docstring). This only exercises the
+    # generic waiting-pattern fallback that every unmatched adapter shares.
     adapter = resolve_adapter("opencode", "some title")
     ctx = _ctx(fixture_lines, "opencode-waiting.txt", command="opencode")
     assert adapter.classify(ctx).status == "WAITING"

@@ -49,6 +49,7 @@ STRINGS = {
     "wizard.search_label": "검색:",
     "wizard.no_matches": "일치하는 항목이 없습니다.",
     "wizard.no_project_roots": "검색 위치가 설정되지 않았습니다. B를 눌러 직접 경로를 선택하세요.",
+    "wizard.no_projects_found": "발견된 프로젝트가 없습니다. B를 눌러 직접 경로를 선택하세요.",
     "wizard.pick_host": "작업할 컴퓨터를 선택하세요.",
     "wizard.pick_project_single": "프로젝트를 추가하세요.",
     "wizard.pick_project_multi": "작업할 프로젝트를 선택하세요.",

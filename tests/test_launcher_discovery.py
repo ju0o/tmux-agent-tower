@@ -1,5 +1,8 @@
+import subprocess
+
 from tmux_agent_tower.launcher.discovery import (
     find_git_projects,
+    find_remote_git_projects,
     manual_path_entry,
     load_recent,
     record_recent,
@@ -71,22 +74,60 @@ def test_manual_path_entry_flags_non_git():
 
 
 def test_recent_projects_roundtrip(tmp_path):
-    assert load_recent(tmp_path) == []
-    record_recent(tmp_path, "/a/one")
-    record_recent(tmp_path, "/a/two")
-    assert load_recent(tmp_path) == ["/a/two", "/a/one"]
+    assert load_recent(tmp_path, "MAINPC") == []
+    record_recent(tmp_path, "MAINPC", "/a/one")
+    record_recent(tmp_path, "MAINPC", "/a/two")
+    assert load_recent(tmp_path, "MAINPC") == ["/a/two", "/a/one"]
 
 
 def test_recent_projects_moves_existing_to_front(tmp_path):
-    record_recent(tmp_path, "/a/one")
-    record_recent(tmp_path, "/a/two")
-    record_recent(tmp_path, "/a/one")
-    assert load_recent(tmp_path) == ["/a/one", "/a/two"]
+    record_recent(tmp_path, "MAINPC", "/a/one")
+    record_recent(tmp_path, "MAINPC", "/a/two")
+    record_recent(tmp_path, "MAINPC", "/a/one")
+    assert load_recent(tmp_path, "MAINPC") == ["/a/one", "/a/two"]
 
 
 def test_recent_projects_capped(tmp_path):
     for i in range(30):
-        record_recent(tmp_path, f"/a/{i}")
-    recent = load_recent(tmp_path)
+        record_recent(tmp_path, "MAINPC", f"/a/{i}")
+    recent = load_recent(tmp_path, "MAINPC")
     assert len(recent) == 20
     assert recent[0] == "/a/29"
+
+
+def test_recent_projects_scoped_per_host(tmp_path):
+    record_recent(tmp_path, "MAINPC", "/a/one")
+    record_recent(tmp_path, "ASUS", "/a/two")
+    assert load_recent(tmp_path, "MAINPC") == ["/a/one"]
+    assert load_recent(tmp_path, "ASUS") == ["/a/two"]
+
+
+def test_find_remote_git_projects_parses_git_dirs(monkeypatch):
+    fake_result = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="/home/x/Projects/Alpha/.git\n/home/x/Projects/Beta/.git\n"
+    )
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake_result)
+
+    projects = find_remote_git_projects("asus")
+    assert [p.name for p in projects] == ["Alpha", "Beta"]
+    assert projects[0].path == "/home/x/Projects/Alpha"
+
+
+def test_find_remote_git_projects_empty_output(monkeypatch):
+    fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake_result)
+    assert find_remote_git_projects("asus") == []
+
+
+def test_find_remote_git_projects_nonzero_exit_is_empty(monkeypatch):
+    fake_result = subprocess.CompletedProcess(args=[], returncode=1, stdout="")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake_result)
+    assert find_remote_git_projects("asus") == []
+
+
+def test_find_remote_git_projects_timeout_is_empty(monkeypatch):
+    def fake_run(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="ssh", timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert find_remote_git_projects("asus") == []

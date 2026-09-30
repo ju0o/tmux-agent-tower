@@ -11,11 +11,18 @@ from __future__ import annotations
 import curses
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from ..i18n import t
 from ..launcher.config import AGENT_LAUNCH_ORDER, load_config
-from ..launcher.discovery import find_git_projects, load_recent, record_recent, manual_path_entry, ProjectEntry
+from ..launcher.discovery import (
+    find_git_projects,
+    find_remote_git_projects,
+    load_recent,
+    record_recent,
+    manual_path_entry,
+    ProjectEntry,
+)
 from ..launcher.spawn import SpawnTarget, spawn_local, spawn_remote
 from .widgets import ENTER_KEYS, ESC, prompt_text, run_list_picker, safe_add, show_message_screen
 
@@ -65,20 +72,34 @@ def _pick_host(stdscr, tower) -> Optional[Tuple[str, str, bool]]:
     return pick.selected_key, label, pick.selected_key != tower.local_host
 
 
-def _pick_local_projects(stdscr, multi: bool, state_dir: Path) -> Optional[List[ProjectEntry]]:
-    cfg = load_config()
-    roots = cfg["project_roots"]
-    recent_paths = load_recent(state_dir)
-    discovered = find_git_projects(roots) if roots else []
+def _pick_projects(
+    stdscr,
+    multi: bool,
+    state_dir: Path,
+    host_key: str,
+    discovered: List[ProjectEntry],
+    validate_manual_path: Callable[[str], bool],
+    no_roots_hint: Optional[str] = None,
+) -> Optional[List[ProjectEntry]]:
+    """Shared local/remote project picker.
+
+    ``discovered`` is already resolved (git-repo scan results, local or
+    remote). ``validate_manual_path`` checks a manually-typed path exists
+    (local: ``Path.is_dir()``; remote: an SSH ``test -d``) -- the picker
+    itself doesn't know or care which.
+    """
+
+    recent_paths = load_recent(state_dir, host_key)
     by_path = {p.path: p for p in discovered}
 
     items: List[Tuple[str, str]] = []
     seen = set()
+    path_to_entry = dict(by_path)
 
     for path in recent_paths:
-        entry = by_path.get(path) or (manual_path_entry(path) if Path(path).is_dir() else None)
+        entry = by_path.get(path)
         if entry is None:
-            continue
+            continue  # Don't re-validate every recent path on every open; stale entries just drop off.
         items.append((entry.path, t("wizard.recent_prefix") + entry.name))
         seen.add(entry.path)
 
@@ -86,13 +107,8 @@ def _pick_local_projects(stdscr, multi: bool, state_dir: Path) -> Optional[List[
         if entry.path not in seen:
             items.append((entry.path, entry.name))
 
-    path_to_entry = {p.path: p for p in discovered}
-    for path in recent_paths:
-        if path in by_path:
-            path_to_entry[path] = by_path[path]
-
-    if not items and not roots:
-        show_message_screen(stdscr, t("wizard.pick_project_multi" if multi else "wizard.pick_project_single"), [t("wizard.no_project_roots")])
+    if not items and no_roots_hint:
+        show_message_screen(stdscr, t("wizard.pick_project_multi" if multi else "wizard.pick_project_single"), [no_roots_hint])
 
     title = t("wizard.pick_project_multi") if multi else t("wizard.pick_project_single")
     hint = t("wizard.hint_multi") if multi else t("wizard.hint_single_search")
@@ -110,11 +126,11 @@ def _pick_local_projects(stdscr, multi: bool, state_dir: Path) -> Optional[List[
             path_str = prompt_text(stdscr, t("wizard.manual_path_prompt"))
             if path_str is None or not path_str.strip():
                 continue
-            candidate = Path(path_str).expanduser()
-            if not candidate.is_dir():
-                show_message_screen(stdscr, t("wizard.manual_path_not_found"), [str(candidate)])
+            candidate = path_str.strip()
+            if not validate_manual_path(candidate):
+                show_message_screen(stdscr, t("wizard.manual_path_not_found"), [candidate])
                 continue
-            entry = manual_path_entry(str(candidate))
+            entry = manual_path_entry(candidate)
             if multi:
                 items.append((entry.path, entry.name))
                 path_to_entry[entry.path] = entry
@@ -131,31 +147,6 @@ def _pick_local_projects(stdscr, multi: bool, state_dir: Path) -> Optional[List[
         if pick.selected_key is None:
             continue
         return [path_to_entry.get(pick.selected_key) or manual_path_entry(pick.selected_key)]
-
-
-def _pick_remote_projects(stdscr, host_alias: str, multi: bool) -> Optional[List[ProjectEntry]]:
-    entries: List[ProjectEntry] = []
-
-    while True:
-        hint = t("wizard.manual_path_done_hint") if (multi and entries) else ""
-        path_str = prompt_text(stdscr, t("wizard.manual_path_prompt") + hint)
-
-        if path_str is None:
-            return entries if entries else None
-
-        if not path_str.strip():
-            break
-
-        if not _check_remote_path_exists(host_alias, path_str.strip()):
-            show_message_screen(stdscr, t("wizard.manual_path_not_found"), [path_str])
-            continue
-
-        entries.append(manual_path_entry(path_str.strip()))
-
-        if not multi:
-            break
-
-    return entries or None
 
 
 def _pick_agent(stdscr) -> Optional[str]:
@@ -231,9 +222,16 @@ def run_launcher(stdscr, tower, multi: bool, state_dir: Path) -> None:
         if not _check_remote_reachable(host_key):
             show_message_screen(stdscr, t("wizard.remote_unreachable", host=host_label), [])
             return
-        projects = _pick_remote_projects(stdscr, host_key, multi)
+        discovered = find_remote_git_projects(host_key)
+        validate = lambda p: _check_remote_path_exists(host_key, p)  # noqa: E731
     else:
-        projects = _pick_local_projects(stdscr, multi, state_dir)
+        cfg = load_config()
+        roots = cfg["project_roots"]
+        discovered = find_git_projects(roots) if roots else []
+        validate = lambda p: Path(p).expanduser().is_dir()  # noqa: E731
+
+    no_roots_hint = t("wizard.no_projects_found") if not discovered else None
+    projects = _pick_projects(stdscr, multi, state_dir, host_key, discovered, validate, no_roots_hint)
 
     if not projects:
         return
@@ -258,8 +256,9 @@ def run_launcher(stdscr, tower, multi: bool, state_dir: Path) -> None:
         results = spawn_remote(host_key, host_label, targets, cfg["agents"], layout=layout)
     else:
         results = spawn_local(tower.session, host_label, targets, cfg["agents"], layout=layout)
-        for p in projects:
-            record_recent(state_dir, p.path)
+
+    for p in projects:
+        record_recent(state_dir, host_key, p.path)
 
     result_lines = []
     for r in results:

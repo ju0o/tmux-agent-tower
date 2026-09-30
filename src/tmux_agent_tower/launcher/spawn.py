@@ -129,19 +129,26 @@ def build_remote_script(window_name: str, targets_with_commands: List[Tuple[Spaw
     lines = [
         "set -u",
         'SESS=$(tmux list-sessions -F "#{session_name}" 2>/dev/null | head -n1)',
-        'if [ -z "$SESS" ]; then tmux new-session -d -s tower; SESS=tower; fi',
+        "NEW_SESSION=0",
+        'if [ -z "$SESS" ]; then NEW_SESSION=1; SESS=tower; fi',
         f"WIN={shlex.quote(window_name)}",
-        'if tmux list-windows -t "$SESS" -F "#{window_name}" 2>/dev/null | grep -Fxq "$WIN"; then '
-        "WIN_EXISTS=1; else WIN_EXISTS=0; fi",
     ]
 
     for index, (target, command) in enumerate(targets_with_commands):
         path_q = shlex.quote(target.project_path)
 
         if index == 0:
+            # A brand-new session's own default first window is created
+            # directly AS our target window (via `new-session -n`) instead
+            # of `new-session` + a separate `new-window`, so no unused
+            # leftover window is left behind. This path is only reachable
+            # when we know for certain no session existed a moment ago, so
+            # it can never disturb a pre-existing one.
             lines.append(
-                f'if [ "$WIN_EXISTS" = "0" ]; then tmux new-window -d -t "${{SESS}}:" -n "$WIN" -c {path_q}; '
-                f'else tmux split-window -t "${{SESS}}:${{WIN}}" -c {path_q}; fi'
+                f'if [ "$NEW_SESSION" = "1" ]; then tmux new-session -d -s "$SESS" -n "$WIN" -c {path_q}; '
+                f'elif tmux list-windows -t "$SESS" -F "#{{window_name}}" 2>/dev/null | grep -Fxq "$WIN"; then '
+                f'tmux split-window -t "${{SESS}}:${{WIN}}" -c {path_q}; '
+                f'else tmux new-window -d -t "${{SESS}}:" -n "$WIN" -c {path_q}; fi'
             )
         else:
             lines.append(f'tmux split-window -t "${{SESS}}:${{WIN}}" -c {path_q}')

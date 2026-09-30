@@ -52,6 +52,7 @@ STRINGS = {
     "wizard.search_label": "Search:",
     "wizard.no_matches": "No matches.",
     "wizard.no_project_roots": "No search locations configured. Press B to enter a path manually.",
+    "wizard.no_projects_found": "No projects found. Press B to enter a path manually.",
     "wizard.pick_host": "Pick a computer to work on.",
     "wizard.pick_project_single": "Add a project.",
     "wizard.pick_project_multi": "Pick the projects to work on.",

@@ -126,6 +126,17 @@ def test_build_remote_script_quotes_paths_with_spaces():
     assert "'/proj/has space'" in script
 
 
+def test_build_remote_script_new_session_uses_new_session_n_not_new_window():
+    # Regression: creating a session with plain `new-session -d -s tower`
+    # followed by a separate `new-window` leaves tmux's own default first
+    # window behind. The NEW_SESSION branch must fold window creation into
+    # `new-session -n` itself so nothing meaningless is left over.
+    targets = [(SpawnTarget("/proj/a", "a", "Codex"), "codex")]
+    script = spawn.build_remote_script("ASUS", targets, "tiled")
+    assert 'new-session -d -s "$SESS" -n "$WIN"' in script
+    assert "NEW_SESSION=1" in script
+
+
 def test_spawn_remote_parses_ok_and_missing(monkeypatch):
     fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="OK 0\nMISSING 1\n")
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: fake_result)

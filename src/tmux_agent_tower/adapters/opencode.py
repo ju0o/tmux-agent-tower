@@ -1,27 +1,32 @@
 """OpenCode adapter.
 
-No live OpenCode session was available to sample during initial
-development, so this adapter is intentionally conservative: it only relies
-on generic waiting-prompt detection and a couple of commonly-seen
-Ink/React-TUI conventions (spinner + "esc to interrupt", empty prompt
-box). It is expected to be refined against real captures — see
-``fixtures/opencode-*.txt`` and the "best-effort" note in the README.
+Verified 2026-09-30 against a real, live OpenCode 1.18.32 session (see
+``fixtures/opencode-working.txt`` / ``opencode-idle.txt``, sanitized):
+
+* Actively working: the bottom status bar shows a block/dot progress
+  indicator followed by ``esc interrupt`` (e.g. ``⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt``).
+  This text is absent whenever OpenCode is idle — confirmed by comparing
+  multiple idle captures before and after a real task.
+* Idle / ready: bottom bar instead reads ``... ctrl+p commands`` (no
+  ``esc interrupt``), and/or a just-finished summary line like
+  ``▣  Build · <mode> · 6.0s`` (past tense — the turn is over).
+
+NOT verified live: an explicit permission/confirmation prompt. The
+session tested was configured in a mode that auto-approved file writes,
+so no such prompt ever appeared on screen to capture. WAITING therefore
+still falls back entirely to the generic waiting-pattern detector for
+this adapter — treat that as an open item if OpenCode's own approval UI
+turns out to need a specific pattern (see CONTRIBUTING.md).
 """
 
 from __future__ import annotations
 
 import re
 
-from .base import (
-    AgentAdapter,
-    AdapterResult,
-    PaneContext,
-    BRAILLE_SPINNER_CHARS,
-    looks_like_generic_waiting,
-    title_has_spinner,
-)
+from .base import AgentAdapter, AdapterResult, PaneContext, looks_like_generic_waiting
 
-_WORKING_RE = re.compile(r"\besc to interrupt\b", re.IGNORECASE)
+_WORKING_RE = re.compile(r"\besc interrupt\b", re.IGNORECASE)
+_IDLE_HINT_RE = re.compile(r"ctrl\+p commands", re.IGNORECASE)
 
 
 class OpenCodeAdapter(AgentAdapter):
@@ -32,10 +37,13 @@ class OpenCodeAdapter(AgentAdapter):
     def classify(self, ctx: PaneContext) -> AdapterResult:
         tail = ctx.tail(20)
 
-        if title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS) and _WORKING_RE.search(tail):
-            return AdapterResult("WORKING", "spinner-and-interrupt-hint")
+        if _WORKING_RE.search(tail):
+            return AdapterResult("WORKING", "interrupt-hint")
 
         if looks_like_generic_waiting(tail):
             return AdapterResult("WAITING", "approval-prompt")
+
+        if _IDLE_HINT_RE.search(tail):
+            return AdapterResult("IDLE", "commands-hint-no-interrupt")
 
         return AdapterResult(None)
