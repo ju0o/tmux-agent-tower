@@ -96,8 +96,42 @@ below).
 | `↑` / `↓` (or `j`/`k`) | Move selection |
 | `Enter` | Jump to the selected pane |
 | `E` | Set a custom project name for the selected pane |
+| `N` | Add one project (Workspace Launcher, single) |
+| `W` | Start a new workspace (Workspace Launcher, multi) |
 | `R` | Refresh immediately |
 | `Q` / `Ctrl+C` | Quit |
+
+### Workspace Launcher (`N` / `W`)
+
+Picks a host, one or more projects (auto-discovered from your configured
+project roots, searchable, or a manual path), and an agent per project,
+shows a preview you can adjust (per-project agent override, layout), and
+then creates **brand-new** tmux panes for them -- `cd`'d into the project,
+running the chosen agent, titled automatically, and immediately visible in
+the Tower.
+
+This is explicitly *not* the same thing as controlling an already-running
+agent: the launcher only ever creates new panes and never sends input to,
+closes, or reconfigures anything that existed before it ran -- see
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for why that distinction matters and
+what's still deliberately unbuilt (the "Action Layer").
+
+Project search locations come from `~/.config/tmux-agent-tower/config.toml`:
+
+```toml
+project_roots = ["~/Projects", "~/code"]
+
+[agents]
+claude = "claude-beta"   # override the command used to launch an agent
+```
+
+Both keys are optional -- with no config at all, the launcher looks for a
+handful of common directory names under your home folder (`Projects`,
+`code`, `dev`, `src`, ...) that actually exist, and uses each agent's
+default command name. A command is checked with `command -v` (locally, or
+on the target host for a remote launch) right before spawning; if it's
+missing, that one project's pane still opens as a plain shell with a
+"command not found" title instead of aborting the rest.
 
 ### Optional: `Ctrl+b w` shortcut
 

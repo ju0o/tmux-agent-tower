@@ -6,10 +6,21 @@ src/tmux_agent_tower/
 ├── detection/      status engine, project auto-discovery, process helpers
 ├── tmux/           thin wrappers around the `tmux` binary (read + navigate)
 ├── state/          NEW/SEEN visit tracking, custom title overrides
-├── remote/         minimal SSH-based multi-host prototype
-├── ui/             the curses TUI itself
+├── remote/         minimal SSH-based multi-host prototype (read-only)
+├── launcher/       Workspace Launcher: config, project discovery, spawn
+│                   (creates NEW panes only -- see docs/ROADMAP.md)
+├── i18n/           translator layer (ko/en catalogs); UI text only, never
+│                   business logic
+├── ui/             the curses TUI + Workspace Launcher wizard screens
 └── main.py         `tower` CLI entry point
 ```
+
+`launcher/` is deliberately separate from `remote/`: `remote/collector.py`
+only ever reads (P3), while `launcher/spawn.py` writes -- it creates new
+windows/panes, locally via direct `tmux` calls and remotely via a
+generated shell script run once over SSH (see its module docstring for the
+exact rules it enforces). Keeping that as its own package makes the
+read-only vs. write-capable boundary obvious at the directory level.
 
 ## Data flow, one refresh cycle
 

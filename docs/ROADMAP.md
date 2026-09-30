@@ -1,42 +1,72 @@
 # Roadmap
 
-v0.1.0 covers P0-P3 (TUI stability, status engine v2, project
-auto-discovery, a minimal multi-host prototype) plus a Korean-first UI
-(see "i18n" below). None of the following are implemented, and none are
-planned without a clear, separate decision to do so -- they represent a
-meaningfully larger trust boundary than "read tmux and show it to you."
+v0.1.0 covers P0-P4 (TUI stability, status engine v2, project
+auto-discovery, a minimal multi-host prototype, and the Workspace
+Launcher) plus a Korean-first UI (see "i18n" below).
 
-## P4 - Action layer (not started, needs explicit design/approval first)
+## Workspace Launcher vs. Action Layer -- the distinction that matters here
 
-* Sending a prompt into a monitored pane.
-* `tmux send-keys` automation.
-* Interrupting, restarting, or spawning an agent process.
+Earlier drafts of this roadmap classified the Workspace Launcher as part
+of the (deliberately unbuilt) Action Layer, reasoning that both involve
+starting an agent process. On review, that conflated two different trust
+boundaries and was corrected:
+
+* **Workspace Launcher** (P4, implemented): the user explicitly picks a
+  host, one or more projects, and an agent from a menu, reviews a preview
+  screen, and presses Enter to create **brand-new** panes running that
+  agent. Nothing that existed before the launcher ran is touched.
+* **Action Layer** (P5, still not implemented): the program acting on an
+  **already-running** agent it did not just create -- sending it a prompt,
+  `tmux send-keys`, interrupting, restarting, killing, or auto-approving
+  a permission prompt on its behalf.
+
+The Workspace Launcher's hard rule (enforced in
+`launcher/spawn.py`'s module docstring and its tests) is that it only ever
+creates new windows/panes; it never sends keys into, closes, or
+reconfigures a pane that existed before it ran. That is a meaningfully
+smaller trust boundary than the Action Layer, which is why P4 shipped
+while P5 remains a deliberate non-goal for now.
+
+## P5 - Action layer (not started, needs explicit design/approval first)
+
+* Sending a prompt into a monitored (pre-existing) pane.
+* `tmux send-keys` automation against a live agent.
+* Interrupting, restarting, or killing an agent process.
 * Auto-accepting approval/permission prompts.
-* **Workspace Launcher** (pick a host/project/agent from a menu, create a
-  new pane, `cd` into the project, and start that agent CLI there). This
-  was proposed as a dogfood convenience, but it is still, mechanically,
-  "spawn an agent process" -- the exact thing this list forbids without a
-  separate decision to cross that line. Not implemented; revisit
-  deliberately, not as a side effect of a UI-wording change.
 
-## P5 - Task awareness
+## P6 - Task awareness
 
 * Extracting "what is this agent currently working on" as structured text.
 * Elapsed time / completion / failure inference.
 
-## P6 - Notifications
+## P7 - Notifications
 
 * Desktop/terminal-bell notification when a pane becomes WAITING.
 * Notification when a long-running task finishes.
 
-## P7 - Persistence
+## P8 - Persistence
 
 * Host/project name mappings that survive a tmux server restart.
 * Session recovery hints.
 
-## P8 - Stable v1
+## P9 - Stable v1
 
-## P9 - Optional GUI
+## P10 - Optional GUI
+
+## Known limitations from the P4 slice
+
+* Remote (ASUS-style) project selection is manual-path-only: there is no
+  remote equivalent of local git-repo auto-discovery yet, since that would
+  need its own SSH round trip and wasn't part of this slice. The path is
+  validated (`test -d`) over SSH before accepting it.
+* Creating a brand-new remote tmux session (when the host had no tmux
+  server running at all) leaves tmux's own default first window behind
+  alongside the one the launcher created -- cosmetic, harmless, not
+  cleaned up automatically.
+* The Workspace Launcher's project-picker "recent" list is not scoped per
+  host; a path added while targeting one host can appear in another
+  host's recent list even though it doesn't exist there. Low-impact since
+  it only affects sort order, never spawns anything automatically.
 
 ## i18n
 
