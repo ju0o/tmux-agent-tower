@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tmux-agent-tower"
-version = "0.2.1"
+version = "0.2.2"
 description = "A local-first TUI control tower for monitoring coding agents across tmux panes."
 readme = "README.md"
 license = { text = "MIT" }

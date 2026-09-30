@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.2 - Main stabilization checkpoint
+
+No feature changes. This is the tagged baseline the `feat/tower-remote`
+work branches from. Ran the full stabilization pass: full test suite
+(225 passing), a live dogfood re-check of every shipped feature (status
+detection, identity editing, search filter, Attention View, task
+awareness, and the notification pipeline end-to-end including the
+`tmux display-message` fallback) in an isolated tmux session, and a
+docs-consistency check. Found and fixed one remaining stale spot:
+`docs/ARCHITECTURE.md`'s module tree and per-refresh data-flow diagram
+predated Task Awareness (missing `notify.py`, `extract_activity()`,
+`duration_seconds()`, and `NotificationTracker.observe()`).
+
 ## v0.2.1 - Documentation consistency fix
 
 Docs-only patch, no code changes. `docs/ROADMAP.md`'s "Known limitations
