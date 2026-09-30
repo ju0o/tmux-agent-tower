@@ -88,17 +88,28 @@ exactly what it's about to undo before doing it).
 
 ## Usage
 
-Inside any tmux session:
+Inside any tmux pane:
 
 ```
 tower
 ```
 
-This creates (or jumps to) a `CONTROL` window running the TUI -- **not** in
-the pane you typed it from. There's one Tower per session, and `tower`
-always takes you to that same place, the same way `Ctrl+b` then `w` does
-from anywhere else in tmux (opt-in, see below). If you specifically want
-the TUI running in the current pane instead, use `tower --here`.
+runs the TUI right there, in that pane. If you start another one in a
+different pane later, that one becomes "the" active Tower -- older ones
+keep running, nothing is killed, but `tower --focus` (see below) will jump
+to the newest one.
+
+Tower remembers which pane it's running in for the rest of that tmux
+session (by pane id, not by window name or position -- a renamed or
+reused window never confuses it). From anywhere else in that session:
+
+```
+tower --focus
+```
+
+jumps straight back to it without starting a new one. This is what the
+optional `Ctrl+b w` shortcut below is for -- it's a plain navigation
+command, not another TUI, so it's safe to bind to a key.
 
 | Key | Action |
 |---|---|
@@ -144,15 +155,20 @@ missing, that one project's pane still opens as a plain shell with a
 
 ### Optional: `Ctrl+b w` shortcut
 
-Binding `Ctrl+b w` to jump straight to the Tower is convenient, but it
-**replaces tmux's built-in `choose-tree` window picker** on that key. The
-installer does not do this automatically. If you want it, add this to your
-`~/.tmux.conf` yourself:
+Binding `Ctrl+b w` to jump straight to the active Tower is convenient, but
+it **replaces tmux's built-in `choose-tree` window picker** on that key.
+The installer does not do this automatically. If you want it, add this to
+your `~/.tmux.conf` yourself:
 
 ```tmux
 unbind-key w
-bind-key w run-shell -b "tower"
+bind-key w run-shell -b "tower --focus"
 ```
+
+Note the `--focus`, not bare `tower` -- this binding should only ever
+*navigate* to your already-running Tower, never launch a new curses TUI
+from a backgrounded key press (which wouldn't have anywhere sensible to
+attach to).
 
 ### `tower --doctor`
 
