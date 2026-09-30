@@ -42,6 +42,8 @@ class _PaneState:
     last_hash: Optional[str] = None
     active_until: float = 0.0
     observations: int = 0
+    current_status: Optional[str] = None
+    status_since: float = 0.0
 
 
 class StatusEngine:
@@ -54,6 +56,21 @@ class StatusEngine:
     def forget(self, pane_id: str) -> None:
         self._state.pop(pane_id, None)
 
+    def duration_seconds(self, pane_id: str, now: Optional[float] = None) -> float:
+        """How long ``pane_id`` has continuously reported its current
+        status, per this engine's own observations -- NOT "when did the
+        agent actually start," which we have no way to know. Resets to 0
+        whenever the reported status changes, and whenever Tower itself
+        restarts (this is in-memory only, deliberately not persisted --
+        see docs/STATUS_ENGINE.md).
+        """
+
+        state = self._state.get(pane_id)
+        if state is None or state.current_status is None:
+            return 0.0
+        now = now if now is not None else time.monotonic()
+        return max(0.0, now - state.status_since)
+
     def evaluate(
         self,
         pane_id: str,
@@ -62,12 +79,44 @@ class StatusEngine:
         ctx: PaneContext,
         now: Optional[float] = None,
     ) -> str:
+        now = now if now is not None else time.monotonic()
+        status = self._evaluate_status(pane_id, dead, adapter, ctx, now)
+
+        # Deliberately NOT calling forget() for a dead pane (an earlier
+        # version did, every single observation) -- that reset
+        # status_since to "now" on every refresh, so a DEAD pane's
+        # duration could never accumulate past one refresh interval.
+        # Tracking is instead reset lazily, only on the transition BACK
+        # from dead to alive (see _evaluate_status), when a stale
+        # hash/observation baseline would actually be wrong (pane_id
+        # reused by a genuinely new process).
+        state = self._state.setdefault(pane_id, _PaneState())
+
+        if state.current_status != status:
+            state.current_status = status
+            state.status_since = now
+
+        return status
+
+    def _evaluate_status(
+        self,
+        pane_id: str,
+        dead: bool,
+        adapter: AgentAdapter,
+        ctx: PaneContext,
+        now: float,
+    ) -> str:
         if dead:
-            self.forget(pane_id)
             return STATUS_DEAD
 
-        now = now if now is not None else time.monotonic()
         state = self._state.setdefault(pane_id, _PaneState())
+
+        if state.current_status == STATUS_DEAD:
+            # Coming back from dead: pane_id was reused by a new process,
+            # so the old hash/observation baseline no longer means anything.
+            state.last_hash = None
+            state.active_until = 0.0
+            state.observations = 0
 
         digest = _hash_lines(ctx.lines)
         changed = state.last_hash is not None and digest != state.last_hash
