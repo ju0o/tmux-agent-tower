@@ -32,8 +32,14 @@ _PANE_FORMAT = FIELD_SEP.join(
 _EXPECTED_FIELDS = _PANE_FORMAT.count(FIELD_SEP) + 1
 
 
-def list_panes(session: str, exclude_window: str, capture_lines: int = 30) -> List[Dict]:
-    """Return one dict per pane, excluding the control window itself.
+def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30) -> List[Dict]:
+    """Return one dict per pane, excluding Tower's own pane (by pane_id).
+
+    Deliberately NOT a window-name match: a window's name is just text
+    anyone can reuse or rename, with no real connection to what's running
+    in it (a real bug: a window that used to host Tower got reused for an
+    unrelated session, kept its old name, and got wrongly excluded/matched
+    by name). ``exclude_pane_id`` is the one thing that's actually stable.
 
     Malformed lines (wrong field count -- e.g. a tmux version with a
     slightly different format quirk) are skipped rather than raising, so one
@@ -70,7 +76,7 @@ def list_panes(session: str, exclude_window: str, capture_lines: int = 30) -> Li
             dead,
         ) = parts
 
-        if window_name == exclude_window:
+        if exclude_pane_id and pane_id == exclude_pane_id:
             continue
 
         lines = capture.capture_pane(pane_id, lines=capture_lines) if dead != "1" else []

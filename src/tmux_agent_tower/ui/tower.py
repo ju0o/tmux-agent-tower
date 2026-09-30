@@ -23,6 +23,7 @@ from ..state.overrides import OverrideStore
 from ..state.visits import VisitStore
 from ..tmux import capture as tmux_capture
 from ..tmux import discovery
+from ..tmux import registration
 from ..tmux.navigation import open_pane
 from .launcher_wizard import run_launcher
 from .widgets import run_list_picker, safe_add
@@ -30,7 +31,6 @@ from .widgets import run_list_picker, safe_add
 REFRESH_SECONDS = 2.0
 REMOTE_REFRESH_SECONDS = 6.0
 CAPTURE_LINES = 30
-CONTROL_WINDOW = "CONTROL"
 
 STATE_DIR = Path.home() / ".cache" / "tmux-agent-tower"
 CONFIG_DIR = Path.home() / ".config" / "tmux-agent-tower"
@@ -80,9 +80,9 @@ def load_remote_hosts() -> List[Dict[str, str]]:
 
 
 class Tower:
-    def __init__(self, session: str, control_window: str = CONTROL_WINDOW):
+    def __init__(self, session: str, own_pane_id: str = ""):
         self.session = session
-        self.control_window = control_window
+        self.own_pane_id = own_pane_id
         self.local_host = local_host_label()
         self.remote_hosts = load_remote_hosts()
 
@@ -100,7 +100,7 @@ class Tower:
     # -- data ---------------------------------------------------------
 
     def _local_rows(self) -> List[Dict]:
-        panes = discovery.list_panes(self.session, self.control_window, CAPTURE_LINES)
+        panes = discovery.list_panes(self.session, self.own_pane_id, CAPTURE_LINES)
         out = []
 
         for pane in panes:
@@ -478,7 +478,19 @@ def main(stdscr, session: Optional[str] = None) -> None:
     if not session:
         raise SystemExit(t("cli.no_tmux_session"))
 
-    tower = Tower(session)
+    own_pane_id = tmux_capture.current_pane_id()
+    if own_pane_id:
+        registration.register(session, own_pane_id)
+
+    try:
+        _run_loop(stdscr, session, own_pane_id)
+    finally:
+        if own_pane_id:
+            registration.unregister_if_self(session, own_pane_id)
+
+
+def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
+    tower = Tower(session, own_pane_id)
     tower.load()
     tower.last_refresh = time.monotonic()
     draw(stdscr, tower)

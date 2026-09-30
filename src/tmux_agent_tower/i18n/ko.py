@@ -43,6 +43,7 @@ STRINGS = {
     "doctor.summary_fail": "결과: 문제 {n}개 발견",
     "cli.no_tmux_session": "tmux 세션을 찾을 수 없습니다. tmux 안에서 실행해주세요.",
     "cli.no_session_found": "tmux 세션이 없습니다. 먼저 tmux를 시작해주세요.",
+    "cli.no_active_tower": "실행 중인 Tower가 없습니다. tower를 실행해 새로 시작하세요.",
     "hint.add_project": "N 프로젝트 추가",
     "hint.new_workspace": "W 새 작업공간",
     "wizard.press_any_key": "아무 키나 눌러 계속",

@@ -8,6 +8,7 @@ the whole TUI.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import Sequence
 
@@ -48,13 +49,42 @@ def list_windows(session: str) -> list:
     return [line for line in output.split("\n") if line]
 
 
-def new_control_window(session: str, window_name: str, command: str) -> None:
-    run_tmux(["new-window", "-d", "-t", f"{session}:", "-n", window_name, command], capture=False)
-
-
-def select_window(session: str, window_name: str) -> None:
-    run_tmux(["select-window", "-t", f"{session}:{window_name}"], capture=False)
-
-
 def current_session() -> str:
     return run_tmux(["display-message", "-p", "#S"]).strip()
+
+
+def current_pane_id() -> str:
+    """The pane_id of whichever pane *this process itself* is running in.
+
+    Reads ``$TMUX_PANE``, which tmux sets in every pane's own shell
+    environment -- NOT ``tmux display-message -p '#{pane_id}'`` without a
+    ``-t``, which resolves to the *attached client's currently active
+    pane*. Those are usually the same pane, but not always: a real bug
+    surfaced this when a script switched the client to a different window
+    right before this process started -- `display-message` then reported
+    that other, unrelated pane as "current", registering the wrong pane_id
+    entirely. `$TMUX_PANE` has no such ambiguity.
+    """
+
+    return os.environ.get("TMUX_PANE", "").strip()
+
+
+def pane_exists(pane_id: str) -> bool:
+    output = run_tmux(["list-panes", "-a", "-F", "#{pane_id}"])
+    return pane_id in output.split("\n")
+
+
+def set_session_option(session: str, name: str, value: str) -> None:
+    run_tmux(["set-option", "-t", session, name, value], capture=False)
+
+
+def get_session_option(session: str, name: str) -> str:
+    return run_tmux(["show-options", "-t", session, "-v", name]).strip()
+
+
+def unset_session_option(session: str, name: str) -> None:
+    run_tmux(["set-option", "-u", "-t", session, name], capture=False)
+
+
+def display_message(message: str) -> None:
+    run_tmux(["display-message", message], capture=False)

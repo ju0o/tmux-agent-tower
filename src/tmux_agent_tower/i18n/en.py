@@ -46,6 +46,7 @@ STRINGS = {
     "doctor.summary_fail": "Result: {n} problem(s) found",
     "cli.no_tmux_session": "No tmux session detected. Run tower from inside tmux.",
     "cli.no_session_found": "No tmux session found. Start tmux first.",
+    "cli.no_active_tower": "No active Tower in this session. Run tower to start one.",
     "hint.add_project": "N Add project",
     "hint.new_workspace": "W New workspace",
     "wizard.press_any_key": "Press any key to continue",

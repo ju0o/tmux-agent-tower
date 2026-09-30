@@ -12,7 +12,8 @@ import sys
 from . import __version__
 from .i18n import t
 from .tmux import capture as tmux_capture
-from .ui.tower import CONTROL_WINDOW, run as run_ui, load_remote_hosts
+from .tmux import registration
+from .ui.tower import run as run_ui, load_remote_hosts
 
 
 def _print_result(label: str, ok: bool, detail: str = "", warn: bool = False) -> bool:
@@ -89,55 +90,28 @@ def run_doctor() -> int:
     return 0 if problems == 0 else 1
 
 
-def open_control_tower() -> None:
-    """Ensure a CONTROL window exists in the target session and switch to it.
+def focus_active_tower() -> None:
+    """Jump to whichever pane is currently registered as the active Tower
+    for this session -- does NOT start a new Tower. Meant for a
+    ``Ctrl+b w``-style binding (``run-shell -b "tower --focus"``): plain
+    tmux navigation commands only, no curses, so it's safe to run
+    backgrounded from a key binding.
 
-    Mirrors what the user would do by hand: create the window if missing,
-    then ``select-window``. Never touches any other window/pane.
+    Never falls back to matching a window by name (see
+    ``tmux/registration.py``'s module docstring for the bug that caused).
     """
 
-    in_tmux = bool(os.environ.get("TMUX"))
     session = tmux_capture.current_session()
-
     if not session:
-        session = tmux_capture.run_tmux(
-            [
-                "list-sessions",
-                "-F",
-                "#{session_name}|#{session_attached}|#{session_activity}",
-            ]
-        )
-        best = ""
-        best_key = (-1, -1)
-        for line in session.split("\n"):
-            parts = line.split("|")
-            if len(parts) != 3:
-                continue
-            name, attached, activity = parts
-            try:
-                key = (int(attached), int(activity))
-            except ValueError:
-                key = (0, 0)
-            if key > best_key:
-                best_key = key
-                best = name
-        session = best
-
-    if not session:
-        print(t("cli.no_session_found"), file=sys.stderr)
+        print(t("cli.no_tmux_session"), file=sys.stderr)
         raise SystemExit(1)
 
-    windows = tmux_capture.list_windows(session)
-    if CONTROL_WINDOW not in windows:
-        tower_exe = shutil.which("tower")
-        launch_cmd = f"{tower_exe} --here" if tower_exe else f"{sys.executable} -m tmux_agent_tower.main --here"
-        tmux_capture.new_control_window(session, CONTROL_WINDOW, launch_cmd)
+    pane_id = registration.resolve_active_pane(session)
+    if not pane_id:
+        tmux_capture.display_message(t("cli.no_active_tower"))
+        return
 
-    if in_tmux:
-        tmux_capture.select_window(session, CONTROL_WINDOW)
-    else:
-        tmux_capture.select_window(session, CONTROL_WINDOW)
-        os.execvp("tmux", ["tmux", "attach-session", "-t", session])
+    registration.focus_pane(pane_id)
 
 
 def cli(argv=None) -> None:
@@ -147,7 +121,12 @@ def cli(argv=None) -> None:
     parser.add_argument(
         "--here",
         action="store_true",
-        help="run the TUI in the current pane (used internally by the CONTROL window)",
+        help="deprecated, no-op: running with no flags already runs in the current pane",
+    )
+    parser.add_argument(
+        "--focus",
+        action="store_true",
+        help="jump to the currently active Tower pane; does not start a new Tower (for a Ctrl+b w-style binding)",
     )
     args = parser.parse_args(argv)
 
@@ -158,11 +137,11 @@ def cli(argv=None) -> None:
     if args.doctor:
         raise SystemExit(run_doctor())
 
-    if args.here:
-        run_ui()
+    if args.focus:
+        focus_active_tower()
         return
 
-    open_control_tower()
+    run_ui()
 
 
 if __name__ == "__main__":
