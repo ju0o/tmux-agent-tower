@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.1.3 - Compact row UI redesign
+
+The pane table felt like a spreadsheet, not a control tower. Redesigned
+the main screen around "can I read this in 1-2 seconds," not fixed
+columns.
+
+* **Compact rows** instead of a wide fixed-column table: project name is
+  the primary text, agent + status share the same line (or the next line
+  down on a narrow terminal), and the pane's own title appears as a
+  second line only when it says something the project name doesn't
+  already.
+* **VISIT is no longer a column.** An unvisited pane gets a small `NEW`
+  marker in front of it; a visited one shows nothing extra.
+* **Host summary hides zero counts** (`MAINPC ● 3  ○ 4` instead of
+  `MAINPC ●3 !0 ○4 ?0 ×0`) and moved to the title line, right-aligned per
+  host.
+* **New selected-item detail panel** at the bottom (project, agent, pane
+  title, path, status, host, pane id) -- auto-hidden on a short terminal
+  so the pane list keeps the room instead.
+* **Live search filter** (`/`, then type; `Esc` clears) across project,
+  agent, pane title, path, and host.
+* **Smarter project-name fallback**: a real priority chain (your own
+  override -> the enclosing git repo's name -> a meaningful pane title ->
+  the raw directory basename -> an honest "no name") means a project run
+  straight from a drive root no longer shows up as a single meaningless
+  letter (`f`) when anything better -- a git repo name or a real pane
+  title -- is available.
+* **Edit menu** (`E`) now shows the current override and the
+  auto-detected value side by side ("현재: X" / "자동: Y") before you type
+  a replacement, so it's obvious whether you're overriding something or
+  just confirming it.
+* **Fixed two real display bugs**, both caught live once rows started
+  mixing Korean and English text on the same line: (1) Korean (and other
+  East-Asian-wide) characters are double-width on screen but were counted
+  as single-width everywhere -- host-summary text got clipped, detail
+  panel labels misaligned, and narrow-layout hint text wrapped onto the
+  next terminal line instead of being clipped. Fixed with a proper
+  `display_width`/`truncate_to_width` (East Asian Width aware) used by
+  every text-drawing call, not just the spots that happened to trigger
+  it. (2) The "is this pane title just a generic default" check compared
+  against the user's *chosen* display host label instead of the actual OS
+  hostname, so a plain auto-titled pane wasn't recognized as generic when
+  the user had renamed their host's display label away from its raw
+  hostname.
+* Responsive: narrow terminal drops agent/status to their own line; short
+  terminal hides the detail panel; stress-tested resizing across sizes
+  from 1x1 to 300x100 with no crash.
+
 ## v0.1.2 - Identity editing, and a Unicode input bug fix
 
 * **`E` is now a full edit menu**, not just project rename: project name,

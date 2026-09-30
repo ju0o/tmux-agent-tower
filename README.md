@@ -17,19 +17,18 @@ jumps you straight to the one that needs you.
 current default -- see [Language](#language) below)*
 
 ```
-AGENT CONTROL TOWER
-● WORKING 3  ! WAITING 1  ○ IDLE 2  ? UNKNOWN 0  × DEAD 0
+TMUX AGENT TOWER                                    MAINPC ● 2  ○ 1   ASUS ○ 1
 
-▼ MAINPC  ●2 !1 ○1 ?0 ×0
-  alpha-api            Codex       ● WORKING    SEEN
-> web-app              Codex       ! WAITING    NEW
-  docs                 Grok        ○ IDLE       SEEN
+── MAINPC ──────────────────────────────────────────────────────────────────
+> ● alpha-api                                        Codex          WORKING
+    Marketplace build
+NEW ! web-app                                        Codex          WAITING
+  ○ docs                                             Grok           IDLE
 
-▼ ASUS  ●1 !0 ○1 ?0 ×0
-  billing-service      Claude      ● WORKING    NEW
-  internal-notes       OpenCode    ○ IDLE       SEEN
+── ASUS ────────────────────────────────────────────────────────────────────
+  ● billing-service                                  Claude         WORKING
 
-↑↓ Move   Enter Open   E Edit item   N Add project   W New workspace   R Refresh   Q/Ctrl+C Exit
+↑↓ Move   Enter Open   E Edit item   N Add   W Workspace   / Search   R   Q
 ```
 
 ## What it is (and isn't)
@@ -50,14 +49,27 @@ AGENT CONTROL TOWER
 
 ## Features
 
-* One screen, grouped by host, showing project / agent / status / visit
-  for every tmux pane.
+* One screen, grouped by host, with a compact row per pane (project,
+  agent, status, and -- when it says something the project name doesn't
+  already -- the pane's own title as a second line) instead of a wide,
+  sparse table.
 * Status and "have I looked at this yet" are tracked completely
   separately -- an agent working away in a pane you haven't opened yet
-  correctly shows `WORKING`, not some vague "checking" placeholder.
-* Project name is auto-discovered from the pane's git repository (falls
-  back to the directory name), with a manual override (`E`) that survives
-  future refreshes.
+  correctly shows `WORKING`, not some vague "checking" placeholder. A
+  small `NEW` marker (not a whole column) flags an unvisited pane; a
+  visited one shows nothing extra.
+* A selected-item detail panel (project, agent, pane title, path, status,
+  host) fills in anything the compact row had to leave out -- hidden
+  automatically on a short terminal.
+* `/` live-filters the list by project, agent, pane title, path, or host;
+  `Esc` clears it.
+* Project name is auto-discovered with a real priority chain: your own
+  override, then the enclosing git repo's name, then a meaningful pane
+  title, then the directory name -- a meaningless single-letter or
+  mount-point-ish basename (`f`, `mnt`, ...) is never shown as-is if
+  anything better is available.
+* Per-host summary counts hide any status with a zero count instead of
+  spelling out `?0 ×0` for statuses that aren't happening.
 * Works across a second host over SSH, degrading gracefully to
   `UNKNOWN`/offline if that host isn't reachable -- the local TUI never
   blocks waiting on it.
@@ -118,6 +130,7 @@ command, not another TUI, so it's safe to bind to a key.
 | `E` | Edit the selected pane's project name, agent label, or pane title |
 | `N` | Add one project (Workspace Launcher, single) |
 | `W` | Start a new workspace (Workspace Launcher, multi) |
+| `/` | Live-filter the list (project/agent/title/path/host); `Esc` clears it |
 | `R` | Refresh immediately |
 | `Q` / `Ctrl+C` | Quit |
 
@@ -247,8 +260,9 @@ change; PRs updating a pattern (with a sanitized fixture) are welcome.
   confident wrong answer.
 * `× DEAD` -- the pane or its process has exited.
 
-`VISIT` (`NEW`/`SEEN`) is completely independent of status -- it only
-tracks whether you've opened that pane from the Tower before.
+Visited state is completely independent of status -- it only tracks
+whether you've opened that pane from the Tower before, shown as a small
+`NEW` marker in front of a row you haven't (nothing extra once you have).
 
 ## Limitations
 
