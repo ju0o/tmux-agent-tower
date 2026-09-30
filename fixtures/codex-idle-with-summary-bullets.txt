@@ -1,0 +1,19 @@
+› # EXAMPLE PROJECT — FINAL BLOCKERS 목표: **…
+
+  • Owner login journeys verified across six accounts: unverified
+  • Five role permissions and unmapped direct URL blocking: unverified
+  • External browser HTTPS smoke: unverified
+  • Funnel :10000: closed
+  • Existing 443 and 8443 settings: kept
+
+  A prior credential export restriction meant the browser login
+  session could not be created outside the sandbox. Browser-based
+  verification is still required before P0/P1 can be marked done.
+
+  Worked for 13m 33s • 20:28
+
+
+› Ask Codex to do anything
+
+  GPT-6-Luna medium · /home/example/project · Example task title
+  ← for agents · ? for shortcuts

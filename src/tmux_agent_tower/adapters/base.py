@@ -79,6 +79,27 @@ class AdapterResult:
 _NO_OPINION = AdapterResult(status=None)
 
 
+@dataclass(frozen=True)
+class Activity:
+    """A best-effort, one-line description of what an agent looks like
+    it's doing right now, extracted purely from terminal output patterns
+    -- never from an LLM call (see docs/STATUS_ENGINE.md's "Task
+    Awareness" section). ``confidence`` is informational only today
+    ("high"/"medium"/"low"); the UI currently shows any non-None activity
+    the same way, but keeping it lets a future version hide low-confidence
+    guesses instead of showing a plausible-sounding wrong answer.
+
+    Never persisted to disk: an activity string is a fragment of the
+    pane's own terminal output, which can contain private project
+    content, so it only ever exists in memory for the current refresh
+    -- see ``state/`` for what Tower *does* persist (never this).
+    """
+
+    text: str
+    confidence: str = "medium"
+    source: str = "agent-output"
+
+
 class AgentAdapter:
     """Default adapter: identifies nothing, classifies with generic rules only."""
 
@@ -108,6 +129,17 @@ class AgentAdapter:
 
     def classify(self, ctx: PaneContext) -> AdapterResult:
         return _NO_OPINION
+
+    def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:
+        """What does this pane's output say the agent is doing right now?
+
+        Returns ``None`` when there isn't enough evidence -- never
+        fabricates a plausible-sounding guess. The default (this base
+        implementation) never has an opinion; only agents with a verified,
+        real-capture-based pattern override it.
+        """
+
+        return None
 
 
 def looks_like_generic_waiting(text: str) -> bool:

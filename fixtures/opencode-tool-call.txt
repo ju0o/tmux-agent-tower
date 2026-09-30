@@ -1,0 +1,11 @@
+  ┃
+  ┃  list the files then summarize them
+  ┃
+
+     → Read .
+
+     Empty — 0 files.
+
+
+
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt                                        11.7K (1%)  ctrl+p commands
