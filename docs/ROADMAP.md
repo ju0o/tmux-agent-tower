@@ -72,20 +72,32 @@ while P5 remains a deliberate non-goal for now.
 
 ## P10 - Optional GUI
 
-## Known limitations from the P4 slice
+## Known limitations from the P4 slice (resolved -- see below)
 
-* Remote (ASUS-style) project selection is manual-path-only: there is no
-  remote equivalent of local git-repo auto-discovery yet, since that would
-  need its own SSH round trip and wasn't part of this slice. The path is
-  validated (`test -d`) over SSH before accepting it.
-* Creating a brand-new remote tmux session (when the host had no tmux
-  server running at all) leaves tmux's own default first window behind
-  alongside the one the launcher created -- cosmetic, harmless, not
-  cleaned up automatically.
-* The Workspace Launcher's project-picker "recent" list is not scoped per
-  host; a path added while targeting one host can appear in another
-  host's recent list even though it doesn't exist there. Low-impact since
-  it only affects sort order, never spawns anything automatically.
+This section originally listed three P4 gaps. All three were actually
+fixed as part of the same P4 work (`launcher/discovery.py`,
+`launcher/spawn.py`), just never reflected back into this doc -- caught
+during a v0.2.1 documentation-consistency pass. Kept here, corrected, so
+the doc stops contradicting the code and tests:
+
+* ~~Remote project selection is manual-path-only~~ -- **not true**:
+  `find_remote_git_projects()` in `launcher/discovery.py` does a real,
+  bounded SSH round trip (`find $ROOTS -maxdepth N -type d -name .git`)
+  for remote git-repo auto-discovery, degrading to `[]` on any
+  failure/timeout. Manual path entry (`B`) remains available as a
+  fallback, not the only option. See
+  `tests/test_launcher_discovery.py::test_find_remote_git_projects_*`.
+* ~~A brand-new remote session leaves tmux's default first window
+  behind~~ -- **not true**: `build_remote_script()` in `launcher/spawn.py`
+  creates the session with `tmux new-session -d -s "$SESS" -n "$WIN"`,
+  naming the session's own default first window as the launcher's target
+  window directly, so there's nothing left over to clean up. See
+  `tests/test_launcher_spawn.py::test_build_remote_script_new_session_uses_new_session_n_not_new_window`.
+* ~~The "recent" project list isn't scoped per host~~ -- **not true**:
+  `load_recent`/`record_recent` in `launcher/discovery.py` key their JSON
+  file by host (`recent-projects.<host>.json`); a path recorded for one
+  host never appears in another's list. See
+  `tests/test_launcher_discovery.py::test_recent_projects_scoped_per_host`.
 
 ## i18n
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.1 - Documentation consistency fix
+
+Docs-only patch, no code changes. `docs/ROADMAP.md`'s "Known limitations
+from the P4 slice" section had been stale since v0.1.0 itself: all three
+listed gaps (remote project selection being manual-path-only, a
+leftover default window on a brand-new remote session, and the "recent"
+project list not being scoped per host) were actually already fixed in
+the same P4 commit that introduced the Workspace Launcher -- the fixes
+just never made it back into this doc, and no CHANGELOG entry ever
+mentioned them either. Corrected the ROADMAP section to point at the
+actual implementing code and tests instead of describing gaps that don't
+exist. No functional or behavioral change; 225 tests unchanged.
+
 ## v0.2.0 - Task awareness: activity, duration, attention view, notifications
 
 Tower could tell you an agent was WORKING, but not *at what*, or *for how
