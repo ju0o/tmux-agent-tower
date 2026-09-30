@@ -23,6 +23,8 @@ from ..state.visits import VisitStore
 from ..tmux import capture as tmux_capture
 from ..tmux import discovery
 from ..tmux.navigation import open_pane
+from .launcher_wizard import run_launcher
+from .widgets import safe_add
 
 REFRESH_SECONDS = 2.0
 REMOTE_REFRESH_SECONDS = 6.0
@@ -297,16 +299,6 @@ class Tower:
         return {name: sum(1 for r in rows if r["status"] == name) for name in STATUS_ORDER}
 
 
-def safe_add(stdscr, y, x, text, attr=0):
-    height, width = stdscr.getmaxyx()
-    if y < 0 or y >= height or x < 0 or x >= width:
-        return
-    try:
-        stdscr.addnstr(y, x, text, max(0, width - x - 1), attr)
-    except curses.error:
-        pass
-
-
 def setup_colors():
     if not curses.has_colors():
         return
@@ -352,7 +344,11 @@ def draw(stdscr, tower: Tower) -> None:
     safe_add(stdscr, 0, 2, t("app.title"), curses.A_BOLD)
     safe_add(stdscr, 1, 2, summary_line(tower), curses.A_BOLD)
     hint_line = "   ".join(
-        [t("hint.move"), t("hint.open"), t("hint.rename"), t("hint.refresh"), t("hint.quit")]
+        [
+            t("hint.move"), t("hint.open"), t("hint.rename"),
+            t("hint.add_project"), t("hint.new_workspace"),
+            t("hint.refresh"), t("hint.quit"),
+        ]
     )
     safe_add(stdscr, 2, 2, hint_line, curses.A_DIM)
 
@@ -507,6 +503,20 @@ def main(stdscr, session: Optional[str] = None) -> None:
             continue
 
         if key in (ord("r"), ord("R")):
+            tower.load()
+            tower.last_refresh = time.monotonic()
+            draw(stdscr, tower)
+            continue
+
+        if key in (ord("n"), ord("N")):
+            run_launcher(stdscr, tower, multi=False, state_dir=STATE_DIR)
+            tower.load()
+            tower.last_refresh = time.monotonic()
+            draw(stdscr, tower)
+            continue
+
+        if key in (ord("w"), ord("W")):
+            run_launcher(stdscr, tower, multi=True, state_dir=STATE_DIR)
             tower.load()
             tower.last_refresh = time.monotonic()
             draw(stdscr, tower)
