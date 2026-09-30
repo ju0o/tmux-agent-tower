@@ -49,6 +49,24 @@ def menu_title(state: str) -> str:
     return f'{t("remote.menu.title")}    {state_text}'
 
 
+def session_display(session: Optional[str]) -> str:
+    return session or t("remote.session.unknown")
+
+
+def session_lines(current_session: str, status: Optional[service.ServiceStatus]) -> List[str]:
+    """Preamble for the M menu: which session this Tower watches, and --
+    only when it differs -- which one the running remote is bound to.
+    """
+
+    lines = [t("remote.session.label", session=session_display(current_session))]
+    if status is not None and status.state in ("running", "error") and status.pid:
+        if status.session != current_session:
+            lines.append(t("remote.session.remote", session=session_display(status.session)))
+    if status is not None and status.state == "error" and status.reason:
+        lines.append(failure_lines(status.reason)[0])
+    return lines
+
+
 def ready_lines(result: service.StartResult) -> List[str]:
     """Success screen. Deliberately contains no shell command."""
 
@@ -60,6 +78,7 @@ def ready_lines(result: service.StartResult) -> List[str]:
         t("remote.ready.tailscale"),
         t("remote.ready.https"),
         t("remote.ready.running"),
+        t("remote.session.label", session=session_display(result.session)),
         "",
         t("remote.ready.url_label"),
         result.url or "-",
@@ -91,6 +110,8 @@ def expiry_text(info: dict) -> str:
 
 def pairing_lines(info: dict) -> List[str]:
     return [
+        t("remote.session.label", session=session_display(info.get("session"))),
+        "",
         t("remote.ready.url_label"),
         info.get("url") or "-",
         "",
@@ -121,19 +142,58 @@ def _show(stdscr, title: str, lines: Sequence[str]) -> None:
     show_message_screen(stdscr, title, lines, footer=t("remote.confirm"))
 
 
-def _start_and_show(stdscr) -> None:
-    stdscr.erase()
-    safe_add(stdscr, 2, 2, t("remote.starting"))
-    stdscr.refresh()
-    try:
-        result = service.start("tailscale")
-    except Exception:
-        _show(stdscr, t("remote.failed.title"), failure_lines("generic"))
-        return
+def rebind_entries() -> List[Tuple[str, str]]:
+    return [
+        ("switch", t("remote.rebind.switch")),
+        ("keep", t("remote.rebind.keep")),
+        ("cancel", t("remote.rebind.cancel")),
+    ]
+
+
+def _show_result(stdscr, result: service.StartResult) -> None:
     if result.ok:
         _show(stdscr, t("remote.ready.title"), ready_lines(result))
     else:
         _show(stdscr, t("remote.failed.title"), failure_lines(result.reason))
+
+
+def _offer_rebind(stdscr, tower, result: service.StartResult) -> None:
+    """A remote is alive for another session. Ask; never switch on our own."""
+
+    pick = run_list_picker(
+        stdscr,
+        t("remote.rebind.title"),
+        rebind_entries(),
+        footer_hint=t("wizard.hint_list"),
+        preamble=[
+            t("remote.session.remote", session=session_display(result.running_session)),
+            t("remote.session.current", session=session_display(tower.session)),
+        ],
+    )
+    if pick.cancelled or pick.selected_key in (None, "cancel"):
+        return
+    if pick.selected_key == "keep":
+        _show_pairing(stdscr)
+        return
+    stdscr.erase()
+    safe_add(stdscr, 2, 2, t("remote.starting"))
+    stdscr.refresh()
+    _show_result(stdscr, service.rebind("tailscale", session=tower.session, own_pane_id=tower.own_pane_id))
+
+
+def _start_and_show(stdscr, tower) -> None:
+    stdscr.erase()
+    safe_add(stdscr, 2, 2, t("remote.starting"))
+    stdscr.refresh()
+    try:
+        result = service.start("tailscale", session=tower.session, own_pane_id=tower.own_pane_id)
+    except Exception:
+        _show(stdscr, t("remote.failed.title"), failure_lines("generic"))
+        return
+    if not result.ok and result.reason == "session_mismatch":
+        _offer_rebind(stdscr, tower, result)
+        return
+    _show_result(stdscr, result)
 
 
 def _show_pairing(stdscr) -> None:
@@ -209,9 +269,10 @@ def _show_autostart(stdscr) -> None:
         set_remote_flag("autostart", pick.selected_key == "on")
 
 
-def open_remote_menu(stdscr) -> None:
-    """Blocking ``M`` flow. Returns to the main TUI; never stops Remote
-    just because the menu was closed.
+def open_remote_menu(stdscr, tower) -> None:
+    """Blocking ``M`` flow for the Tower that pressed it. ``tower.session``
+    is what a started remote will watch. Returns to the main TUI; never
+    stops Remote just because the menu was closed.
     """
 
     if not intro_seen():
@@ -224,21 +285,29 @@ def open_remote_menu(stdscr) -> None:
             preamble=[t("remote.intro.body1"), t("remote.intro.body2")],
         )
         if not pick.cancelled and pick.selected_key == "start":
-            _start_and_show(stdscr)
+            _start_and_show(stdscr, tower)
         return
 
     while True:
         try:
-            state = service.status(force=True).state
+            status = service.status(force=True)
+            state = status.state
         except Exception:
+            status = None
             state = "error"
-        pick = run_list_picker(stdscr, menu_title(state), menu_entries(), footer_hint=t("wizard.hint_list"))
+        pick = run_list_picker(
+            stdscr,
+            menu_title(state),
+            menu_entries(),
+            footer_hint=t("wizard.hint_list"),
+            preamble=session_lines(tower.session, status),
+        )
         if pick.cancelled or pick.selected_key in (None, "back"):
             return
         action = pick.selected_key
         try:
             if action == "start":
-                _start_and_show(stdscr)
+                _start_and_show(stdscr, tower)
             elif action == "info":
                 _show_pairing(stdscr)
             elif action == "devices":

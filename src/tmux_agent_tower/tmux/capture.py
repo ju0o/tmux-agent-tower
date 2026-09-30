@@ -74,6 +74,18 @@ def pane_exists(pane_id: str) -> bool:
     return pane_id in output.split("\n")
 
 
+def session_exists(session: str) -> bool:
+    """Exact-name check. ``tmux has-session -t NAME`` also accepts prefix
+    and glob matches, so a deleted ``scratch`` would still "exist" while
+    ``scratch-2`` is around; comparing against the full list avoids that.
+    """
+
+    if not session:
+        return False
+    output = run_tmux(["list-sessions", "-F", "#{session_name}"])
+    return session in output.split("\n")
+
+
 def set_session_option(session: str, name: str, value: str) -> None:
     run_tmux(["set-option", "-t", session, name, value], capture=False)
 

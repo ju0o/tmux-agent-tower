@@ -276,8 +276,16 @@ keeps working across starts.
   Enter in a foreground `tower serve` terminal. There is deliberately no
   remote/HTTP way to do it (see the security model above).
 * **Single tmux session only** -- exactly the same scope `tower` itself
-  has today (the session the process is run from), not a cross-session
-  view.
+  has today, not a cross-session view. The session is fixed when the
+  remote starts: the Tower (or `tower serve` process) that starts it
+  passes its own session explicitly, and the detached server never
+  re-infers one from its environment. The `M` menu shows `관제 세션:`
+  so you can see which session the remote is bound to. If that session
+  is deleted, the header goes to `원격: ! 오류` (`source_session_missing`),
+  `/api/status` returns `{"ok": false, "error": "source_session_missing"}`
+  instead of an empty local list, and the phone page says the watched
+  session has ended. Starting from a Tower in a *different* session asks
+  whether to switch; it never switches by itself.
 * **A plain shell pane's "prompt" is shell input.** If the pane you pick
   happens to be a bare shell rather than a coding agent, sending a
   prompt to it is exactly as consequential as typing that text yourself

@@ -7,6 +7,12 @@ the detached child is this same module's foreground loop.
 The background process outlives the TUI on purpose. Quitting the TUI
 does not stop it; only ``stop()`` does, and only when the recorded PID
 is still a Tower Remote process.
+
+The tmux session a remote watches is always passed in explicitly by the
+Tower (or CLI process) that starts it. The detached child never infers
+it from its own environment: a child spawned from a scratch session that
+was later deleted would otherwise keep serving an empty pane list while
+looking healthy.
 """
 
 from __future__ import annotations
@@ -47,6 +53,8 @@ class ServiceStatus:
     pid: int = 0
     reason: str = ""
     stale: bool = False
+    session: str = ""  # tmux session the running remote was bound to
+    own_pane_id: str = ""
 
 
 @dataclass
@@ -58,6 +66,8 @@ class StartResult:
     pairing_code: str = ""
     https: bool = False
     tailscale_ok: bool = False
+    session: str = ""  # session this result refers to
+    running_session: str = ""  # set with reason "session_mismatch"
 
 
 def _runtime_path() -> Path:
@@ -222,19 +232,25 @@ def _status_uncached() -> ServiceStatus:
             return ServiceStatus(state="error", reason=str(err["reason"]))
         return ServiceStatus(state="stopped")
 
-    if not _health_ok(port):
-        return ServiceStatus(
-            state="error", reason="health_failed", mode=mode, port=port, pid=pid, url=runtime.get("url") or ""
-        )
-
+    session = str(runtime.get("tmux_session") or "")
+    own_pane_id = str(runtime.get("own_pane_id") or "")
     https = bool(runtime.get("https"))
     url = runtime.get("url") or ""
-    if mode == "tailscale" and not _tailscale_mapping_ok(port):
-        return ServiceStatus(
-            state="error", reason="serve_mapping_missing", mode=mode, port=port, pid=pid, url=url, https=https
-        )
+    common = dict(mode=mode, port=port, pid=pid, url=url, https=https, session=session, own_pane_id=own_pane_id)
 
-    return ServiceStatus(state="running", mode=mode, url=url, https=https, port=port, pid=pid)
+    if not _health_ok(port):
+        return ServiceStatus(state="error", reason="health_failed", **common)
+
+    # A live HTTP process is not enough: the tmux session it was bound to
+    # must still exist, or the phone would see an empty (or remote-only)
+    # list that looks like a healthy Tower.
+    if not session or not tmux_capture.session_exists(session):
+        return ServiceStatus(state="error", reason="source_session_missing", **common)
+
+    if mode == "tailscale" and not _tailscale_mapping_ok(port):
+        return ServiceStatus(state="error", reason="serve_mapping_missing", **common)
+
+    return ServiceStatus(state="running", **common)
 
 
 def pairing_info() -> dict:
@@ -248,10 +264,11 @@ def pairing_info() -> dict:
         "expires_at": expires_at,
         "expired": expired,
         "https": bool(runtime.get("https")),
+        "session": str(runtime.get("tmux_session") or ""),
     }
 
 
-def _publish(server, mode: str, port: int, url: str, https: bool) -> None:
+def _publish(server, mode: str, port: int, url: str, https: bool, session: str = "", own_pane_id: str = "") -> None:
     snap = server.pairing.snapshot()
     _write_json(
         _runtime_path(),
@@ -262,6 +279,8 @@ def _publish(server, mode: str, port: int, url: str, https: bool) -> None:
             "url": url,
             "https": https,
             "ready": True,
+            "tmux_session": session,
+            "own_pane_id": own_pane_id,
             "pairing_code": snap["code"],
             "pairing_expires_at": snap["expires_at"],
         },
@@ -350,28 +369,41 @@ def _setup_tailscale(server, port: int):
     return exe, dns_name
 
 
-def serve_foreground(mode: str, port: int = DEFAULT_PORT, detached: bool = False) -> int:
+def serve_foreground(
+    mode: str,
+    port: int = DEFAULT_PORT,
+    detached: bool = False,
+    session: str = "",
+    own_pane_id: str = "",
+) -> int:
     """Blocking server used by ``tower serve`` and by the detached child.
 
-    Returns a process exit code. ``mode`` is ``local``, ``lan``, or ``tailscale``.
+    Returns a process exit code. ``mode`` is ``local``, ``lan``, or
+    ``tailscale``. ``session`` is the tmux session to watch and must be
+    resolved by the caller -- this function never asks tmux which session
+    "this process" is in.
     """
 
     previous = signal.signal(signal.SIGTERM, _request_stop)
     try:
-        return _serve_foreground(mode, port, detached)
+        return _serve_foreground(mode, port, detached, session, own_pane_id)
     finally:
         signal.signal(signal.SIGTERM, previous)
 
 
-def _serve_foreground(mode: str, port: int, detached: bool) -> int:
-    session = tmux_capture.current_session()
+def _serve_foreground(mode: str, port: int, detached: bool, session: str, own_pane_id: str) -> int:
     if not session:
         _write_last_error("no_tmux")
         if not detached:
             print(t("cli.no_tmux_session"), file=sys.stderr)
         return 1
 
-    own_pane_id = tmux_capture.current_pane_id()
+    if not tmux_capture.session_exists(session):
+        _write_last_error("source_session_missing")
+        if not detached:
+            print(t("remote.error.source_session_missing"), file=sys.stderr)
+        return 1
+
     use_tailscale = mode == "tailscale"
     lan = mode == "lan"
     host = "0.0.0.0" if lan else "127.0.0.1"
@@ -439,7 +471,7 @@ def _serve_foreground(mode: str, port: int, detached: bool) -> int:
         server.pairing.current_code()
 
     _clear_last_error()
-    _publish(server, mode, port, url, https)
+    _publish(server, mode, port, url, https, session, own_pane_id)
 
     if not detached:
         stdin_thread = threading.Thread(target=_watch_stdin_for_regenerate, args=(server,), daemon=True)
@@ -449,7 +481,7 @@ def _serve_foreground(mode: str, port: int, detached: bool) -> int:
     try:
         while thread.is_alive():
             _consume_control(server, detached)
-            _publish(server, mode, port, url, https)
+            _publish(server, mode, port, url, https, session, own_pane_id)
             time.sleep(0.4)
     except KeyboardInterrupt:
         if not detached:
@@ -490,7 +522,11 @@ def _watch_stdin_for_regenerate(server) -> None:
             sys.stdout.flush()
 
 
-def _spawn(mode: str, port: int) -> subprocess.Popen:
+def _spawn(mode: str, port: int, session: str, own_pane_id: str = "") -> subprocess.Popen:
+    """Detached child. The session is an explicit argument so the child
+    cannot pick up a different (or since-deleted) one from its environment.
+    """
+
     log_path = CONFIG_DIR / "remote-serve.log"
     _prepare_dir(CONFIG_DIR)
     log_file = open(log_path, "ab")  # noqa: SIM115 -- closed after the child inherits it
@@ -506,6 +542,10 @@ def _spawn(mode: str, port: int) -> subprocess.Popen:
                 mode,
                 "--port",
                 str(port),
+                "--tmux-session",
+                session,
+                "--own-pane-id",
+                own_pane_id,
             ],
             stdin=subprocess.DEVNULL,
             stdout=log_file,
@@ -516,14 +556,35 @@ def _spawn(mode: str, port: int) -> subprocess.Popen:
         log_file.close()
 
 
-def start(mode: str = "tailscale", port: int = DEFAULT_PORT) -> StartResult:
-    """Start a detached Tower Remote. No-op when one is already healthy.
+def start(mode: str = "tailscale", port: int = DEFAULT_PORT, session: str = "", own_pane_id: str = "") -> StartResult:
+    """Start a detached Tower Remote bound to ``session``.
+
+    No-op when one is already healthy for the same session. If one is
+    alive for a *different* session the result is ``session_mismatch``
+    with ``running_session`` set; nothing is stopped or switched
+    automatically -- see ``rebind``.
 
     Never uses ``shell=True``. A start failure is a result, not an exception.
     """
 
     global _status_cache
+    if not session:
+        return StartResult(ok=False, reason="no_tmux")
+
     current = status(force=True)
+    alive = bool(current.pid) and pid_alive(current.pid)
+    if alive and current.state in ("running", "error") and current.session != session:
+        info = pairing_info()
+        return StartResult(
+            ok=False,
+            already_running=True,
+            reason="session_mismatch",
+            running_session=current.session,
+            session=session,
+            url=current.url,
+            pairing_code=info.get("code") or "",
+            https=current.https,
+        )
     if current.state == "running":
         info = pairing_info()
         return StartResult(
@@ -533,19 +594,20 @@ def start(mode: str = "tailscale", port: int = DEFAULT_PORT) -> StartResult:
             pairing_code=info.get("code") or "",
             https=current.https,
             tailscale_ok=current.mode == "tailscale",
+            session=current.session,
         )
-    if current.state == "error" and current.pid and pid_alive(current.pid):
-        return StartResult(ok=False, reason=current.reason or "health_failed")
+    if current.state == "error" and alive:
+        return StartResult(ok=False, reason=current.reason or "health_failed", session=session)
 
     _clear_runtime()
     _clear_last_error()
     _status_cache = {"at": 0.0, "value": None}
 
     try:
-        proc = _spawn(mode, port)
+        proc = _spawn(mode, port, session, own_pane_id)
     except Exception:
         _write_last_error("spawn_failed")
-        return StartResult(ok=False, reason="spawn_failed")
+        return StartResult(ok=False, reason="spawn_failed", session=session)
 
     deadline = time.time() + _START_TIMEOUT_SECONDS
     while time.time() < deadline:
@@ -558,15 +620,27 @@ def start(mode: str = "tailscale", port: int = DEFAULT_PORT) -> StartResult:
                 pairing_code=runtime.get("pairing_code") or "",
                 https=bool(runtime.get("https")),
                 tailscale_ok=mode == "tailscale",
+                session=str(runtime.get("tmux_session") or session),
             )
         if proc.poll() is not None:
             err = _read_json(_error_path()) or {}
             _status_cache = {"at": 0.0, "value": None}
-            return StartResult(ok=False, reason=str(err.get("reason") or "exited"))
+            return StartResult(ok=False, reason=str(err.get("reason") or "exited"), session=session)
         time.sleep(0.2)
 
     _status_cache = {"at": 0.0, "value": None}
-    return StartResult(ok=False, reason="timeout")
+    return StartResult(ok=False, reason="timeout", session=session)
+
+
+def rebind(mode: str = "tailscale", port: int = DEFAULT_PORT, session: str = "", own_pane_id: str = "") -> StartResult:
+    """Explicit user choice after ``session_mismatch``: stop the remote we
+    own, then start one for ``session``. Never called automatically.
+    """
+
+    outcome = stop()
+    if outcome == "not_ours":
+        return StartResult(ok=False, reason="not_ours", session=session)
+    return start(mode, port, session=session, own_pane_id=own_pane_id)
 
 
 def stop() -> str:
@@ -655,9 +729,12 @@ def list_devices() -> list:
     return httpapi.auth.TokenStore(CONFIG_DIR / "remote-tokens.json").list_devices()
 
 
-def maybe_autostart() -> Optional[StartResult]:
-    """Used when the TUI starts. Never raises -- a failure leaves the
-    badge at ``error`` and the TUI keeps running.
+def maybe_autostart(session: str = "", own_pane_id: str = "") -> Optional[StartResult]:
+    """Used when the TUI starts, for that TUI's own session. Never raises
+    -- a failure leaves the badge at ``error`` and the TUI keeps running.
+
+    Without an explicit session nothing is started: autostart must not
+    guess which tmux session to watch.
     """
 
     from ..launcher.config import load_config
@@ -665,12 +742,15 @@ def maybe_autostart() -> Optional[StartResult]:
     try:
         if not load_config().get("remote_autostart"):
             return None
-        if status(force=True).state == "running":
+        if not session:
             return None
-        return start("tailscale")
+        current = status(force=True)
+        if current.state == "running" and current.session == session:
+            return None
+        return start("tailscale", session=session, own_pane_id=own_pane_id)
     except Exception:
         _write_last_error("autostart_failed")
-        return StartResult(ok=False, reason="autostart_failed")
+        return StartResult(ok=False, reason="autostart_failed", session=session)
 
 
 def on_tui_exit() -> None:
@@ -685,10 +765,18 @@ def _main(argv=None) -> int:
     parser.add_argument("--detached", action="store_true")
     parser.add_argument("--mode", default="tailscale")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--tmux-session", default="", help="tmux session to watch (required; never inferred here)")
+    parser.add_argument("--own-pane-id", default="", help="pane of the Tower that started this remote (excluded from the list)")
     args = parser.parse_args(argv)
     if not args.foreground:
         return 2
-    return serve_foreground(args.mode, args.port, detached=args.detached)
+    if not args.tmux_session:
+        _write_last_error("no_tmux")
+        print("--tmux-session is required", file=sys.stderr)
+        return 2
+    return serve_foreground(
+        args.mode, args.port, detached=args.detached, session=args.tmux_session, own_pane_id=args.own_pane_id
+    )
 
 
 if __name__ == "__main__":

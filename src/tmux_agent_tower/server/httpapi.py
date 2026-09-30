@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 
 from .. import __version__
+from ..tmux import capture as tmux_capture
 from ..ui.tower import Tower
 from . import auth
 from .webui import PAGE_HTML
@@ -82,7 +83,23 @@ def build_status_payload(tower: Tower) -> dict:
             }
         )
 
-    return {"panes": panes, "generated_at": time.time(), "version": __version__}
+    return {
+        "ok": True,
+        "panes": panes,
+        "session": tower.session,
+        "generated_at": time.time(),
+        "version": __version__,
+    }
+
+
+def source_session_missing_payload(session: str) -> dict:
+    """What the phone gets instead of a pane list once the tmux session
+    this remote was bound to no longer exists. Deliberately no ``panes``
+    key: configured SSH hosts must not show up alone and look like a
+    healthy Tower with "no local panes".
+    """
+
+    return {"ok": False, "error": "source_session_missing", "session": session}
 
 
 def find_prompt_target(
@@ -228,6 +245,9 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/status":
             if not self._require_auth():
                 return
+            if not self.server.source_session_alive():  # type: ignore[attr-defined]
+                self._send_json(503, source_session_missing_payload(self.server.session))  # type: ignore[attr-defined]
+                return
             self._send_json(200, build_status_payload(self._tower()))
         else:
             self._send_json(404, {"ok": False, "error": "not_found"})
@@ -275,6 +295,9 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
             if len(text) > MAX_PROMPT_CHARS:
                 self._send_json(413, {"ok": False, "error": "prompt_too_long"})
                 return
+            if not self.server.source_session_alive():  # type: ignore[attr-defined]
+                self._send_json(409, source_session_missing_payload(self.server.session))  # type: ignore[attr-defined]
+                return
 
             ok, reason, pane_id = find_prompt_target(self._tower(), pane_key, expected_project, expected_agent)
             if not ok:
@@ -305,6 +328,18 @@ class _Server(ThreadingHTTPServer):
         self.token_store = auth.TokenStore(token_path)
         self.pairing = auth.PairingSession(self.token_store)
         self._tower_lock = threading.Lock()
+
+    @property
+    def session(self) -> str:
+        return self._session
+
+    def source_session_alive(self) -> bool:
+        """Checked per request. The session is fixed at start; if it has
+        been deleted since, every status/prompt call says so instead of
+        returning an empty local list.
+        """
+
+        return tmux_capture.session_exists(self._session)
 
     def make_tower(self) -> Tower:
         # A fresh, headless Tower per request: cheap (no curses, no

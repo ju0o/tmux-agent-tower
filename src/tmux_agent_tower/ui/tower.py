@@ -802,7 +802,8 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
     tower.last_refresh = time.monotonic()
     filtering = False
     try:
-        service.maybe_autostart()
+        # Autostart binds the remote to this Tower's session -- never a guess.
+        service.maybe_autostart(session=tower.session, own_pane_id=tower.own_pane_id)
     except Exception:
         pass
     remote_state = _remote_state()
@@ -891,7 +892,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
         if matches_letter(key, "m"):
             from .remote_menu import open_remote_menu
 
-            open_remote_menu(stdscr)
+            open_remote_menu(stdscr, tower)
             remote_state = _remote_state()
             draw(stdscr, tower, remote_state=remote_state)
             continue

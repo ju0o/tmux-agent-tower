@@ -150,6 +150,7 @@ def _stub_tmux(monkeypatch, tmp_path):
     monkeypatch.setattr(service, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(service.tmux_capture, "current_session", lambda: "sess")
     monkeypatch.setattr(service.tmux_capture, "current_pane_id", lambda: "%1")
+    monkeypatch.setattr(service.tmux_capture, "session_exists", lambda session: session == "sess")
     monkeypatch.setattr(service.threading.Thread, "start", lambda self: None)  # no stdin watcher, no serve thread
 
 
@@ -281,6 +282,7 @@ def tailnet_server(tmp_path, monkeypatch):
     monkeypatch.setattr(tower_module, "CONFIG_DIR", tmp_path / "config")
     monkeypatch.setattr(tower_module, "HOST_FILE", tmp_path / "config" / "host")
     monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
+    monkeypatch.setattr(httpapi.tmux_capture, "session_exists", lambda session: session == "sess")
 
     srv = httpapi.create_server(
         "127.0.0.1",

@@ -35,6 +35,14 @@ PAGE_HTML = """<!doctype html>
     padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; text-align: center;
   }
   #banner.show { display: block; }
+  #banner.warn { background: var(--waiting); color: #1a1200; }
+  #source-gone {
+    display: none; background: var(--card); border: 1px solid var(--waiting); border-radius: 10px;
+    padding: 16px 14px; margin-bottom: 10px; line-height: 1.5;
+  }
+  #source-gone.show { display: block; }
+  #source-gone .title { font-weight: 600; margin-bottom: 4px; }
+  #source-gone .sub { font-size: 13px; color: var(--dim); }
   h1 { font-size: 15px; letter-spacing: .04em; color: var(--dim); margin: 4px 4px 12px; text-transform: uppercase; }
   .host { font-size: 12px; color: var(--dim); margin: 16px 4px 6px; }
   .card {
@@ -106,6 +114,12 @@ PAGE_HTML = """<!doctype html>
 <div id="main" style="display:none">
   <h1>Tmux Agent Tower</h1>
   <div id="banner"></div>
+  <div id="source-gone">
+    <div class="title">관제 중이던 tmux 세션이 종료되었습니다.</div>
+    <div class="sub">The tmux session this remote was watching no longer exists.
+    On the PC, open <b>tower</b> and press <b>M</b> → start the phone remote again.</div>
+    <div class="sub" id="source-gone-name"></div>
+  </div>
   <div id="list"></div>
 </div>
 
@@ -130,6 +144,8 @@ PAGE_HTML = """<!doctype html>
   var main = document.getElementById("main");
   var list = document.getElementById("list");
   var banner = document.getElementById("banner");
+  var sourceGone = document.getElementById("source-gone");
+  var sourceGoneName = document.getElementById("source-gone-name");
   var panel = document.getElementById("panel");
   var panelTarget = document.getElementById("panel-target");
   var promptText = document.getElementById("prompt-text");
@@ -148,6 +164,16 @@ PAGE_HTML = """<!doctype html>
     if (!msg) { banner.classList.remove("show"); return; }
     banner.textContent = msg;
     banner.classList.add("show");
+  }
+
+  function showSourceGone(session) {
+    // The pane list is cleared on purpose: leaving remote-host rows up
+    // would look like a healthy Tower that simply has no local panes.
+    list.innerHTML = "";
+    panel.classList.remove("open");
+    selected = null;
+    sourceGoneName.textContent = session ? "session: " + session : "";
+    sourceGone.classList.add("show");
   }
 
   function api(path, opts) {
@@ -317,6 +343,15 @@ PAGE_HTML = """<!doctype html>
         return;
       }
       setBanner(null); // a successful poll clears any prior "unreachable" state
+      if (res.body && res.body.error === "source_session_missing") {
+        showSourceGone(res.body.session);
+        return;
+      }
+      if (res.status !== 200 || !res.body || !res.body.panes) {
+        setBanner("Tower returned an error (" + ((res.body && res.body.error) || res.status) + ").");
+        return;
+      }
+      sourceGone.classList.remove("show");
       render(res.body);
     }).catch(function () {
       polling = false;

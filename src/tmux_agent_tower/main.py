@@ -124,8 +124,16 @@ def run_serve(lan: bool, port: int, use_tailscale: bool = False) -> None:
     live there -- ``--tailscale`` never binds ``0.0.0.0``.
     """
 
+    # Resolve the tmux session here, in the process the user launched from.
+    # The server lifecycle receives it explicitly and never re-infers it.
+    session = tmux_capture.current_session()
+    if not session:
+        print(t("cli.no_tmux_session"), file=sys.stderr)
+        raise SystemExit(1)
+    own_pane_id = tmux_capture.current_pane_id()
+
     mode = "tailscale" if use_tailscale else ("lan" if lan else "local")
-    code = remote_service.serve_foreground(mode, port, detached=False)
+    code = remote_service.serve_foreground(mode, port, detached=False, session=session, own_pane_id=own_pane_id)
     if code:
         raise SystemExit(code)
 

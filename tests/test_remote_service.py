@@ -22,6 +22,9 @@ class _Proc:
 def _use_config(monkeypatch, tmp_path):
     monkeypatch.setattr(service, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(service, "_status_cache", {"at": 0.0, "value": None})
+    # Session liveness is tested on its own in test_remote_session_binding.py;
+    # here the recorded session is assumed to exist.
+    monkeypatch.setattr(service.tmux_capture, "session_exists", lambda session: True)
 
 
 # -- status -----------------------------------------------------------------
@@ -36,6 +39,7 @@ def test_status_running_checks_health_and_tailscale(monkeypatch, tmp_path):
     _use_config(monkeypatch, tmp_path)
     service._write_json(service._runtime_path(), {
         "pid": 7, "port": 4312, "mode": "tailscale", "url": "https://box.ts.net/", "https": True, "ready": True,
+        "tmux_session": "main",
     })
     monkeypatch.setattr(service, "pid_alive", lambda pid: True)
     monkeypatch.setattr(service, "process_is_ours", lambda pid: True)
@@ -61,7 +65,10 @@ def test_status_error_when_health_fails(monkeypatch, tmp_path):
 
 def test_status_error_when_tailscale_mapping_is_gone(monkeypatch, tmp_path):
     _use_config(monkeypatch, tmp_path)
-    service._write_json(service._runtime_path(), {"pid": 7, "port": 4312, "mode": "tailscale", "url": "https://x/"})
+    service._write_json(
+        service._runtime_path(),
+        {"pid": 7, "port": 4312, "mode": "tailscale", "url": "https://x/", "tmux_session": "main"},
+    )
     monkeypatch.setattr(service, "pid_alive", lambda pid: True)
     monkeypatch.setattr(service, "process_is_ours", lambda pid: True)
     monkeypatch.setattr(service, "_health_ok", lambda port: True)
@@ -135,12 +142,15 @@ def test_duplicate_start_does_not_spawn(monkeypatch, tmp_path):
     monkeypatch.setattr(
         service,
         "status",
-        lambda force=False: service.ServiceStatus(state="running", url="https://box.ts.net/", https=True, mode="tailscale"),
+        lambda force=False: service.ServiceStatus(
+            state="running", url="https://box.ts.net/", https=True, mode="tailscale", pid=7, session="main"
+        ),
     )
+    monkeypatch.setattr(service, "pid_alive", lambda pid: True)
     monkeypatch.setattr(service, "pairing_info", lambda: {"code": "123456", "expired": False})
     monkeypatch.setattr(service, "_spawn", lambda *a, **k: pytest.fail("must not spawn a second server"))
 
-    result = service.start("tailscale")
+    result = service.start("tailscale", session="main")
     assert result.ok is True
     assert result.already_running is True
     assert result.url == "https://box.ts.net/"
@@ -151,12 +161,12 @@ def test_start_reports_tailscale_unavailable_without_raising(monkeypatch, tmp_pa
     _use_config(monkeypatch, tmp_path)
     monkeypatch.setattr(service, "status", lambda force=False: service.ServiceStatus(state="stopped"))
 
-    def fake_spawn(mode, port):
+    def fake_spawn(mode, port, session, own_pane_id=""):
         service._write_last_error("tailscale_missing")
         return _Proc(exit_code=1)
 
     monkeypatch.setattr(service, "_spawn", fake_spawn)
-    result = service.start("tailscale")
+    result = service.start("tailscale", session="main")
     assert result.ok is False
     assert result.reason == "tailscale_missing"
 
@@ -171,7 +181,7 @@ def test_spawn_uses_an_argument_list_not_a_shell(monkeypatch, tmp_path):
         return _Proc()
 
     monkeypatch.setattr(service.subprocess, "Popen", fake_popen)
-    service._spawn("tailscale", 4312)
+    service._spawn("tailscale", 4312, "main", "%1")
 
     assert isinstance(captured["cmd"], list)
     assert "tmux_agent_tower.server.service" in captured["cmd"]
@@ -243,8 +253,10 @@ def test_autostart_on_starts_tailscale(monkeypatch):
     monkeypatch.setattr(config, "load_config", lambda: {"remote_autostart": True})
     monkeypatch.setattr(service, "status", lambda force=False: service.ServiceStatus(state="stopped"))
     calls = []
-    monkeypatch.setattr(service, "start", lambda mode="tailscale": calls.append(mode) or service.StartResult(ok=True))
-    result = service.maybe_autostart()
+    monkeypatch.setattr(
+        service, "start", lambda mode="tailscale", **kw: calls.append(mode) or service.StartResult(ok=True)
+    )
+    result = service.maybe_autostart(session="main", own_pane_id="%1")
     assert calls == ["tailscale"]
     assert result.ok is True
 
@@ -258,7 +270,7 @@ def test_autostart_failure_does_not_raise(monkeypatch, tmp_path):
         raise RuntimeError("tailscale down")
 
     monkeypatch.setattr(service, "start", boom)
-    result = service.maybe_autostart()
+    result = service.maybe_autostart(session="main")
     assert result is not None and result.ok is False
     assert result.reason == "autostart_failed"
 

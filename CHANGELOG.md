@@ -49,6 +49,19 @@ bumped until this merges.
   Pairing codes are regenerated from the TUI through a local control
   file, not an HTTP endpoint. Paired devices can be listed and
   disconnected; older token files (no label) still load.
+* **Fix: remote bound to an explicit tmux session.** The detached server
+  used to re-infer its session from its own environment; started from a
+  since-deleted scratch session it kept serving an empty local list (the
+  phone saw only the SSH host). Now the starting Tower/CLI passes
+  `session` + `own_pane_id` explicitly, the runtime file records them,
+  `status()` also checks the session still exists (otherwise
+  `error/source_session_missing`, never `● 연결됨`), `/api/status`
+  returns a structured `source_session_missing` error instead of
+  `panes: []`, the `M` menu shows `관제 세션:`, and starting from a Tower
+  in another session offers "switch / keep / cancel" instead of a silent
+  "already running". Autostart binds to the opening Tower's session and
+  never guesses. Tests: 353 -> 384, including a real-tmux scratch-session
+  lifecycle test on a private socket.
 
 ## v0.2.2 - Main stabilization checkpoint
 

@@ -37,6 +37,9 @@ def one_pane(monkeypatch, isolated_state):
     monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {})
     monkeypatch.setattr(discovery, "discover_project", lambda path: "my-project")
     monkeypatch.setattr(discovery, "git_project_name", lambda path: "my-project")
+    # run_tmux above returns a pane line for every call, so the session
+    # liveness check must be answered separately.
+    monkeypatch.setattr(discovery.capture, "session_exists", lambda session: session == SESSION)
     return isolated_state
 
 
