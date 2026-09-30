@@ -37,7 +37,18 @@ bumped until this merges.
   direct `http://<tailscale-ip>:4312` correctly unreachable, mapping
   cleaned up on stop. Phone-on-LTE acceptance is the remaining manual
   step.
-* Tests: 225 (v0.2.2) -> 327.
+* Tests: 225 (v0.2.2) -> 353.
+* **In-TUI remote control (`M`)**: `tower` then `M` starts, inspects,
+  and stops the phone remote. No shell command is shown. The header
+  badge comes from a real health check plus the Tailscale Serve mapping,
+  not a local flag. The server is a detached process of the same
+  `server.service` module the CLI uses (no `shell=True`); quitting the
+  TUI with `Q` leaves it running, and stop refuses to signal a PID that
+  is not Tower Remote. `[remote] autostart` (default off) can start it
+  with the TUI; a failure shows `원격: ! 오류` and the TUI still opens.
+  Pairing codes are regenerated from the TUI through a local control
+  file, not an HTTP endpoint. Paired devices can be listed and
+  disconnected; older token files (no label) still load.
 
 ## v0.2.2 - Main stabilization checkpoint
 

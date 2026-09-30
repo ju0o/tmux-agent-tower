@@ -28,7 +28,7 @@ NEW ! web-app                                        Codex          WAITING
 ── ASUS ────────────────────────────────────────────────────────────────────
   ● billing-service                                  Claude         WORKING
 
-↑↓ Move   Enter Open   E Edit item   N Add   W Workspace   / Search   R   Q
+↑↓ Move  Enter Open  E Edit  N Add  W Workspace  M Remote  / Search  A Attention  R  Q
 ```
 
 ## What it is (and isn't)
@@ -123,8 +123,10 @@ Inside any tmux pane:
 tower
 ```
 
-runs the TUI right there, in that pane. If you start another one in a
-different pane later, that one becomes "the" active Tower -- older ones
+runs the TUI right there, in that pane. Press `M` → **Start phone
+remote** when you want the same view on your phone (no shell command).
+If you start another Tower in a different pane later, that one becomes
+"the" active Tower -- older ones
 keep running, nothing is killed, but `tower --focus` (see below) will jump
 to the newest one.
 
@@ -147,10 +149,11 @@ command, not another TUI, so it's safe to bind to a key.
 | `E` | Edit the selected pane's project name, agent label, or pane title |
 | `N` | Add one project (Workspace Launcher, single) |
 | `W` | Start a new workspace (Workspace Launcher, multi) |
+| `M` | Phone remote: start, show the address and pairing code, or stop |
 | `/` | Live-filter the list (project/agent/title/path/host); `Esc` clears it |
 | `A` | Toggle Attention View (sorts by what needs you first) |
 | `R` | Refresh immediately |
-| `Q` / `Ctrl+C` | Quit |
+| `Q` / `Ctrl+C` | Quit the TUI (a phone remote you started keeps running) |
 
 ### Editing what's shown (`E`)
 
@@ -248,13 +251,19 @@ fallback if that turns up nothing.
 
 ### From your phone (experimental, this branch only)
 
-`tower serve` starts a small pairing-gated web UI showing the same
-pane/status data, plus the ability to send one explicit prompt into one
-pane you pick. `tower serve --lan` for same-Wi-Fi (plain HTTP, trusted
-networks only); `tower serve --tailscale` for anywhere over your tailnet
-(HTTPS via Windows-host Tailscale Serve, backend stays localhost-only).
-Read `docs/REMOTE.md` first -- it is the full security model and the
-list of what this deliberately does *not* do.
+Inside Tower, press `M` and choose **Start phone remote**. Tower prints
+an `https://…ts.net` address and a pairing code on screen. Save that
+address on your phone (home screen or bookmark). The header shows
+`Remote: ● connected` while it is actually up.
+
+Quitting Tower with `Q` does not stop the phone remote. Stop it from
+`M` → **Stop remote**. `M` → **Autostart** can start it for you the next
+time you run `tower`.
+
+The same service is available from a shell for debugging
+(`tower serve`, `tower serve --lan`, `tower serve --tailscale`). You
+don't need those for normal use. Read `docs/REMOTE.md` first -- it is
+the security model and the list of what this deliberately does not do.
 
 ### Language
 

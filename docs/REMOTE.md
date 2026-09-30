@@ -10,6 +10,21 @@ relying on it for anything you can't afford to get wrong.
 
 ## Quick start
 
+From the Tower TUI (this is the normal way -- no shell command):
+
+```
+tower
+```
+
+then `M` → **휴대폰 원격 시작** / **Start phone remote**. The screen
+shows the address and a pairing code. `Q` leaves the remote running;
+`M` → **원격 종료** / **Stop remote** turns it off. The header badge
+(`원격: ● 연결됨` / `Remote: ● connected`) is a live health check, not
+a remembered flag.
+
+The same server can still be started from a shell. That path is for
+debugging and automation, not for day-to-day use:
+
 ```bash
 tower serve              # localhost only
 tower serve --lan        # also reachable from your phone, same Wi-Fi (plain HTTP)
@@ -18,7 +33,9 @@ tower serve --port 9000
 ```
 
 `--lan` and `--tailscale` are mutually exclusive. If you have Tailscale,
-prefer `--tailscale` -- see the dedicated section below for why.
+prefer the TUI's phone-remote action (or `--tailscale`) -- see the
+dedicated section below for why. A remote started either way is the
+same process: the TUI will see it, and will not start a second one.
 
 Run it from inside the same tmux session you want to monitor (same
 requirement as `tower` itself). It prints a URL and a one-time, 5-minute
@@ -83,8 +100,9 @@ token file is deleted.
   wrong, expired, and locked-out code all produce the exact same
   `{"error": "invalid_code"}` response -- an attacker on your LAN can't
   tell which case they hit. Getting a new code after a lockout requires
-  typing `r` + Enter in the `tower serve` terminal itself; there is no
-  HTTP path to a new code at all (see `test_no_http_endpoint_can_regenerate_pairing_code`).
+  choosing **New pairing code** in the Tower `M` menu, or typing `r` +
+  Enter in a foreground `tower serve` terminal; there is no HTTP path to
+  a new code at all (see `test_no_http_endpoint_can_regenerate_pairing_code`).
 * **Tokens**: opaque random strings, persisted at
   `~/.config/tmux-agent-tower/remote-tokens.json` (gitignored, never
   committed -- same boundary as every other local state file in this
@@ -208,24 +226,18 @@ length/body caps, and the stale-pane re-check all apply exactly as in
 LAN mode. Being on the tailnet is a *second* layer, not a replacement:
 Tailscale identity + WireGuard/HTTPS transport + Tower pairing/token.
 
-### Auto-start (design only -- not implemented)
+### Autostart
 
-Goal: turn the PC on, open the same URL on your phone, it just works.
+`M` → **자동 시작 설정** / **Autostart** writes `[remote] autostart` in
+`~/.config/tmux-agent-tower/config.toml` (default `false`). When it is
+`true`, `tower` starts the TUI and the Tailscale remote together. A
+failed start does not block the TUI; the header shows
+`원격: ! 오류` / `Remote: ! error`.
 
-```
-Windows boot
-  -> Tailscale (Windows service, already auto-starts)
-  -> WSL starts (e.g. Windows Task Scheduler at logon: `wsl.exe -d <distro> -- true`,
-     or a WSL systemd unit if systemd is enabled in /etc/wsl.conf)
-  -> `tower serve --tailscale` starts inside a detached tmux session
-     (e.g. `tmux new-session -d -s tower 'tower serve --tailscale'`)
-  -> Serve mapping is re-created (idempotent: an existing correct mapping is reused)
-```
-
-Planned as a `tower remote install-service` command later. Not part of
-this slice; manual start is enough for the phone dogfood. Note that the
-pairing code is printed to the detached session's pane -- you'd attach
-to read it once per new device, which is the intended friction.
+That is "when I open Tower", not "when Windows boots". A login-time
+service (`tower remote install-service`, WSL + Tailscale already up) is
+still a later slice. The MagicDNS URL stays stable, so a phone bookmark
+keeps working across starts.
 
 ## Known gaps (v0 MVP)
 
@@ -260,10 +272,9 @@ to read it once per new device, which is the intended friction.
   off the PC's terminal. Fine for a first real phone connection; a nice
   quality-of-life addition later. (With `--tailscale` the URL is your
   stable MagicDNS name, so this matters much less there.)
-* **Pairing-code regeneration** is available (type `r` + Enter in the
-  `tower serve` terminal) but requires local terminal access -- there is
-  deliberately no remote/HTTP way to do it (see the security model
-  above).
+* **Pairing-code regeneration** is local only: the `M` menu, or `r` +
+  Enter in a foreground `tower serve` terminal. There is deliberately no
+  remote/HTTP way to do it (see the security model above).
 * **Single tmux session only** -- exactly the same scope `tower` itself
   has today (the session the process is run from), not a cross-session
   view.
