@@ -18,7 +18,8 @@ from ..adapters.base import PaneContext
 from ..detection.status import StatusEngine, STATUS_DEAD
 from .. import i18n
 from ..i18n import t
-from ..launcher.config import AGENT_LAUNCH_ORDER
+from ..launcher.config import AGENT_LAUNCH_ORDER, load_config
+from .. import notify
 from ..remote.collector import fetch_remote, HOST_STATUS_ONLINE
 from ..state.overrides import OverrideStore
 from ..state.visits import VisitStore
@@ -96,9 +97,20 @@ class Tower:
         self.overrides = OverrideStore(STATE_DIR / "overrides.json")
         self.status_engine = StatusEngine()
 
+        # Loaded once per Tower run, not re-read every refresh -- matches
+        # remote_hosts above. A user editing config.toml mid-session picks
+        # it up on the next `tower` restart, not live.
+        self.config = load_config()
+        self.notifier = notify.NotificationTracker(
+            enabled=self.config["notifications"],
+            notify_waiting=self.config["notification_kinds"]["waiting"],
+            notify_dead=self.config["notification_kinds"]["dead"],
+        )
+
         self.rows: List[Dict] = []           # all selectable data rows (unfiltered)
         self.visible_rows: List[Dict] = []   # rows after the search filter is applied
         self.visual: List[Dict] = []         # visible_rows incl. host headers, for drawing
+        self.attention_mode = False          # a separate, re-sorted presentation -- see toggle_attention()
         self.selected = 0                    # index into visible_rows
         self.last_refresh = 0.0
         self.filter_text = ""
@@ -106,6 +118,25 @@ class Tower:
         self._remote_last_fetch: Dict[str, float] = {}
 
     # -- data ---------------------------------------------------------
+
+    def _activity_and_duration(self, key: str, adapter, ctx: PaneContext, status: str, dead: bool):
+        """Shared by local/remote row-building: the (possibly None)
+        activity text to show, and the current status's duration in
+        seconds -- each respecting its own config display toggle.
+        """
+
+        activity_text = None
+        if self.config["show_activity"] and not dead:
+            activity = adapter.extract_activity(ctx)
+            # Low-confidence guesses are computed (testable at the adapter
+            # level) but never shown -- a plausible-sounding wrong answer
+            # is worse than no activity line at all.
+            if activity is not None and activity.confidence != "low":
+                activity_text = activity.text
+
+        duration_seconds = self.status_engine.duration_seconds(key) if self.config["show_status_duration"] else 0.0
+
+        return activity_text, duration_seconds
 
     def _local_rows(self) -> List[Dict]:
         panes = discovery.list_panes(self.session, self.own_pane_id, CAPTURE_LINES)
@@ -129,6 +160,9 @@ class Tower:
             project = custom_project or auto_project
             agent = custom_agent or adapter.name
             title_line = render.title_secondary_line(project, effective_title, _raw_hostname())
+            activity_text, duration_seconds = self._activity_and_duration(key, adapter, ctx, status, pane["dead"])
+
+            self.notifier.observe(key, status, project)
 
             out.append(
                 {
@@ -138,6 +172,8 @@ class Tower:
                     "agent": agent,
                     "auto_agent": adapter.name,
                     "title_line": title_line,
+                    "activity_text": activity_text,
+                    "duration_seconds": duration_seconds,
                     "pane_title": effective_title,
                     "path": pane["path"],
                     "status": status,
@@ -221,6 +257,14 @@ class Tower:
                 project = custom_project or auto_project
                 agent = custom_agent or adapter.name
                 title_line = render.title_secondary_line(project, effective_title, name)
+                # Remote captures are title-only (see docs/ARCHITECTURE.md),
+                # so activity extraction has nothing to search -- almost
+                # always None here, which is honest given the evidence.
+                activity_text, duration_seconds = self._activity_and_duration(
+                    composite_key, adapter, ctx, status, pane["dead"]
+                )
+
+                self.notifier.observe(composite_key, status, project)
 
                 out.append(
                     {
@@ -230,6 +274,8 @@ class Tower:
                         "agent": agent,
                         "auto_agent": adapter.name,
                         "title_line": title_line,
+                        "activity_text": activity_text,
+                        "duration_seconds": duration_seconds,
                         "pane_title": effective_title,
                         "path": pane["path"],
                         "status": status,
@@ -263,6 +309,12 @@ class Tower:
 
         self.visible_rows = [r for r in self.rows if render.row_matches_filter(r, self.filter_text)]
 
+        if self.attention_mode:
+            # A separate, deliberately re-sorted presentation the user
+            # explicitly asked for (see toggle_attention()) -- this is NOT
+            # the default list silently reordering itself on a refresh.
+            self.visible_rows = render.sort_by_attention(self.visible_rows)
+
         if not self.visible_rows:
             self.selected = 0
             self.visual = []
@@ -288,6 +340,15 @@ class Tower:
         self.set_filter("")
 
     def _build_visual(self) -> None:
+        if self.attention_mode:
+            # Flat, priority-sorted, deliberately NOT grouped by host --
+            # the point is "what needs me right now," not "what's on
+            # which machine."
+            self.visual = [{"type": "header", "host": t("attention.title")}] + [
+                {"type": "data", "row": row, "row_index": idx} for idx, row in enumerate(self.visible_rows)
+            ]
+            return
+
         visual = []
         hosts_seen = []
         for row in self.visible_rows:
@@ -301,6 +362,10 @@ class Tower:
                     visual.append({"type": "data", "row": row, "row_index": idx})
 
         self.visual = visual
+
+    def toggle_attention(self) -> None:
+        self.attention_mode = not self.attention_mode
+        self._apply_filter()
 
     # -- actions --------------------------------------------------------
 
@@ -454,13 +519,26 @@ def _project_text(row: Dict) -> str:
     return row["project"] if row.get("project") is not None else t(row.get("placeholder", "remote.unreachable"))
 
 
-def _build_detail_fields(row: Dict) -> List[Tuple[str, str]]:
+def _duration_text(tower: Tower, row: Dict) -> str:
+    if not tower.config.get("show_status_duration"):
+        return ""
+    seconds = row.get("duration_seconds")
+    if not seconds:
+        return ""
+    return render.format_duration(seconds)
+
+
+def _build_detail_fields(tower: Tower, row: Dict) -> List[Tuple[str, str]]:
     status = row["status"]
     status_text = f'{STATUS_SYMBOL.get(status, "?")} {t("status." + status)}'
+    duration = _duration_text(tower, row)
+    if duration:
+        status_text = f"{status_text} · {duration}"
 
     fields = [
         (t("detail.project"), _project_text(row)),
         (t("detail.agent"), row.get("agent")),
+        (t("detail.activity"), row.get("activity_text") if tower.config.get("show_activity") else None),
         (t("detail.pane_title"), row.get("pane_title")),
         (t("detail.path"), row.get("path")),
         (t("detail.status"), status_text),
@@ -473,9 +551,10 @@ def _build_detail_fields(row: Dict) -> List[Tuple[str, str]]:
 
 def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
     """Flattens ``tower.visual`` (header/data items) into one entry per
-    *physical* terminal line, since a data row can now take 1-3 lines
-    (project / agent+status in narrow layout / pane-title secondary line)
-    -- viewport scrolling paginates over this list, not over ``visual``.
+    *physical* terminal line, since a data row can now take up to 4 lines
+    (project / agent+status in narrow layout / pane-title secondary line /
+    current-activity line) -- viewport scrolling paginates over this
+    list, not over ``visual``.
     """
 
     physical: List[Dict] = []
@@ -494,6 +573,9 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
 
         if row.get("title_line"):
             physical.append({"kind": "secondary", "row": row, "row_index": row_index})
+
+        if row.get("activity_text"):
+            physical.append({"kind": "activity", "row": row, "row_index": row_index})
 
     return physical
 
@@ -526,6 +608,7 @@ def draw(stdscr, tower: Tower, filtering: bool = False) -> None:
     else:
         hint_keys = [t("hint.move"), t("hint.open"), t("hint.rename"), t("hint.add_project"), t("hint.new_workspace")]
         hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
+        hint_keys.append(t("hint.attention"))
         hint_keys += [t("hint.refresh"), t("hint.quit")]
         safe_add(stdscr, 1, 2, "   ".join(hint_keys), curses.A_DIM)
 
@@ -537,7 +620,7 @@ def draw(stdscr, tower: Tower, filtering: bool = False) -> None:
     detail_lines: List[str] = []
     if render.should_show_detail_panel(height) and tower.visible_rows:
         selected_row = tower.visible_rows[tower.selected]
-        detail_lines = render.format_detail_panel(_build_detail_fields(selected_row))
+        detail_lines = render.format_detail_panel(_build_detail_fields(tower, selected_row))
 
     detail_block = (1 + 1 + len(detail_lines)) if detail_lines else 0  # divider + title + fields
     max_rows = max(0, bottom_hint_y - start_y - detail_block)
@@ -600,16 +683,24 @@ def draw(stdscr, tower: Tower, filtering: bool = False) -> None:
             if not narrow:
                 safe_add(stdscr, y, agent_x, row["agent"][:14], base_attr)
                 status_attr_here = base_attr if is_selected else status_attr(row["status"])
-                safe_add(stdscr, y, status_x, t("status." + row["status"]), status_attr_here)
+                status_text = t("status." + row["status"])
+                duration = _duration_text(tower, row)
+                if duration:
+                    status_text = f"{status_text} · {duration}"
+                safe_add(stdscr, y, status_x, status_text, status_attr_here)
 
         elif p["kind"] == "agent_status":
-            text = render.agent_status_line(row["agent"], t("status." + row["status"]))
+            text = render.agent_status_line(row["agent"], t("status." + row["status"]), _duration_text(tower, row))
             attr = base_attr if is_selected else curses.A_DIM
             safe_add(stdscr, y, 4, text, attr)
 
         elif p["kind"] == "secondary":
             attr = base_attr if is_selected else curses.A_DIM
             safe_add(stdscr, y, 4, row["title_line"], attr)
+
+        elif p["kind"] == "activity":
+            attr = base_attr if is_selected else curses.A_DIM
+            safe_add(stdscr, y, 4, row["activity_text"], attr)
 
     # -- detail panel ------------------------------------------------------
 
@@ -752,6 +843,11 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
         if matches_letter(key, "r"):
             tower.load()
             tower.last_refresh = time.monotonic()
+            draw(stdscr, tower)
+            continue
+
+        if matches_letter(key, "a"):
+            tower.toggle_attention()
             draw(stdscr, tower)
             continue
 
