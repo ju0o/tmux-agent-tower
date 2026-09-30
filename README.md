@@ -73,6 +73,23 @@ NEW ! web-app                                        Codex          WAITING
 * Works across a second host over SSH, degrading gracefully to
   `UNKNOWN`/offline if that host isn't reachable -- the local TUI never
   blocks waiting on it.
+* A one-line **current activity** guess per pane (e.g. `Calling
+  some_tool...`, `~ Preparing write...`), extracted purely from
+  already-captured terminal text -- no LLM calls, nothing leaves your
+  machine, and raw terminal content is never written to disk. Shown only
+  when there's real evidence for it; hidden rather than guessed when
+  there isn't.
+* **Status duration**: how long Tower has continuously observed a pane in
+  its current status (`대기 · 4m`), shown next to the status and in the
+  detail panel.
+* **Attention View** (`A`) re-sorts the list by what needs you first --
+  `WAITING > UNKNOWN > DEAD > WORKING > IDLE` -- without changing the
+  default per-host order; press `A` again to go back.
+* Optional, **off-by-default** notifications on a genuine status change
+  (e.g. an agent starts WAITING on you), via `notify-send` or a
+  `tmux display-message` fallback wherever there's no desktop
+  notification daemon. One-shot per transition -- no repeat spam while a
+  pane just sits in the same status.
 
 ## Install
 
@@ -131,6 +148,7 @@ command, not another TUI, so it's safe to bind to a key.
 | `N` | Add one project (Workspace Launcher, single) |
 | `W` | Start a new workspace (Workspace Launcher, multi) |
 | `/` | Live-filter the list (project/agent/title/path/host); `Esc` clears it |
+| `A` | Toggle Attention View (sorts by what needs you first) |
 | `R` | Refresh immediately |
 | `Q` / `Ctrl+C` | Quit |
 
@@ -235,6 +253,27 @@ English, and remembers the answer in
 `~/.config/tmux-agent-tower/config.toml` (`language = "ko"` / `"en"`).
 There's no in-app way to change it again yet in this release -- edit that
 line by hand and restart `tower` if you want to switch.
+
+### Task awareness settings
+
+Also in `~/.config/tmux-agent-tower/config.toml`, all optional and all
+defaulting to the quiet/conservative choice:
+
+```toml
+show_activity = true          # default: true
+show_status_duration = true   # default: true
+notifications = false         # default: false -- opt in explicitly
+
+[notifications]
+waiting = true   # default: true (once notifications = true)
+dead = false     # default: false
+```
+
+`notifications = true` alone is not enough to get every kind of alert --
+each transition kind (`waiting`, `dead`) is independently toggleable, and
+a WORKING → IDLE transition is deliberately not offered as a notification
+kind at all: Tower can tell a pane stopped changing, not that a task is
+actually "done."
 
 ## Supported agents
 

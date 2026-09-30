@@ -1,5 +1,72 @@
 # Changelog
 
+## v0.2.0 - Task awareness: activity, duration, attention view, notifications
+
+Tower could tell you an agent was WORKING, but not *at what*, or *for how
+long*, and there was no way to jump straight to the panes that actually
+need you. This slice adds all three, plus optional, off-by-default
+notifications -- with a hard rule carried through every part of it:
+**an honest "no answer" beats a plausible-sounding wrong one.**
+
+* **Current-activity line**, one line per pane, extracted purely from
+  already-captured terminal text -- no LLM calls, nothing sent anywhere.
+  Codex reads its own step bullets (preferring an in-progress "Calling
+  ..." line); Claude reads its active-verb status line, with a low-
+  confidence bullet fallback; Grok reads its `Task ... (n) Ns` line;
+  OpenCode reads its `~ Preparing ...` / `→ ...` lines. Cursor and Shell
+  report no opinion -- there's no reliable evidence for either. Anything
+  below "medium" confidence is computed (and tested) but never shown.
+  Raw terminal text is never persisted to disk; activity strings exist
+  only in memory for the current draw.
+* **Status duration**: "Tower has observed this status continuously for
+  N" (`StatusEngine.duration_seconds`), shown next to the status text and
+  in the detail panel. Framed as an observation window, never as "the
+  agent started N ago" -- Tower doesn't know when the agent actually
+  started.
+* **Attention View** (`A`): re-sorts the flat pane list by
+  WAITING > UNKNOWN > DEAD > WORKING > IDLE without ever touching the
+  default per-host list order -- it's a toggle, not a replacement.
+* **Notifications, off by default**: a genuine status *transition* (not
+  "still WAITING") can fire a one-shot desktop notification via
+  `notify-send`, falling back to `tmux display-message` wherever there's
+  no notification daemon (confirmed working end-to-end in a plain
+  WSL/tmux session with no desktop at all). WORKING → IDLE is deliberately
+  **not** a notifiable transition -- Tower cannot know a turn is actually
+  "done," only that the pane stopped changing. `waiting`/`dead` are
+  independently toggleable in `[notifications]`.
+* **New config.toml keys**: `show_activity`, `show_status_duration`,
+  `notifications` (top-level bool), and a `[notifications]` section with
+  `waiting`/`dead` booleans -- all default to the conservative/quiet
+  choice (activity and duration on, notifications off).
+* **Detail panel** gained a "current activity" field (hidden when there
+  is none, per the confidence rule above), and its status field now
+  includes the duration suffix.
+* **Fixed four real bugs, all caught by dogfooding against live panes,
+  not by code review**: (1) all four adapters initially scanned only the
+  last 20 captured lines for activity; a short reply can leave enough
+  blank padding below it that the real activity line falls outside that
+  window on a real pane, so every adapter now scans the full capture.
+  (2) Codex's own "• Working (...)" and "• Finished ..." bullets were
+  being read back as if they were a task description. (3) OpenCode's
+  `→ ...` line survives verbatim into the idle state from the last
+  finished turn, so it's now only trusted when a `working` marker is
+  also present. (4) **Found after this file's own dogfood check against
+  a real, already-idle Codex pane** (not a synthetic fixture): a
+  finished turn leaves its multi-bullet summary sitting in scrollback
+  right above the idle prompt, and the "last bullet found anywhere"
+  fallback was reporting that stale, completed summary as current
+  activity. Fixed by requiring the same "Working (...)" evidence line
+  before trusting *any* bullet, not just the medium-confidence fallback.
+* Also fixed a config-parsing collision where a top-level `notifications`
+  boolean and a `[notifications]` section both wrote into the same
+  internal key, and a status-engine bug where DEAD duration could never
+  accumulate past one refresh tick (it was being reset to zero on every
+  single DEAD observation instead of only on a pane-id-reuse transition).
+* 225 tests total, including new dedicated suites for activity
+  extraction (`test_activity.py`) and notifications (`test_notify.py`),
+  plus new duration/attention coverage in the existing status-engine and
+  render suites.
+
 ## v0.1.3 - Compact row UI redesign
 
 The pane table felt like a spreadsheet, not a control tower. Redesigned

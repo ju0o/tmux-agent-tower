@@ -2,7 +2,9 @@
 
 v0.1.0 covers P0-P4 (TUI stability, status engine v2, project
 auto-discovery, a minimal multi-host prototype, and the Workspace
-Launcher) plus a Korean-first UI (see "i18n" below).
+Launcher) plus a Korean-first UI (see "i18n" below). v0.2.0 covers P6
+(task awareness) and the "genuine status transition" half of P7
+(notifications) -- see below for what's still open in each.
 
 ## Workspace Launcher vs. Action Layer -- the distinction that matters here
 
@@ -34,15 +36,32 @@ while P5 remains a deliberate non-goal for now.
 * Interrupting, restarting, or killing an agent process.
 * Auto-accepting approval/permission prompts.
 
-## P6 - Task awareness
+## P6 - Task awareness (v0.2.0, mostly done)
 
-* Extracting "what is this agent currently working on" as structured text.
-* Elapsed time / completion / failure inference.
+* Done: a one-line "what is this agent currently doing" guess per pane,
+  extracted from already-captured terminal text only (no LLM calls, no
+  structured/persisted data -- see `adapters/*.py`'s `extract_activity`).
+  Confidence-gated: a low-confidence guess is computed and tested but
+  never shown.
+* Done: status duration (`StatusEngine.duration_seconds`) -- how long a
+  pane has continuously held its current status.
+* Not done: "completion / failure inference" -- deliberately still out of
+  scope. Tower can observe that a pane *stopped changing*, not that a
+  task *succeeded*, *failed*, or is meaningfully "done"; see the
+  WORKING → IDLE non-notification rule under P7.
 
-## P7 - Notifications
+## P7 - Notifications (v0.2.0, partially done)
 
-* Desktop/terminal-bell notification when a pane becomes WAITING.
-* Notification when a long-running task finishes.
+* Done: an optional, off-by-default, one-shot desktop notification
+  (`notify-send`, falling back to `tmux display-message`) on a genuine
+  status *transition* into WAITING or DEAD (each independently
+  toggleable in `[notifications]`).
+* Deliberately not done: a "long-running task finished" notification.
+  WORKING → IDLE is explicitly excluded as a notifiable transition --
+  Tower has no way to know a task actually finished successfully versus
+  the pane just going quiet, and framing "stopped changing" as "done"
+  would be exactly the kind of confident-but-wrong signal this project
+  avoids.
 
 ## P8 - Persistence
 
