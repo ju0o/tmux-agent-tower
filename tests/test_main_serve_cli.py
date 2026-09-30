@@ -6,16 +6,30 @@ from tmux_agent_tower.server.auth import PairingSession, TokenStore
 
 def test_serve_subcommand_routes_with_defaults(monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "run_serve", lambda lan, port: calls.append((lan, port)))
+    monkeypatch.setattr(main, "run_serve", lambda lan, port, use_tailscale=False: calls.append((lan, port, use_tailscale)))
     main.cli(["serve"])
-    assert calls == [(False, main.DEFAULT_SERVE_PORT)]
+    assert calls == [(False, main.DEFAULT_SERVE_PORT, False)]
 
 
 def test_serve_subcommand_with_lan_and_port(monkeypatch):
     calls = []
-    monkeypatch.setattr(main, "run_serve", lambda lan, port: calls.append((lan, port)))
+    monkeypatch.setattr(main, "run_serve", lambda lan, port, use_tailscale=False: calls.append((lan, port, use_tailscale)))
     main.cli(["serve", "--lan", "--port", "9999"])
-    assert calls == [(True, 9999)]
+    assert calls == [(True, 9999, False)]
+
+
+def test_serve_subcommand_with_tailscale(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "run_serve", lambda lan, port, use_tailscale=False: calls.append((lan, port, use_tailscale)))
+    main.cli(["serve", "--tailscale"])
+    assert calls == [(False, main.DEFAULT_SERVE_PORT, True)]
+
+
+def test_lan_and_tailscale_are_mutually_exclusive():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        main.cli(["serve", "--lan", "--tailscale"])
 
 
 def test_no_subcommand_still_runs_normal_ui(monkeypatch):
