@@ -13,9 +13,54 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..i18n import t
 
-ESC = 27
-BACKSPACE_KEYS = (curses.KEY_BACKSPACE, 127, 8)
-ENTER_KEYS = (curses.KEY_ENTER, 10, 13)
+
+def read_key(stdscr):
+    """Like ``getch()`` but Unicode-correct.
+
+    ``getch()`` returns one *byte* at a time. For multi-byte UTF-8 input
+    (e.g. any Korean character) that splits a single character into
+    several meaningless byte values, each individually misdecoded via
+    ``chr()`` -- a real bug, caught live when a Korean pane title came out
+    as mojibake. ``get_wch()`` assembles a full multi-byte sequence into
+    one proper character before returning it (requires
+    ``locale.setlocale(locale.LC_ALL, "")`` to have been called before
+    curses initialized -- see ``run()`` in ``ui/tower.py``).
+
+    Returns an ``int`` for special keys (arrows, ``KEY_BACKSPACE``, ...)
+    or a length-1 ``str`` for everything else, including control
+    characters like Enter (``"\\n"``/``"\\r"``), Escape (``"\\x1b"``), and
+    Ctrl+C (``"\\x03"``). Returns ``-1`` on timeout, matching ``getch()``.
+    """
+
+    try:
+        return stdscr.get_wch()
+    except curses.error:
+        return -1
+
+
+def is_enter(key) -> bool:
+    return key in ("\n", "\r") or key == curses.KEY_ENTER
+
+
+def is_escape(key) -> bool:
+    return key == "\x1b"
+
+
+def is_ctrl_c(key) -> bool:
+    return key == "\x03"
+
+
+def is_backspace(key) -> bool:
+    return key in ("\x7f", "\x08") or key == curses.KEY_BACKSPACE
+
+
+def matches_letter(key, letter: str) -> bool:
+    """True if ``key`` (from ``read_key``) is the given single ASCII
+    letter, case-insensitively -- the ``get_wch()`` equivalent of the old
+    ``key in (ord("e"), ord("E"))`` pattern, in one call instead of two.
+    """
+
+    return isinstance(key, str) and len(key) == 1 and key.lower() == letter.lower()
 
 
 def safe_add(stdscr, y, x, text, attr=0):
@@ -60,20 +105,18 @@ def prompt_text(stdscr, label: str, initial: str = "") -> Optional[str]:
             stdscr.move(y, min(width - 1, len(label) + len(buf)))
             stdscr.refresh()
 
-            key = stdscr.getch()
+            key = read_key(stdscr)
 
-            if key == ESC:
+            if is_escape(key):
                 return None
-            if key in ENTER_KEYS:
+            if is_enter(key):
                 return "".join(buf).strip()
-            if key in BACKSPACE_KEYS:
+            if is_backspace(key):
                 if buf:
                     buf.pop()
                 continue
-            if 0 <= key < 256:
-                ch = chr(key)
-                if ch.isprintable():
-                    buf.append(ch)
+            if isinstance(key, str) and key.isprintable():
+                buf.append(key)
     finally:
         try:
             curses.curs_set(0)
@@ -95,7 +138,7 @@ def show_message_screen(stdscr, title: str, lines: Sequence[str], footer: Option
             safe_add(stdscr, 2 + i, 2, line)
         safe_add(stdscr, height - 1, 2, footer, curses.A_DIM)
         stdscr.refresh()
-        stdscr.getch()
+        read_key(stdscr)
     finally:
         stdscr.timeout(200)
 
@@ -176,34 +219,32 @@ def run_list_picker(
             safe_add(stdscr, hint_y, 2, footer_hint, curses.A_DIM)
 
             stdscr.refresh()
-            key_code = stdscr.getch()
+            key_code = read_key(stdscr)
 
             if editing_search:
-                if key_code in (ESC, *ENTER_KEYS):
+                if is_escape(key_code) or is_enter(key_code):
                     editing_search = False
                     continue
-                if key_code in BACKSPACE_KEYS:
+                if is_backspace(key_code):
                     search = search[:-1]
                     continue
-                if 0 <= key_code < 256:
-                    ch = chr(key_code)
-                    if ch.isprintable():
-                        search += ch
-                        selected_index = 0
+                if isinstance(key_code, str) and key_code.isprintable():
+                    search += key_code
+                    selected_index = 0
                 continue
 
-            if key_code == ESC:
+            if is_escape(key_code):
                 return PickResult(cancelled=True)
 
-            if key_code == curses.KEY_UP or (not searchable and key_code in (ord("k"), ord("K"))):
+            if key_code == curses.KEY_UP or (not searchable and matches_letter(key_code, "k")):
                 selected_index -= 1
                 continue
 
-            if key_code == curses.KEY_DOWN or (not searchable and key_code in (ord("j"), ord("J"))):
+            if key_code == curses.KEY_DOWN or (not searchable and matches_letter(key_code, "j")):
                 selected_index += 1
                 continue
 
-            if key_code in ENTER_KEYS:
+            if is_enter(key_code):
                 if not visible:
                     continue
                 current_key = visible[selected_index][0]
@@ -211,7 +252,7 @@ def run_list_picker(
                     return PickResult(selected_keys=checked_keys)
                 return PickResult(selected_key=current_key)
 
-            if multi and key_code == ord(" "):
+            if multi and key_code == " ":
                 if visible:
                     current_key = visible[selected_index][0]
                     if current_key in checked_keys:
@@ -220,15 +261,13 @@ def run_list_picker(
                         checked_keys.add(current_key)
                 continue
 
-            if searchable and key_code == ord("/"):
+            if searchable and key_code == "/":
                 editing_search = True
                 continue
 
-            char = chr(key_code) if 0 <= key_code < 256 else ""
-
-            if char.lower() in extra_keys:
+            if isinstance(key_code, str) and key_code.lower() in extra_keys:
                 return PickResult(
-                    extra=extra_keys[char.lower()],
+                    extra=extra_keys[key_code.lower()],
                     selected_key=(visible[selected_index][0] if visible else None),
                 )
     finally:

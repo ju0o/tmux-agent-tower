@@ -18,6 +18,7 @@ from ..adapters.base import PaneContext
 from ..detection.status import StatusEngine, STATUS_DEAD
 from .. import i18n
 from ..i18n import t
+from ..launcher.config import AGENT_LAUNCH_ORDER
 from ..remote.collector import fetch_remote, HOST_STATUS_ONLINE
 from ..state.overrides import OverrideStore
 from ..state.visits import VisitStore
@@ -26,7 +27,7 @@ from ..tmux import discovery
 from ..tmux import registration
 from ..tmux.navigation import open_pane
 from .launcher_wizard import run_launcher
-from .widgets import run_list_picker, safe_add
+from .widgets import is_ctrl_c, is_enter, matches_letter, prompt_text, read_key, run_list_picker, safe_add
 
 REFRESH_SECONDS = 2.0
 REMOTE_REFRESH_SECONDS = 6.0
@@ -108,13 +109,14 @@ class Tower:
             ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
             status = self.status_engine.evaluate(pane["pane_id"], pane["dead"], adapter, ctx)
             visit = self.visits.visit_label(self.session, pane["pane_id"])
-            project = self.overrides.get(pane["pane_id"]) or pane["auto_project"]
+            project = self.overrides.get_project(pane["pane_id"]) or pane["auto_project"]
+            agent = self.overrides.get_agent(pane["pane_id"]) or adapter.name
 
             out.append(
                 {
                     "host": self.local_host,
                     "project": project,
-                    "agent": adapter.name,
+                    "agent": agent,
                     "status": status,
                     "visit": visit,
                     "key": pane["pane_id"],
@@ -180,13 +182,14 @@ class Tower:
                 ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
                 status = self.status_engine.evaluate(composite_key, pane["dead"], adapter, ctx)
                 visit = self.visits.visit_label(remote_session, pane["pane_id"])
-                project = self.overrides.get(composite_key) or Path(pane["path"] or "").name or pane["path"]
+                project = self.overrides.get_project(composite_key) or Path(pane["path"] or "").name or pane["path"]
+                agent = self.overrides.get_agent(composite_key) or adapter.name
 
                 out.append(
                     {
                         "host": name,
                         "project": project or "(unknown)",
-                        "agent": adapter.name,
+                        "agent": agent,
                         "status": status,
                         "visit": visit,
                         "key": composite_key,
@@ -258,40 +261,70 @@ class Tower:
         self.visits.mark_seen(self.session, row["pane_id"])
         open_pane(row["session"], row["window_index"], row["pane_id"])
 
-    def rename_selected(self, stdscr) -> None:
+    def edit_selected(self, stdscr) -> None:
+        """The "E" menu: edit this pane's *display* identity only.
+
+        Project name, agent label, and pane title here are all metadata
+        Tower shows about a pane -- never a way to control it. The agent
+        label in particular can be set to any free text (see
+        ``state/overrides.py``'s module docstring): it relabels the row,
+        it never changes, restarts, or sends anything to the real process.
+        """
+
         if not self.rows:
             return
         row = self.rows[self.selected]
         if row.get("offline"):
             return
 
-        height, width = stdscr.getmaxyx()
-        prompt = t("prompt.rename")
+        menu_items = [
+            ("project", t("menu.project_name")),
+            ("agent", t("menu.agent_name")),
+            ("title", t("menu.pane_title")),
+            ("reset", t("menu.reset_auto")),
+            ("cancel", t("menu.cancel")),
+        ]
+        pick = run_list_picker(stdscr, t("menu.edit_title"), menu_items, footer_hint=t("wizard.hint_list"))
 
-        curses.curs_set(1)
-        curses.echo()
-        stdscr.timeout(-1)
+        if pick.cancelled or pick.selected_key in (None, "cancel"):
+            return
 
-        try:
-            y = height - 2
-            stdscr.move(y, 0)
-            stdscr.clrtoeol()
-            stdscr.addnstr(y, 0, prompt, max(1, width - 1), curses.A_BOLD)
-            stdscr.refresh()
+        key = row["key"]
 
-            available = max(1, width - len(prompt) - 2)
-            raw = stdscr.getstr(y, min(len(prompt), width - 1), available)
-            name = raw.decode("utf-8", errors="replace").strip()
-
+        if pick.selected_key == "project":
+            name = prompt_text(stdscr, t("prompt.rename"))
             if name:
-                self.overrides.set(row["key"], name)
-        finally:
-            curses.noecho()
-            try:
-                curses.curs_set(0)
-            except curses.error:
+                self.overrides.set_project(key, name)
+
+        elif pick.selected_key == "agent":
+            agent_items = [(label, label) for label in AGENT_LAUNCH_ORDER]
+            agent_items.append(("__custom__", t("menu.manual_agent_entry")))
+            agent_items.append(("__auto__", t("menu.use_auto_agent")))
+            agent_pick = run_list_picker(stdscr, t("menu.agent_name"), agent_items, footer_hint=t("wizard.hint_list"))
+
+            if agent_pick.cancelled or agent_pick.selected_key is None:
                 pass
-            stdscr.timeout(200)
+            elif agent_pick.selected_key == "__custom__":
+                custom = prompt_text(stdscr, t("prompt.agent_name"))
+                if custom:
+                    self.overrides.set_agent(key, custom)
+            elif agent_pick.selected_key == "__auto__":
+                self.overrides.clear_field(key, "agent")
+            else:
+                self.overrides.set_agent(key, agent_pick.selected_key)
+
+        elif pick.selected_key == "title":
+            title = prompt_text(stdscr, t("prompt.pane_title"))
+            if title:
+                self.overrides.set_title(key, title)
+                if not row.get("remote"):
+                    # Best-effort: a failed tmux call here never raises
+                    # (see tmux/capture.py), so it can't take the rest of
+                    # Tower down with it.
+                    tmux_capture.run_tmux(["select-pane", "-t", row["pane_id"], "-T", title], capture=False)
+
+        elif pick.selected_key == "reset":
+            self.overrides.reset(key)
 
         self.load()
 
@@ -504,7 +537,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             draw(stdscr, tower)
 
         try:
-            key = stdscr.getch()
+            key = read_key(stdscr)
         except KeyboardInterrupt:
             break
 
@@ -515,53 +548,59 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             draw(stdscr, tower)
             continue
 
-        if key == 3:  # Ctrl+C
+        if is_ctrl_c(key):
             break
 
-        if key in (curses.KEY_UP, ord("k"), ord("K")):
+        if key == curses.KEY_UP or matches_letter(key, "k"):
             tower.move_up()
             draw(stdscr, tower)
             continue
 
-        if key in (curses.KEY_DOWN, ord("j"), ord("J")):
+        if key == curses.KEY_DOWN or matches_letter(key, "j"):
             tower.move_down()
             draw(stdscr, tower)
             continue
 
-        if key in (curses.KEY_ENTER, 10, 13):
+        if is_enter(key):
             tower.open_selected()
             continue
 
-        if key in (ord("e"), ord("E")):
-            tower.rename_selected(stdscr)
+        if matches_letter(key, "e"):
+            tower.edit_selected(stdscr)
             draw(stdscr, tower)
             continue
 
-        if key in (ord("r"), ord("R")):
+        if matches_letter(key, "r"):
             tower.load()
             tower.last_refresh = time.monotonic()
             draw(stdscr, tower)
             continue
 
-        if key in (ord("n"), ord("N")):
+        if matches_letter(key, "n"):
             run_launcher(stdscr, tower, multi=False, state_dir=STATE_DIR)
             tower.load()
             tower.last_refresh = time.monotonic()
             draw(stdscr, tower)
             continue
 
-        if key in (ord("w"), ord("W")):
+        if matches_letter(key, "w"):
             run_launcher(stdscr, tower, multi=True, state_dir=STATE_DIR)
             tower.load()
             tower.last_refresh = time.monotonic()
             draw(stdscr, tower)
             continue
 
-        if key in (ord("q"), ord("Q")):
+        if matches_letter(key, "q"):
             break
 
 
 def run() -> None:
+    # Must happen before curses.wrapper()'s initscr() for ncurses to fully
+    # honor the terminal's UTF-8 locale in get_wch() (see widgets.read_key).
+    import locale
+
+    locale.setlocale(locale.LC_ALL, "")
+
     try:
         curses.wrapper(main)
     except KeyboardInterrupt:

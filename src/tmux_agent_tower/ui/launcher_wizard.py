@@ -24,7 +24,7 @@ from ..launcher.discovery import (
     ProjectEntry,
 )
 from ..launcher.spawn import SpawnTarget, spawn_local, spawn_remote
-from .widgets import ENTER_KEYS, ESC, prompt_text, run_list_picker, safe_add, show_message_screen
+from .widgets import is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add, show_message_screen
 
 LAYOUT_CYCLE = ["tiled", "even-horizontal", "even-vertical"]
 
@@ -187,10 +187,9 @@ def _run_preview(stdscr, host_label: str, rows: List[List[str]]) -> Optional[Tup
             safe_add(stdscr, height - 2, 2, t("wizard.hint_preview"), curses.A_DIM)
             stdscr.refresh()
 
-            key = stdscr.getch()
-            char = chr(key).lower() if 0 <= key < 256 else ""
+            key = read_key(stdscr)
 
-            if key == ESC:
+            if is_escape(key):
                 return None
             if key == curses.KEY_UP:
                 selected_index = max(0, selected_index - 1)
@@ -198,12 +197,12 @@ def _run_preview(stdscr, host_label: str, rows: List[List[str]]) -> Optional[Tup
             if key == curses.KEY_DOWN:
                 selected_index = min(len(rows) - 1, selected_index + 1)
                 continue
-            if key in ENTER_KEYS:
+            if is_enter(key):
                 return rows, layout
-            if char == "l":
+            if matches_letter(key, "l"):
                 layout_index = (layout_index + 1) % len(LAYOUT_CYCLE)
                 continue
-            if char == "a" and rows:
+            if matches_letter(key, "a") and rows:
                 new_agent = _pick_agent(stdscr)
                 if new_agent:
                     rows[selected_index][1] = new_agent
