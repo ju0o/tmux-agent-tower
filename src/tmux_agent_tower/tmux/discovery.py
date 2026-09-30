@@ -6,11 +6,12 @@ process table. It never renames, kills, or sends input to anything.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, List
 
 from . import capture
 from ..detection import process as process_detection
-from ..detection.project import discover_project
+from ..detection.project import discover_project, git_project_name
 
 FIELD_SEP = "\x1f"
 
@@ -93,6 +94,8 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
                 "cmdline": cmdline_map.get(pane_pid, ""),
                 "path": current_path,
                 "auto_project": discover_project(current_path),
+                "git_project": git_project_name(current_path),
+                "path_basename": Path(current_path).name or current_path if current_path else "",
                 "dead": dead == "1",
                 "lines": lines,
             }
