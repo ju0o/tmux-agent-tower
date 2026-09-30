@@ -240,8 +240,12 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
         if self.path == "/api/pair":
             body = self._read_json_body()
             code = (body or {}).get("code") if body else None
+            label = (body or {}).get("label") if body else None
             pairing: auth.PairingSession = self.server.pairing  # type: ignore[attr-defined]
-            token = pairing.try_pair(str(code) if code is not None else "")
+            token = pairing.try_pair(
+                str(code) if code is not None else "",
+                label=label if isinstance(label, str) else None,
+            )
             if token is None:
                 self._send_json(400, {"ok": False, "error": "invalid_code"})
             else:

@@ -13,7 +13,7 @@ import urllib.request
 import pytest
 
 from tmux_agent_tower import main
-from tmux_agent_tower.server import httpapi, tailscale
+from tmux_agent_tower.server import httpapi, service, tailscale
 
 DNS_NAME = "mybox.tailxxxxx.ts.net"
 TS_IP = "100.64.1.2"
@@ -35,7 +35,7 @@ def test_setup_fails_when_tailscale_missing(monkeypatch, capsys):
     monkeypatch.setattr(tailscale, "start_serve", lambda exe, port: calls.append("serve") or (True, DNS_NAME))
 
     server = _FakeServer()
-    assert main._setup_tailscale(server, 4312) == (None, None)
+    assert service._setup_tailscale(server, 4312) == (None, None)
     assert calls == []  # nothing else attempted once Tailscale is absent
     assert server.allowed_hosts == ["localhost", "127.0.0.1"]
     assert "Tailscale was not found" in capsys.readouterr().err
@@ -47,7 +47,7 @@ def test_setup_fails_when_windows_reachability_unverifiable(monkeypatch, capsys)
     monkeypatch.setattr(tailscale, "windows_can_reach_backend", lambda port: None)
     monkeypatch.setattr(tailscale, "start_serve", lambda exe, port: calls.append("serve") or (True, DNS_NAME))
 
-    assert main._setup_tailscale(_FakeServer(), 4312) == (None, None)
+    assert service._setup_tailscale(_FakeServer(), 4312) == (None, None)
     assert calls == []  # Serve is never configured on an unverified path
     assert "Windows localhost에서 Tower Remote에 연결할 수 없습니다" in capsys.readouterr().err
 
@@ -58,7 +58,7 @@ def test_setup_fails_when_windows_cannot_reach_backend(monkeypatch, capsys):
     monkeypatch.setattr(tailscale, "windows_can_reach_backend", lambda port: False)
     monkeypatch.setattr(tailscale, "start_serve", lambda exe, port: calls.append("serve") or (True, DNS_NAME))
 
-    assert main._setup_tailscale(_FakeServer(), 4312) == (None, None)
+    assert service._setup_tailscale(_FakeServer(), 4312) == (None, None)
     assert calls == []
     assert "Windows localhost에서 Tower Remote에 연결할 수 없습니다." in capsys.readouterr().err
 
@@ -69,7 +69,7 @@ def test_setup_refuses_existing_unrelated_mapping(monkeypatch, capsys):
     monkeypatch.setattr(tailscale, "start_serve", lambda exe, port: (False, "existing_mapping:http://127.0.0.1:9999"))
 
     server = _FakeServer()
-    assert main._setup_tailscale(server, 4312) == (None, None)
+    assert service._setup_tailscale(server, 4312) == (None, None)
     assert server.allowed_hosts == ["localhost", "127.0.0.1"]
     err = capsys.readouterr().err
     assert "already exists" in err
@@ -83,8 +83,8 @@ def test_setup_reports_each_known_failure_reason(monkeypatch, capsys, reason):
     monkeypatch.setattr(tailscale, "windows_can_reach_backend", lambda port: True)
     monkeypatch.setattr(tailscale, "start_serve", lambda exe, port: (False, reason))
 
-    assert main._setup_tailscale(_FakeServer(), 4312) == (None, None)
-    assert main._TAILSCALE_ERROR_MESSAGES[reason] in capsys.readouterr().err
+    assert service._setup_tailscale(_FakeServer(), 4312) == (None, None)
+    assert service._TAILSCALE_ERROR_MESSAGES[reason] in capsys.readouterr().err
 
 
 # -- _setup_tailscale: success adds exactly the tailnet identities ----------
@@ -97,7 +97,7 @@ def test_setup_success_allowlists_magicdns_name_and_tailscale_ip(monkeypatch):
     monkeypatch.setattr(tailscale, "get_status", lambda exe: FAKE_STATUS)
 
     server = _FakeServer()
-    assert main._setup_tailscale(server, 4312) == ("fake.exe", DNS_NAME)
+    assert service._setup_tailscale(server, 4312) == ("fake.exe", DNS_NAME)
     assert server.allowed_hosts == ["localhost", "127.0.0.1", TS_IP, DNS_NAME]
     # Never a wildcard / catch-all.
     assert "*" not in server.allowed_hosts
@@ -111,7 +111,7 @@ def test_setup_success_without_ipv4_still_allowlists_dns_name(monkeypatch):
     monkeypatch.setattr(tailscale, "get_status", lambda exe: {"Self": {"TailscaleIPs": []}})
 
     server = _FakeServer()
-    assert main._setup_tailscale(server, 4312) == ("fake.exe", DNS_NAME)
+    assert service._setup_tailscale(server, 4312) == ("fake.exe", DNS_NAME)
     assert server.allowed_hosts == ["localhost", "127.0.0.1", DNS_NAME]
 
 
@@ -131,6 +131,9 @@ class _RecordingServer:
             def current_code(self):
                 return "000000"
 
+            def snapshot(self):
+                return {"code": "000000", "expires_at": None, "expired": False}
+
         self.pairing = _Pairing()
 
     def serve_forever(self):
@@ -143,28 +146,29 @@ class _RecordingServer:
         self.closed = True
 
 
-def _stub_tmux(monkeypatch):
-    monkeypatch.setattr(main.tmux_capture, "current_session", lambda: "sess")
-    monkeypatch.setattr(main.tmux_capture, "current_pane_id", lambda: "%1")
-    monkeypatch.setattr(main.threading.Thread, "start", lambda self: None)  # no stdin watcher, no serve thread
+def _stub_tmux(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(service.tmux_capture, "current_session", lambda: "sess")
+    monkeypatch.setattr(service.tmux_capture, "current_pane_id", lambda: "%1")
+    monkeypatch.setattr(service.threading.Thread, "start", lambda self: None)  # no stdin watcher, no serve thread
 
 
 def _capture_create_server(monkeypatch, created):
-    def fake_create_server(host, port, session, own_pane_id, allowed_hosts):
+    def fake_create_server(host, port, session, own_pane_id, allowed_hosts, token_path=None):
         srv = _RecordingServer()
         srv.allowed_hosts = allowed_hosts
         created.append((host, port, srv))
         return srv
 
-    monkeypatch.setattr(main.httpapi, "create_server", fake_create_server)
+    monkeypatch.setattr(service.httpapi, "create_server", fake_create_server)
 
 
-def test_tailscale_mode_binds_localhost_only(monkeypatch):
+def test_tailscale_mode_binds_localhost_only(monkeypatch, tmp_path):
     created = []
-    _stub_tmux(monkeypatch)
+    _stub_tmux(monkeypatch, tmp_path)
     _capture_create_server(monkeypatch, created)
-    monkeypatch.setattr(main, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
-    monkeypatch.setattr(main.tailscale, "stop_serve", lambda exe, port: True)
+    monkeypatch.setattr(service, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
+    monkeypatch.setattr(service.tailscale, "stop_serve", lambda exe, port: True)
 
     main.run_serve(False, 4312, use_tailscale=True)
 
@@ -172,28 +176,28 @@ def test_tailscale_mode_binds_localhost_only(monkeypatch):
     assert created[0][0] != "0.0.0.0"
 
 
-def test_tailscale_mode_never_binds_all_interfaces_even_if_lan_is_set(monkeypatch):
+def test_tailscale_mode_never_binds_all_interfaces_even_if_lan_is_set(monkeypatch, tmp_path):
     # argparse makes --lan/--tailscale mutually exclusive; this guards the
     # function-level contract in case run_serve is ever called directly.
     created = []
-    _stub_tmux(monkeypatch)
+    _stub_tmux(monkeypatch, tmp_path)
     _capture_create_server(monkeypatch, created)
-    monkeypatch.setattr(main, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
-    monkeypatch.setattr(main.tailscale, "stop_serve", lambda exe, port: True)
-    monkeypatch.setattr(main.netutil, "detect_lan_ip", lambda: pytest.fail("LAN IP must not be detected in tailscale mode"))
+    monkeypatch.setattr(service, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
+    monkeypatch.setattr(service.tailscale, "stop_serve", lambda exe, port: True)
+    monkeypatch.setattr(service.netutil, "detect_lan_ip", lambda: pytest.fail("LAN IP must not be detected in tailscale mode"))
 
     main.run_serve(True, 4312, use_tailscale=True)
 
     assert created[0][0] == "127.0.0.1"
 
 
-def test_tailscale_setup_failure_exits_and_closes_server(monkeypatch):
+def test_tailscale_setup_failure_exits_and_closes_server(monkeypatch, tmp_path):
     created = []
-    _stub_tmux(monkeypatch)
+    _stub_tmux(monkeypatch, tmp_path)
     _capture_create_server(monkeypatch, created)
-    monkeypatch.setattr(main, "_setup_tailscale", lambda server, port: (None, None))
+    monkeypatch.setattr(service, "_setup_tailscale", lambda server, port: (None, None))
     stop_calls = []
-    monkeypatch.setattr(main.tailscale, "stop_serve", lambda exe, port: stop_calls.append((exe, port)) or True)
+    monkeypatch.setattr(service.tailscale, "stop_serve", lambda exe, port: stop_calls.append((exe, port)) or True)
 
     with pytest.raises(SystemExit) as exc:
         main.run_serve(False, 4312, use_tailscale=True)
@@ -205,12 +209,12 @@ def test_tailscale_setup_failure_exits_and_closes_server(monkeypatch):
     assert stop_calls == []  # nothing was set up, so nothing to tear down
 
 
-def test_tailscale_mode_prints_https_url_and_pairing_code(monkeypatch, capsys):
+def test_tailscale_mode_prints_https_url_and_pairing_code(monkeypatch, capsys, tmp_path):
     created = []
-    _stub_tmux(monkeypatch)
+    _stub_tmux(monkeypatch, tmp_path)
     _capture_create_server(monkeypatch, created)
-    monkeypatch.setattr(main, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
-    monkeypatch.setattr(main.tailscale, "stop_serve", lambda exe, port: True)
+    monkeypatch.setattr(service, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
+    monkeypatch.setattr(service.tailscale, "stop_serve", lambda exe, port: True)
 
     main.run_serve(False, 4312, use_tailscale=True)
 
@@ -221,13 +225,13 @@ def test_tailscale_mode_prints_https_url_and_pairing_code(monkeypatch, capsys):
     assert "http://127.0.0.1:4312" not in out  # not the user-facing URL in this mode
 
 
-def test_shutdown_removes_only_tower_mapping(monkeypatch, capsys):
+def test_shutdown_removes_only_tower_mapping(monkeypatch, capsys, tmp_path):
     created = []
-    _stub_tmux(monkeypatch)
+    _stub_tmux(monkeypatch, tmp_path)
     _capture_create_server(monkeypatch, created)
-    monkeypatch.setattr(main, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
+    monkeypatch.setattr(service, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
     stop_calls = []
-    monkeypatch.setattr(main.tailscale, "stop_serve", lambda exe, port: stop_calls.append((exe, port)) or True)
+    monkeypatch.setattr(service.tailscale, "stop_serve", lambda exe, port: stop_calls.append((exe, port)) or True)
 
     main.run_serve(False, 4312, use_tailscale=True)
 
@@ -236,12 +240,12 @@ def test_shutdown_removes_only_tower_mapping(monkeypatch, capsys):
     assert created[0][2].closed is True
 
 
-def test_shutdown_tells_user_when_mapping_could_not_be_removed(monkeypatch, capsys):
+def test_shutdown_tells_user_when_mapping_could_not_be_removed(monkeypatch, capsys, tmp_path):
     created = []
-    _stub_tmux(monkeypatch)
+    _stub_tmux(monkeypatch, tmp_path)
     _capture_create_server(monkeypatch, created)
-    monkeypatch.setattr(main, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
-    monkeypatch.setattr(main.tailscale, "stop_serve", lambda exe, port: False)
+    monkeypatch.setattr(service, "_setup_tailscale", lambda server, port: ("fake.exe", DNS_NAME))
+    monkeypatch.setattr(service.tailscale, "stop_serve", lambda exe, port: False)
 
     main.run_serve(False, 4312, use_tailscale=True)
 
@@ -251,13 +255,13 @@ def test_shutdown_tells_user_when_mapping_could_not_be_removed(monkeypatch, caps
     assert "reset" not in err  # never suggest the destructive command
 
 
-def test_lan_mode_unchanged_by_tailscale_wiring(monkeypatch):
+def test_lan_mode_unchanged_by_tailscale_wiring(monkeypatch, tmp_path):
     created = []
-    _stub_tmux(monkeypatch)
+    _stub_tmux(monkeypatch, tmp_path)
     _capture_create_server(monkeypatch, created)
-    monkeypatch.setattr(main.netutil, "detect_lan_ip", lambda: "10.0.0.5")
+    monkeypatch.setattr(service.netutil, "detect_lan_ip", lambda: "10.0.0.5")
     setup_calls = []
-    monkeypatch.setattr(main, "_setup_tailscale", lambda server, port: setup_calls.append(port) or ("x", "y"))
+    monkeypatch.setattr(service, "_setup_tailscale", lambda server, port: setup_calls.append(port) or ("x", "y"))
 
     main.run_serve(True, 4312, use_tailscale=False)
 

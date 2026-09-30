@@ -71,8 +71,8 @@ def _run(exe: str, args, timeout: float = TIMEOUT) -> Optional[str]:
     return result.stdout
 
 
-def get_status(exe: str) -> Optional[dict]:
-    out = _run(exe, ["status", "--json"])
+def get_status(exe: str, timeout: float = TIMEOUT) -> Optional[dict]:
+    out = _run(exe, ["status", "--json"], timeout=timeout)
     if not out:
         return None
     try:
@@ -106,8 +106,8 @@ def self_tailscale_ip(status: dict) -> Optional[str]:
     return None
 
 
-def get_serve_status(exe: str) -> Optional[dict]:
-    out = _run(exe, ["serve", "status", "--json"])
+def get_serve_status(exe: str, timeout: float = TIMEOUT) -> Optional[dict]:
+    out = _run(exe, ["serve", "status", "--json"], timeout=timeout)
     if out is None:
         return None
     try:

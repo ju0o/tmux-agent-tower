@@ -15,13 +15,14 @@ same as everything else in ``state/``).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
 import stat
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 PAIRING_CODE_TTL_SECONDS = 300.0  # 5 minutes
 MAX_PAIR_ATTEMPTS = 7
@@ -47,6 +48,17 @@ def _secure_dir(path: Path) -> None:
         os.chmod(path, stat.S_IRWXU)
     except Exception:
         pass
+
+
+def _clean_label(label: Optional[str]) -> str:
+    if not isinstance(label, str):
+        return ""
+    cleaned = "".join(ch for ch in label.strip() if ch.isprintable() and ch not in "\r\n\t")
+    return cleaned[:40]
+
+
+def _device_id(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
 def _generate_code() -> str:
@@ -104,11 +116,43 @@ class TokenStore:
             return False
         return token in self._load()
 
-    def add_token(self, token: str) -> None:
+    def add_token(self, token: str, label: Optional[str] = None) -> None:
         data = self._load()
-        data[token] = {"paired_at": time.time()}
+        entry = {"paired_at": time.time()}
+        cleaned = _clean_label(label)
+        if cleaned:
+            entry["label"] = cleaned
+        data[token] = entry
         self._tokens = data
         self._save()
+
+    def list_devices(self) -> List[dict]:
+        """Paired devices for the local TUI. The bearer token itself is
+        never included -- ``id`` is a hash the TUI can hand back to
+        ``revoke_id`` without displaying the credential.
+        """
+
+        devices = []
+        for token, meta in self._load().items():
+            if not isinstance(meta, dict):
+                meta = {}
+            devices.append({
+                "id": _device_id(token),
+                "label": meta.get("label") or "",
+                "paired_at": meta.get("paired_at"),
+            })
+        devices.sort(key=lambda item: item.get("paired_at") or 0, reverse=True)
+        return devices
+
+    def revoke_id(self, device_id: str) -> bool:
+        data = self._load()
+        for token in list(data):
+            if _device_id(token) == device_id:
+                del data[token]
+                self._tokens = data
+                self._save()
+                return True
+        return False
 
     def revoke_all(self) -> None:
         """Used by tests and by an explicit future "forget all devices"
@@ -158,6 +202,20 @@ class PairingSession:
             self._new_code(now)
         return self._code
 
+    def snapshot(self) -> dict:
+        """``{"code", "expires_at", "expired"}`` for a local status file.
+
+        ``expires_at`` is wall-clock ``time.time()`` (so another process
+        can display a countdown). ``expired`` is true when there is no
+        code pending -- used up, locked out, or never issued.
+        """
+
+        now_mono = time.monotonic()
+        if self._code is None or now_mono >= self._expires_at:
+            return {"code": None, "expires_at": None, "expired": True}
+        remaining = self._expires_at - now_mono
+        return {"code": self._code, "expires_at": time.time() + remaining, "expired": False}
+
     def regenerate(self, now: Optional[float] = None) -> str:
         """Unconditionally issues a brand-new code (and resets the
         attempt counter), even if the current one is still valid --
@@ -174,7 +232,7 @@ class PairingSession:
         self._expires_at = now + self.ttl_seconds
         self._attempts = 0
 
-    def try_pair(self, submitted_code: str, now: Optional[float] = None) -> Optional[str]:
+    def try_pair(self, submitted_code: str, now: Optional[float] = None, label: Optional[str] = None) -> Optional[str]:
         """On a correct, still-valid, not-locked-out code: issues and
         persists a new token, invalidates the code (one-time use), and
         returns the token. Returns ``None`` on any mismatch, expiry, or
@@ -207,7 +265,7 @@ class PairingSession:
             return None
 
         token = secrets.token_urlsafe(32)
-        self.token_store.add_token(token)
+        self.token_store.add_token(token, label=label)
 
         # One-time use: consumed immediately on success.
         self._code = None

@@ -1,8 +1,9 @@
 """Curses TUI: the actual "Control Tower" screen.
 
-Read-only monitoring plus pane navigation only. No key in this UI sends
-keystrokes into a monitored pane, kills anything, or restarts anything --
-see docs/ROADMAP.md for the deliberately-not-yet-built "Action Layer".
+Read-only monitoring plus pane navigation. ``M`` starts or stops the
+phone-remote service (see ``ui/remote_menu.py``); it never sends
+keystrokes into a monitored pane. Quitting this TUI leaves that service
+running. See docs/ROADMAP.md for everything else that stays out of scope.
 """
 
 from __future__ import annotations
@@ -580,7 +581,7 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
     return physical
 
 
-def draw(stdscr, tower: Tower, filtering: bool = False) -> None:
+def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "stopped") -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     narrow = render.use_narrow_layout(width)
@@ -589,6 +590,11 @@ def draw(stdscr, tower: Tower, filtering: bool = False) -> None:
 
     title = t("app.title")
     safe_add(stdscr, 0, 2, title, curses.A_BOLD)
+    from .remote_menu import badge_text
+
+    badge = badge_text(remote_state)
+    badge_x = 2 + render.display_width(title) + 3
+    safe_add(stdscr, 0, badge_x, badge, curses.A_DIM)
 
     host_bits = [
         f"{host} {summary}"
@@ -598,15 +604,24 @@ def draw(stdscr, tower: Tower, filtering: bool = False) -> None:
     ]
     host_line = "   ".join(host_bits)
     if host_line and not narrow:
-        x = max(len(title) + 6, width - render.display_width(host_line) - 2)
-        safe_add(stdscr, 0, x, host_line, curses.A_BOLD)
+        min_x = badge_x + render.display_width(badge) + 2
+        x = max(min_x, width - render.display_width(host_line) - 2)
+        if x + render.display_width(host_line) < width:
+            safe_add(stdscr, 0, x, host_line, curses.A_BOLD)
 
     # -- row 1: hint line, or the live search-filter input ---------------
 
     if filtering:
         safe_add(stdscr, 1, 2, f'{t("filter.label")} {tower.filter_text}_', curses.A_BOLD)
     else:
-        hint_keys = [t("hint.move"), t("hint.open"), t("hint.rename"), t("hint.add_project"), t("hint.new_workspace")]
+        hint_keys = [
+            t("hint.move"),
+            t("hint.open"),
+            t("hint.rename"),
+            t("hint.add_project"),
+            t("hint.new_workspace"),
+            t("hint.remote"),
+        ]
         hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
         hint_keys.append(t("hint.attention"))
         hint_keys += [t("hint.refresh"), t("hint.quit")]
@@ -762,16 +777,36 @@ def main(stdscr, session: Optional[str] = None) -> None:
     try:
         _run_loop(stdscr, session, own_pane_id)
     finally:
+        # Remote keeps running after Q. Stopping it is M → 원격 종료.
+        from ..server import service
+
+        service.on_tui_exit()
         if own_pane_id:
             registration.unregister_if_self(session, own_pane_id)
 
 
+def _remote_state() -> str:
+    from ..server import service
+
+    try:
+        return service.status().state
+    except Exception:
+        return "error"
+
+
 def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
+    from ..server import service
+
     tower = Tower(session, own_pane_id)
     tower.load()
     tower.last_refresh = time.monotonic()
     filtering = False
-    draw(stdscr, tower)
+    try:
+        service.maybe_autostart()
+    except Exception:
+        pass
+    remote_state = _remote_state()
+    draw(stdscr, tower, remote_state=remote_state)
 
     while True:
         now = time.monotonic()
@@ -779,7 +814,8 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
         if not filtering and now - tower.last_refresh >= REFRESH_SECONDS:
             tower.load()
             tower.last_refresh = now
-            draw(stdscr, tower, filtering=filtering)
+            remote_state = _remote_state()
+            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
 
         try:
             key = read_key(stdscr)
@@ -790,7 +826,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if key == curses.KEY_RESIZE:
-            draw(stdscr, tower, filtering=filtering)
+            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
             continue
 
         if is_ctrl_c(key):
@@ -808,27 +844,27 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
                 tower.set_filter(tower.filter_text[:-1])
             elif isinstance(key, str) and key.isprintable():
                 tower.set_filter(tower.filter_text + key)
-            draw(stdscr, tower, filtering=filtering)
+            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
             continue
 
         if key == "/":
             filtering = True
-            draw(stdscr, tower, filtering=filtering)
+            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
             continue
 
         if is_escape(key) and tower.filter_text:
             tower.clear_filter()
-            draw(stdscr, tower)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if key == curses.KEY_UP or matches_letter(key, "k"):
             tower.move_up()
-            draw(stdscr, tower)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if key == curses.KEY_DOWN or matches_letter(key, "j"):
             tower.move_down()
-            draw(stdscr, tower)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if is_enter(key):
@@ -837,32 +873,41 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
 
         if matches_letter(key, "e"):
             tower.edit_selected(stdscr)
-            draw(stdscr, tower)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if matches_letter(key, "r"):
             tower.load()
             tower.last_refresh = time.monotonic()
-            draw(stdscr, tower)
+            remote_state = _remote_state()
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if matches_letter(key, "a"):
             tower.toggle_attention()
-            draw(stdscr, tower)
+            draw(stdscr, tower, remote_state=remote_state)
+            continue
+
+        if matches_letter(key, "m"):
+            from .remote_menu import open_remote_menu
+
+            open_remote_menu(stdscr)
+            remote_state = _remote_state()
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if matches_letter(key, "n"):
             run_launcher(stdscr, tower, multi=False, state_dir=STATE_DIR)
             tower.load()
             tower.last_refresh = time.monotonic()
-            draw(stdscr, tower)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if matches_letter(key, "w"):
             run_launcher(stdscr, tower, multi=True, state_dir=STATE_DIR)
             tower.load()
             tower.last_refresh = time.monotonic()
-            draw(stdscr, tower)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if matches_letter(key, "q"):

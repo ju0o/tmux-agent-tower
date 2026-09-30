@@ -1,6 +1,7 @@
 import io
 
 from tmux_agent_tower import main
+from tmux_agent_tower.server import service
 from tmux_agent_tower.server.auth import PairingSession, TokenStore
 
 
@@ -56,12 +57,12 @@ def test_stdin_watcher_regenerates_on_r(tmp_path, capsys):
     server = _FakeServer(pairing)
 
     stdin = io.StringIO("r\n")
-    real_stdin = main.sys.stdin
-    main.sys.stdin = stdin
+    real_stdin = service.sys.stdin
+    service.sys.stdin = stdin
     try:
-        main._watch_stdin_for_regenerate(server)
+        service._watch_stdin_for_regenerate(server)
     finally:
-        main.sys.stdin = real_stdin
+        service.sys.stdin = real_stdin
 
     out = capsys.readouterr().out
     assert "New pairing code:" in out
@@ -74,12 +75,12 @@ def test_stdin_watcher_ignores_other_input(tmp_path, capsys):
     server = _FakeServer(pairing)
 
     stdin = io.StringIO("hello\nwhatever\n")
-    real_stdin = main.sys.stdin
-    main.sys.stdin = stdin
+    real_stdin = service.sys.stdin
+    service.sys.stdin = stdin
     try:
-        main._watch_stdin_for_regenerate(server)
+        service._watch_stdin_for_regenerate(server)
     finally:
-        main.sys.stdin = real_stdin
+        service.sys.stdin = real_stdin
 
     out = capsys.readouterr().out
     assert "New pairing code:" not in out
@@ -91,9 +92,9 @@ def test_stdin_watcher_returns_when_stdin_closes(tmp_path):
     server = _FakeServer(pairing)
 
     stdin = io.StringIO("")  # immediately EOF
-    real_stdin = main.sys.stdin
-    main.sys.stdin = stdin
+    real_stdin = service.sys.stdin
+    service.sys.stdin = stdin
     try:
-        main._watch_stdin_for_regenerate(server)  # must return, not hang
+        service._watch_stdin_for_regenerate(server)  # must return, not hang
     finally:
-        main.sys.stdin = real_stdin
+        service.sys.stdin = real_stdin

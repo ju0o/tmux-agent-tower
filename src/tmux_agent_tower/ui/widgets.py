@@ -176,6 +176,7 @@ def run_list_picker(
     checked: Optional[Set[Any]] = None,
     extra_keys: Optional[Dict[str, str]] = None,
     footer_hint: str = "",
+    preamble: Optional[Sequence[str]] = None,
 ) -> PickResult:
     """Generic single/multi-select list picker with optional live search.
 
@@ -210,6 +211,11 @@ def run_list_picker(
             safe_add(stdscr, 0, 2, title, curses.A_BOLD)
 
             row_y = 2
+            for line in preamble or []:
+                safe_add(stdscr, row_y, 2, line)
+                row_y += 1
+            if preamble:
+                row_y += 1
             if searchable:
                 cursor = "_" if editing_search else ""
                 safe_add(stdscr, row_y, 2, f'{t("wizard.search_label")} {search}{cursor}', curses.A_DIM)
