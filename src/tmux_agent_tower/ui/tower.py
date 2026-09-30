@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 from ..adapters import resolve_adapter
 from ..adapters.base import PaneContext
 from ..detection.status import StatusEngine, STATUS_DEAD
+from ..i18n import t
 from ..remote.collector import fetch_remote, HOST_STATUS_ONLINE
 from ..state.overrides import OverrideStore
 from ..state.visits import VisitStore
@@ -140,10 +141,11 @@ class Tower:
                 out.append(
                     {
                         "host": name,
-                        "project": "(unreachable)",
+                        "project": None,
+                        "placeholder": "remote.unreachable",
                         "agent": "-",
                         "status": "UNKNOWN",
-                        "visit": "-",
+                        "visit": None,
                         "key": f"remote:{alias}:offline",
                         "remote": True,
                         "offline": True,
@@ -155,10 +157,11 @@ class Tower:
                 out.append(
                     {
                         "host": name,
-                        "project": "(no tmux server)",
+                        "project": None,
+                        "placeholder": "remote.no_server",
                         "agent": "-",
                         "status": "IDLE",
-                        "visit": "-",
+                        "visit": None,
                         "key": f"remote:{alias}:empty",
                         "remote": True,
                         "offline": False,
@@ -260,7 +263,7 @@ class Tower:
             return
 
         height, width = stdscr.getmaxyx()
-        prompt = "New PROJECT name: "
+        prompt = t("prompt.rename")
 
         curses.curs_set(1)
         curses.echo()
@@ -334,7 +337,7 @@ def status_attr(status: str) -> int:
 
 def summary_line(tower: Tower) -> str:
     counts = tower.status_counts()
-    return "  ".join(f"{STATUS_SYMBOL[s]} {s} {counts[s]}" for s in STATUS_ORDER)
+    return "  ".join(f"{STATUS_SYMBOL[s]} {t('status.' + s)} {counts[s]}" for s in STATUS_ORDER)
 
 
 def host_summary(tower: Tower, host: str) -> str:
@@ -346,21 +349,28 @@ def draw(stdscr, tower: Tower) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
 
-    safe_add(stdscr, 0, 2, "AGENT CONTROL TOWER", curses.A_BOLD)
+    safe_add(stdscr, 0, 2, t("app.title"), curses.A_BOLD)
     safe_add(stdscr, 1, 2, summary_line(tower), curses.A_BOLD)
-    safe_add(
-        stdscr,
-        2,
-        2,
-        "↑↓ Move   Enter Open   E Rename   R Refresh   Q/Ctrl+C Exit",
-        curses.A_DIM,
+    hint_line = "   ".join(
+        [t("hint.move"), t("hint.open"), t("hint.rename"), t("hint.refresh"), t("hint.quit")]
     )
+    safe_add(stdscr, 2, 2, hint_line, curses.A_DIM)
+
+    project_x = 2
+    agent_x = max(30, width - 40)
+    status_x = max(44, width - 26)
+    visit_x = max(60, width - 10)
+
+    safe_add(stdscr, 3, project_x, t("column.project"), curses.A_BOLD | curses.A_DIM)
+    safe_add(stdscr, 3, agent_x, t("column.agent"), curses.A_BOLD | curses.A_DIM)
+    safe_add(stdscr, 3, status_x, t("column.status"), curses.A_BOLD | curses.A_DIM)
+    safe_add(stdscr, 3, visit_x, t("column.visit"), curses.A_BOLD | curses.A_DIM)
 
     start_y = 4
     max_rows = max(0, height - start_y - 3)
 
     if not tower.visual:
-        safe_add(stdscr, start_y, 2, "No tmux panes found.")
+        safe_add(stdscr, start_y, 2, t("empty.no_panes"))
         stdscr.noutrefresh()
         curses.doupdate()
         return
@@ -378,11 +388,6 @@ def draw(stdscr, tower: Tower) -> None:
         top = selected_visual_index - max_rows + 1
 
     visible = tower.visual[top : top + max_rows]
-
-    project_x = 2
-    agent_x = max(30, width - 40)
-    status_x = max(44, width - 26)
-    visit_x = max(60, width - 10)
 
     for offset, item in enumerate(visible):
         y = start_y + offset
@@ -404,7 +409,7 @@ def draw(stdscr, tower: Tower) -> None:
             safe_add(stdscr, y, 0, ">", base_attr)
 
         title_width = max(10, agent_x - project_x - 2)
-        text = row["project"]
+        text = row["project"] if row["project"] is not None else t(row.get("placeholder", "remote.unreachable"))
         if len(text) > title_width:
             text = text[: max(1, title_width - 1)] + "…"
 
@@ -414,22 +419,23 @@ def draw(stdscr, tower: Tower) -> None:
         status = row["status"]
         symbol = STATUS_SYMBOL.get(status, "?")
         attr = base_attr if is_selected else status_attr(status)
-        safe_add(stdscr, y, status_x, f"{symbol} {status}", attr)
+        safe_add(stdscr, y, status_x, f"{symbol} {t('status.' + status)}", attr)
 
-        safe_add(stdscr, y, visit_x, row["visit"], base_attr)
+        visit_text = t("visit." + row["visit"]) if row["visit"] is not None else "-"
+        safe_add(stdscr, y, visit_x, visit_text, base_attr)
 
     footer_y = height - 2
     if tower.rows:
         selected = tower.rows[tower.selected]
-        footer = f'Selected › {selected["host"]} / {selected["project"]}'
+        project_text = selected["project"] if selected["project"] is not None else t(selected.get("placeholder", "remote.unreachable"))
+        footer = t("footer.selected", host=selected["host"], project=project_text)
         safe_add(stdscr, footer_y, 2, footer, curses.A_BOLD)
 
     safe_add(
         stdscr,
         height - 1,
         2,
-        "Ctrl+b → w : return here from any tmux pane   "
-        "best-effort status (see README)",
+        f'{t("footer.return_hint")}   {t("footer.best_effort")}',
         curses.A_DIM,
     )
 
@@ -451,7 +457,7 @@ def main(stdscr, session: Optional[str] = None) -> None:
 
     session = session or tmux_capture.current_session()
     if not session:
-        raise SystemExit("No tmux session detected. Run tower from inside tmux.")
+        raise SystemExit(t("cli.no_tmux_session"))
 
     tower = Tower(session)
     tower.load()

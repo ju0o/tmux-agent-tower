@@ -10,31 +10,28 @@ import subprocess
 import sys
 
 from . import __version__
+from .i18n import t
 from .tmux import capture as tmux_capture
 from .ui.tower import CONTROL_WINDOW, run as run_ui, load_remote_hosts
 
 
-def _print_check(label: str, ok: bool, detail: str = "") -> bool:
-    mark = "PASS" if ok else "FAIL"
-    line = f"[{mark}] {label}"
-    if detail:
-        line += f" - {detail}"
+def _print_result(label: str, ok: bool, detail: str = "", warn: bool = False) -> bool:
+    mark = "✓" if ok else ("!" if warn else "✗")
+    status_word = t("doctor.ok") if ok else detail or t("doctor.fail")
+    line = f"{mark} {label:<22} {status_word}"
     print(line)
     return ok
 
 
-def _print_warn(label: str, detail: str = "") -> None:
-    line = f"[WARN] {label}"
-    if detail:
-        line += f" - {detail}"
-    print(line)
-
-
 def run_doctor() -> int:
-    all_ok = True
+    print(t("doctor.title"))
+    print()
+
+    problems = 0
 
     tmux_path = shutil.which("tmux")
-    all_ok &= _print_check("tmux installed", bool(tmux_path), tmux_path or "not found on PATH")
+    if not _print_result(t("doctor.check.tmux_installed"), bool(tmux_path)):
+        problems += 1
 
     if tmux_path:
         try:
@@ -43,46 +40,53 @@ def run_doctor() -> int:
             ).stdout.strip()
         except Exception:
             version = ""
-        all_ok &= _print_check("tmux version readable", bool(version), version)
+        if not _print_result(t("doctor.check.tmux_version"), bool(version), version):
+            problems += 1
 
-    all_ok &= _print_check(
-        "python >= 3.9",
+    if not _print_result(
+        t("doctor.check.python_version"),
         sys.version_info >= (3, 9),
         f"{sys.version_info.major}.{sys.version_info.minor}",
-    )
+    ):
+        problems += 1
 
     try:
         import curses as _curses  # noqa: F401
 
-        all_ok &= _print_check("python curses module available", True)
+        _print_result(t("doctor.check.curses"), True)
     except Exception as exc:
-        all_ok &= _print_check("python curses module available", False, str(exc))
+        _print_result(t("doctor.check.curses"), False, str(exc))
+        problems += 1
 
     term = os.environ.get("TERM", "")
     if term:
-        _print_check("TERM set", True, term)
+        _print_result(t("doctor.check.term"), True)
     else:
-        _print_warn("TERM not set", "curses may not initialize correctly")
+        _print_result(t("doctor.check.term"), False, t("doctor.term_missing"), warn=True)
+        problems += 1
 
     session = tmux_capture.current_session()
     if session:
-        _print_check("running inside a tmux session", True, session)
+        _print_result(t("doctor.check.in_tmux"), True)
     else:
-        _print_warn(
-            "not running inside tmux",
-            "tower needs to run inside a tmux client session",
-        )
+        _print_result(t("doctor.check.in_tmux"), False, t("doctor.not_in_tmux"), warn=True)
+        problems += 1
 
     panes_output = tmux_capture.run_tmux(["list-panes", "-a"])
-    _print_check("tmux server reachable", bool(panes_output) or session != "", "")
+    if not _print_result(t("doctor.check.server"), bool(panes_output) or session != ""):
+        problems += 1
 
     hosts = load_remote_hosts()
+    print()
     if hosts:
-        print(f"[INFO] {len(hosts)} remote host(s) configured: " + ", ".join(h["alias"] for h in hosts))
+        print(t("doctor.remote_hosts_configured", n=len(hosts), hosts=", ".join(h["alias"] for h in hosts)))
     else:
-        print("[INFO] no remote hosts configured (single-host mode) - see docs/ARCHITECTURE.md")
+        print(t("doctor.remote_hosts_none"))
 
-    return 0 if all_ok else 1
+    print()
+    print(t("doctor.summary_ok") if problems == 0 else t("doctor.summary_fail", n=problems))
+
+    return 0 if problems == 0 else 1
 
 
 def open_control_tower() -> None:
@@ -120,7 +124,7 @@ def open_control_tower() -> None:
         session = best
 
     if not session:
-        print("No tmux session found. Start tmux first.", file=sys.stderr)
+        print(t("cli.no_session_found"), file=sys.stderr)
         raise SystemExit(1)
 
     windows = tmux_capture.list_windows(session)
