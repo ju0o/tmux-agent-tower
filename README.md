@@ -29,7 +29,7 @@ AGENT CONTROL TOWER
   billing-service      Claude      ● WORKING    NEW
   internal-notes       OpenCode    ○ IDLE       SEEN
 
-↑↓ Move   Enter Open   E Rename   N Add project   W New workspace   R Refresh   Q/Ctrl+C Exit
+↑↓ Move   Enter Open   E Edit item   N Add project   W New workspace   R Refresh   Q/Ctrl+C Exit
 ```
 
 ## What it is (and isn't)
@@ -115,11 +115,33 @@ command, not another TUI, so it's safe to bind to a key.
 |---|---|
 | `↑` / `↓` (or `j`/`k`) | Move selection |
 | `Enter` | Jump to the selected pane |
-| `E` | Set a custom project name for the selected pane |
+| `E` | Edit the selected pane's project name, agent label, or pane title |
 | `N` | Add one project (Workspace Launcher, single) |
 | `W` | Start a new workspace (Workspace Launcher, multi) |
 | `R` | Refresh immediately |
 | `Q` / `Ctrl+C` | Quit |
+
+### Editing what's shown (`E`)
+
+Auto-detection is best-effort and sometimes wrong or just unhelpful (a
+project run straight from a drive root can show up as a single letter;
+an agent that isn't recognised shows as `Shell`). `E` opens a small menu
+for the selected row:
+
+* **Project name** -- overrides the auto-discovered project name.
+* **Agent name** -- overrides the displayed agent label, either picked
+  from the known list or typed freely (e.g. `Gemini CLI`). This is
+  **display-only metadata**: it never changes, restarts, or sends
+  anything to the real process -- it just relabels the row.
+* **Pane title** -- also applied to the pane's real tmux title
+  (`select-pane -T`) on a best-effort basis; a failure there never takes
+  the rest of Tower down with it.
+* **Reset to auto-detection** -- clears all three overrides for *this*
+  pane only (not a global reset).
+
+Overrides persist across refreshes and are stored separately per pane, so
+auto-discovery running again next refresh never clobbers a choice you
+made here.
 
 ### Workspace Launcher (`N` / `W`)
 
@@ -236,8 +258,8 @@ tracks whether you've opened that pane from the Tower before.
 * The remote/multi-host view only sees pane titles, not full content (a
   deliberate simplification to avoid installing anything remotely -- see
   `docs/ARCHITECTURE.md`), so remote status is coarser than local.
-* A custom title (`E`) is keyed by tmux's pane id, which is reused after a
-  tmux server restart; in rare cases an override can "stick" to an
+* An `E` override (project/agent/title) is keyed by tmux's pane id, which
+  is reused after a tmux server restart; in rare cases an override can "stick" to an
   unrelated later pane.
 * Linux/WSL + tmux is the tested target. macOS should mostly work (same
   Python + tmux + curses stack) but hasn't been verified here.

@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.1.2 - Identity editing, and a Unicode input bug fix
+
+* **`E` is now a full edit menu**, not just project rename: project name,
+  agent label (from the known list or freely typed, e.g. `Gemini CLI`),
+  or pane title -- plus "reset to auto-detection" for just that one pane.
+  The agent-label override is purely display metadata; it never touches
+  the real process (same boundary as the Workspace Launcher -- see
+  `docs/ROADMAP.md`).
+* Overrides are now stored per-field (`{project, agent, title}` per pane)
+  instead of a single project-name string; existing v0.1.0/v0.1.1
+  overrides are migrated automatically the first time they're read, in
+  place, with nothing lost.
+* Pane title edits are best-effort applied to the pane's real tmux title
+  too (`select-pane -T`); a failure there can't take the rest of Tower
+  down with it.
+* **Fixed a real, pre-existing Unicode input bug**, caught live while
+  testing the Korean pane-title editor: every text input in the TUI
+  (project/agent/title prompts, the Workspace Launcher's search box and
+  manual-path entry) read keys one raw *byte* at a time
+  (`curses.getch()`), which silently mangled any multi-byte UTF-8
+  character -- e.g. typing "개발" came out as "ê°ë°" in a real pane
+  title. Switched every input loop to `curses.get_wch()` (locale-aware,
+  assembles a full character before returning it) plus
+  `locale.setlocale(locale.LC_ALL, "")` at startup. This affected typing
+  *any* non-ASCII text anywhere in the app, not just this new feature.
+
 ## v0.1.1 - Hotfix: pane-identity navigation bug
 
 Real-world dogfooding of v0.1.0 found that `tower` would sometimes jump to
