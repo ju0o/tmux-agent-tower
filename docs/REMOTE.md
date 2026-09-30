@@ -11,10 +11,14 @@ relying on it for anything you can't afford to get wrong.
 ## Quick start
 
 ```bash
-tower serve            # localhost only
-tower serve --lan      # also reachable from your phone, same Wi-Fi
+tower serve              # localhost only
+tower serve --lan        # also reachable from your phone, same Wi-Fi (plain HTTP)
+tower serve --tailscale  # reachable from your phone anywhere, over your tailnet (HTTPS)
 tower serve --port 9000
 ```
+
+`--lan` and `--tailscale` are mutually exclusive. If you have Tailscale,
+prefer `--tailscale` -- see the dedicated section below for why.
 
 Run it from inside the same tmux session you want to monitor (same
 requirement as `tower` itself). It prints a URL and a one-time, 5-minute
@@ -67,7 +71,10 @@ token file is deleted.
 ## Security model
 
 * **Binding**: `tower serve` binds `127.0.0.1` only unless you pass
-  `--lan`. It never defaults to a network-reachable bind.
+  `--lan`. It never defaults to a network-reachable bind. `--tailscale`
+  also keeps the backend on `127.0.0.1` -- it is never `0.0.0.0` in that
+  mode; reachability comes from a Tailscale Serve mapping, not from a
+  wider bind (see `tests/test_main_serve_tailscale.py`).
 * **Pairing**: every device needs a token, obtained once via a 6-digit
   code shown on the PC's own terminal (never transmitted anywhere else).
   The code is single-use and expires after 5 minutes.
@@ -87,9 +94,12 @@ token file is deleted.
   (Windows): a failed `chmod` there is swallowed, never a crash.
 * **Host header check**: every request's `Host` header must match an
   address this process actually printed to you (`localhost`, `127.0.0.1`,
-  or the detected LAN IP for `--lan`) -- defense against DNS rebinding
-  from a malicious page open in another tab on the same network. This is
-  a narrow mitigation, not a substitute for TLS -- see below.
+  the detected LAN IP for `--lan`, or -- for `--tailscale` -- this
+  machine's own MagicDNS name and Tailscale IPv4, read from
+  `tailscale status --json` at startup, never a wildcard) -- defense
+  against DNS rebinding from a malicious page open in another tab on the
+  same network. This is a narrow mitigation, not a substitute for TLS --
+  see below.
 * **Prompt send**: literal `tmux send-keys -l` (never interpreted as a
   key name), a hard length cap (4000 chars), a request body size cap
   (8KB), and the stale/wrong-pane re-check described above. No shell is
@@ -115,11 +125,132 @@ TLS**. That is a real limitation, not a detail:
   against the LAN server) -- it is **not** encryption and does not make
   this safe on an untrusted network. Don't read it as "safe enough for
   public Wi-Fi because of the Host check"; it isn't.
-* Off-LAN access is planned via Tailscale (see `docs/ROADMAP.md`'s Tower
-  Remote section) once the LAN MVP itself has been dogfooded enough to
-  trust -- not via opening this port to the internet.
+* Off-LAN access is via Tailscale (`tower serve --tailscale`, next
+  section) -- not via opening this port to the internet.
+
+## Tailscale mode -- `tower serve --tailscale`
+
+The intended path for using Tower Remote from anywhere (LTE/5G, another
+network) without ever exposing the port to the LAN or the internet. Your
+phone needs only the Tailscale app + a browser, logged in to the same
+tailnet. No SSH app, no terminal emulator, no shared Wi-Fi.
+
+### Architecture (WSL2 on Windows)
+
+```
+Phone (Tailscale app + browser)
+  --tailnet, WireGuard--> Windows host Tailscale
+                            Tailscale Serve: https://<machine>.<tailnet>.ts.net  (tailnet only)
+                              --> Windows 127.0.0.1:4312
+                                    (WSL2 localhost forwarding, built in)
+                                    --> WSL Tower Remote backend, bound to 127.0.0.1:4312
+```
+
+* Tower shells out to the **Windows** `tailscale.exe` (found at the
+  standard `/mnt/c/Program Files/Tailscale/tailscale.exe` interop path,
+  falling back to a `tailscale` on `PATH` for native Linux/macOS). It
+  never installs or starts a Tailscale daemon inside WSL -- Tailscale's
+  own guidance is not to run both a Windows and a WSL-native instance.
+* The backend still binds `127.0.0.1` only. `tailscale serve` is what
+  makes it reachable, and Serve is tailnet-only by construction.
+* HTTPS terminates at Windows Tailscale with a Let's Encrypt certificate
+  for your MagicDNS name; the last hop (Windows loopback -> WSL loopback)
+  never leaves the machine.
+
+### What `--tailscale` does, in order
+
+1. Starts the backend on `127.0.0.1:<port>`.
+2. Finds `tailscale.exe`. If missing: prints how to install/log in, exits 1.
+3. Verifies from the **Windows** side (`curl.exe http://127.0.0.1:<port>/api/health`)
+   that Windows can actually reach the WSL backend -- the exact hop Serve
+   will use. If that fails (or can't be verified because `curl.exe` is
+   missing), it prints `Windows localhost에서 Tower Remote에 연결할 수
+   없습니다.` and **does not** touch Serve config. Fail closed, never
+   "probably works."
+4. Reads `tailscale status --json` for this machine's MagicDNS name. No
+   MagicDNS = no hostname for Serve's HTTPS certificate = clear error and
+   exit (see "Known gaps").
+5. Checks `tailscale serve status --json` for what's already at `:443`:
+   * nothing -> runs `tailscale serve --bg <port>` (the current CLI's form
+     for "proxy `https://<name>/` to `http://127.0.0.1:<port>`").
+   * already pointing at our own backend (e.g. previous run didn't clean
+     up) -> reused as-is, nothing re-issued.
+   * pointing **anywhere else** -> refuses, prints what is there and the
+     exact `tailscale serve --https=443 off` you'd run if you decide it's
+     no longer needed. Tower never overwrites another mapping.
+6. Adds the MagicDNS name and Tailscale IPv4 to the `Host` allowlist,
+   prints the `https://` URL and the pairing code.
+7. On Ctrl+C: re-reads Serve status and removes the `:443` mapping
+   **only if it still points at our own backend** (via the per-port
+   `tailscale serve --https=443 off`). If it changed underneath us, it's
+   left alone and you're told the exact command. `tailscale serve reset`
+   is never called, by anything, ever (`tests/test_server_tailscale.py`).
+
+`tailscale funnel` is never invoked either -- Funnel is public-internet
+exposure, and this project's auth model is not designed for that.
+
+### What it looks like
+
+```
+TMUX AGENT TOWER REMOTE
+
+Tailscale: ONLINE
+https://<machine>.<tailnet>.ts.net/
+
+Pairing code: 424429  (valid 5 minutes, one-time use)
+Open the address above on your phone's browser and enter this code.
+
+Type 'r' + Enter any time for a new pairing code. Ctrl+C to stop.
+```
+
+Pairing, bearer tokens, rate limiting, `Host` validation, the prompt
+length/body caps, and the stale-pane re-check all apply exactly as in
+LAN mode. Being on the tailnet is a *second* layer, not a replacement:
+Tailscale identity + WireGuard/HTTPS transport + Tower pairing/token.
+
+### Auto-start (design only -- not implemented)
+
+Goal: turn the PC on, open the same URL on your phone, it just works.
+
+```
+Windows boot
+  -> Tailscale (Windows service, already auto-starts)
+  -> WSL starts (e.g. Windows Task Scheduler at logon: `wsl.exe -d <distro> -- true`,
+     or a WSL systemd unit if systemd is enabled in /etc/wsl.conf)
+  -> `tower serve --tailscale` starts inside a detached tmux session
+     (e.g. `tmux new-session -d -s tower 'tower serve --tailscale'`)
+  -> Serve mapping is re-created (idempotent: an existing correct mapping is reused)
+```
+
+Planned as a `tower remote install-service` command later. Not part of
+this slice; manual start is enough for the phone dogfood. Note that the
+pairing code is printed to the detached session's pane -- you'd attach
+to read it once per new device, which is the intended friction.
 
 ## Known gaps (v0 MVP)
+
+* **MagicDNS + HTTPS certificates must be enabled on your tailnet** for
+  `--tailscale`. Serve's HTTPS mode needs a hostname to issue a
+  certificate for; without MagicDNS Tower prints `no_magicdns` and stops
+  rather than fall back to something half-working. A Tailscale-IP-only
+  path (`http://100.x.y.z:<port>` over the tailnet) is *not* implemented
+  -- it would need a non-localhost bind and gives up HTTPS, so it's
+  documented here as a possible future fallback, not silently done.
+* **`--tailscale` assumes the Windows-host + WSL2 layout** described
+  above. On native Linux/macOS with a local `tailscale` on `PATH` the same
+  `serve --bg` flow should work in principle, but the Windows-side
+  `curl.exe` reachability check is skipped there (`None` -> treated as
+  "could not verify" -> refuses to proceed). Untested; treat as
+  unsupported until it has been dogfooded.
+* **Serve mapping is always at `:443`.** If you already serve something
+  else at `https://<machine>.<tailnet>.ts.net/`, Tower refuses (see
+  above) instead of picking another port. A `--https-port` option is a
+  reasonable follow-up.
+* **Prompt sending from the phone has not yet been verified over
+  LTE/5G.** Everything up to and including paired `/api/status` was
+  verified end-to-end over the tailnet HTTPS URL from the PC side; the
+  final phone-on-cellular acceptance is a manual step (see the checklist
+  in the branch's latest report).
 
 * **No QR code image.** Generating one correctly needs either a new
   dependency or a from-scratch encoder -- both felt like more risk than
@@ -127,7 +258,8 @@ TLS**. That is a real limitation, not a detail:
   typed too, or bookmarked once. Deferred, not forgotten.
 * **No mDNS/`tower.local` auto-discovery.** You read the printed LAN IP
   off the PC's terminal. Fine for a first real phone connection; a nice
-  quality-of-life addition later.
+  quality-of-life addition later. (With `--tailscale` the URL is your
+  stable MagicDNS name, so this matters much less there.)
 * **Pairing-code regeneration** is available (type `r` + Enter in the
   `tower serve` terminal) but requires local terminal access -- there is
   deliberately no remote/HTTP way to do it (see the security model
@@ -141,7 +273,3 @@ TLS**. That is a real limitation, not a detail:
   in that terminal. This is not a bug -- Tower Remote's write action is
   scoped to *panes*, not to *agents specifically* -- but it's worth
   knowing before you tap Send on a shell pane's card.
-* **Tailscale/off-LAN access**: not built or tested yet. `--lan` is LAN
-  only for now; a Tailscale-based path is the planned next step once the
-  LAN MVP itself has been dogfooded enough to trust (see
-  `docs/ROADMAP.md`).

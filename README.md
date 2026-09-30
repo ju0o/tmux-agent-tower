@@ -246,6 +246,16 @@ can also target this host: it runs one bounded, read-only `find` over SSH
 to discover git repositories there too, with the same manual-path (`B`)
 fallback if that turns up nothing.
 
+### From your phone (experimental, this branch only)
+
+`tower serve` starts a small pairing-gated web UI showing the same
+pane/status data, plus the ability to send one explicit prompt into one
+pane you pick. `tower serve --lan` for same-Wi-Fi (plain HTTP, trusted
+networks only); `tower serve --tailscale` for anywhere over your tailnet
+(HTTPS via Windows-host Tailscale Serve, backend stays localhost-only).
+Read `docs/REMOTE.md` first -- it is the full security model and the
+list of what this deliberately does *not* do.
+
 ### Language
 
 The TUI asks once, on its very first run, whether to show Korean or

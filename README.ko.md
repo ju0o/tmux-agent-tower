@@ -228,6 +228,16 @@ asus:ASUS
 그쪽의 git 저장소도 찾아주고, 아무것도 못 찾으면 마찬가지로 직접 경로
 입력(`B`)으로 넘어갑니다.
 
+### 휴대폰에서 보기 (실험적, 이 브랜치 전용)
+
+`tower serve`는 같은 pane/상태 데이터를 보여주는 작은 웹 UI를 띄우고,
+직접 고른 pane 하나에 직접 입력한 prompt 하나를 보낼 수 있게 합니다
+(pairing 코드 필요). 같은 Wi-Fi에서는 `tower serve --lan`(평문 HTTP,
+신뢰할 수 있는 네트워크에서만), 어디서든 쓰려면 `tower serve --tailscale`
+(Windows 쪽 Tailscale Serve를 통한 HTTPS, 백엔드는 localhost에만 bind).
+사용 전에 `docs/REMOTE.md`를 먼저 읽어 주세요 -- 보안 모델과 "의도적으로
+하지 않는 것" 목록이 거기 있습니다.
+
 ### 언어
 
 TUI는 맨 처음 실행할 때 딱 한 번 한국어/영어를 물어보고, 그 답을

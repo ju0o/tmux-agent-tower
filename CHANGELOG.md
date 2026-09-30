@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased - Tower Remote (`feat/tower-remote` branch only, not on `main`)
+
+Experimental phone-browser companion to the TUI. Same data, same
+adapters, same status engine -- `server/httpapi.py` drives a headless
+`Tower` instance; nothing is re-implemented. Full scope, security model,
+and known gaps in `docs/REMOTE.md`. Version number is intentionally not
+bumped until this merges.
+
+* **`tower serve`** -- pairing-gated read API (`/api/status`) + mobile
+  web UI, localhost-only by default. `--lan` binds all interfaces for
+  same-Wi-Fi use (plain HTTP; documented as trusted-LAN-only).
+* **One-pane prompt send** (`/api/prompt`) -- the only write action:
+  explicit pane, explicit typed text, explicit tap, paired token, and a
+  live stale/wrong-pane re-check before `tmux send-keys -l`. No exec, no
+  filesystem, no raw transcript, no interrupt/kill/approve.
+* **Pairing hardening** -- 6-digit single-use 5-minute code, 7-wrong-guess
+  lockout with an indistinguishable `invalid_code` response, local-only
+  `r` + Enter regeneration (no HTTP path), tokens at `0600` in a `0700`
+  config dir, `Host` header allowlist, 4000-char prompt / 8KB body caps.
+* **`tower serve --tailscale`** -- off-LAN access over your tailnet
+  without ever exposing the port: the backend stays on `127.0.0.1`, and
+  Tower drives the *Windows-host* `tailscale.exe` (WSL2 layout; no
+  Tailscale inside WSL) to create a tailnet-only HTTPS Serve mapping to
+  `localhost:<port>`. Verifies Windows -> WSL reachability with `curl.exe`
+  *before* touching Serve config and fails closed if it can't; reads the
+  MagicDNS name from `tailscale status --json`; refuses to overwrite an
+  existing unrelated `:443` mapping; removes on Ctrl+C only the mapping
+  that still points at its own backend, via the per-port
+  `serve --https=443 off`. `tailscale funnel` and `tailscale serve reset`
+  are never invoked (regression-tested). MagicDNS name and Tailscale IPv4
+  are added to the `Host` allowlist -- never a wildcard. `--lan` and
+  `--tailscale` are mutually exclusive. Live-verified on a real Windows
+  Tailscale 1.102.2 + WSL2 setup: HTTPS health / pair / authenticated
+  status over the tailnet URL, localhost-only bind confirmed with `ss`,
+  direct `http://<tailscale-ip>:4312` correctly unreachable, mapping
+  cleaned up on stop. Phone-on-LTE acceptance is the remaining manual
+  step.
+* Tests: 225 (v0.2.2) -> 327.
+
 ## v0.2.2 - Main stabilization checkpoint
 
 No feature changes. This is the tagged baseline the `feat/tower-remote`

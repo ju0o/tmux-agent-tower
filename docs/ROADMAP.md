@@ -74,10 +74,13 @@ while P5 remains a deliberate non-goal for now.
 
 ## Tower Remote (experimental, `feat/tower-remote` branch only)
 
-A small local web UI + API (`tower serve` / `tower serve --lan`) for
-checking status and sending an explicit prompt to one pane from a phone
-browser, LAN only, pairing-gated. See `docs/REMOTE.md` for the full scope,
-security model, and known gaps. Deliberately developed on its own branch
+A small local web UI + API (`tower serve` / `tower serve --lan` /
+`tower serve --tailscale`) for checking status and sending an explicit
+prompt to one pane from a phone browser, pairing-gated. `--lan` is
+same-Wi-Fi plain HTTP; `--tailscale` exposes the localhost-only backend
+over your tailnet via a Windows-host Tailscale Serve HTTPS mapping (never
+Funnel, never `serve reset`, never `0.0.0.0`). See `docs/REMOTE.md` for
+the full scope, security model, and known gaps. Deliberately developed on its own branch
 and worktree, never directly on `main`, until it's been dogfooded enough
 to trust -- see the PM decision that started this branch for the full
 phased plan (main stabilization first, then this).
