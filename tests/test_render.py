@@ -268,6 +268,83 @@ def test_agent_status_line_format():
     assert render.agent_status_line("Codex", "작업 중") == "Codex  작업 중"
 
 
+def test_agent_status_line_with_duration():
+    assert render.agent_status_line("Codex", "작업 중", "12m") == "Codex  작업 중 · 12m"
+
+
+def test_row_line_count_with_activity():
+    assert render.row_line_count({"title_line": None, "activity_text": "테스트 실행 중"}, narrow=False) == 2
+
+
+def test_row_line_count_with_title_and_activity():
+    row = {"title_line": "JuHome Dev", "activity_text": "테스트 실행 중"}
+    assert render.row_line_count(row, narrow=False) == 3
+
+
+def test_row_line_count_empty_activity_does_not_add_a_line():
+    assert render.row_line_count({"title_line": None, "activity_text": None}, narrow=False) == 1
+    assert render.row_line_count({"title_line": None, "activity_text": ""}, narrow=False) == 1
+
+
+# -- format_duration ----------------------------------------------
+
+
+def test_format_duration_seconds():
+    assert render.format_duration(0) == "0s"
+    assert render.format_duration(45) == "45s"
+    assert render.format_duration(59) == "59s"
+
+
+def test_format_duration_minutes():
+    assert render.format_duration(60) == "1m"
+    assert render.format_duration(90) == "1m"
+    assert render.format_duration(12 * 60) == "12m"
+    assert render.format_duration(59 * 60 + 59) == "59m"
+
+
+def test_format_duration_hours():
+    assert render.format_duration(3600) == "1h"
+    assert render.format_duration(3600 + 30 * 60) == "1h 30m"
+    assert render.format_duration(7200) == "2h"
+
+
+def test_format_duration_never_negative():
+    assert render.format_duration(-5) == "0s"
+
+
+# -- sort_by_attention ----------------------------------------------
+
+
+def test_sort_by_attention_priority_order():
+    rows = [
+        {"key": "idle", "status": "IDLE"},
+        {"key": "working", "status": "WORKING"},
+        {"key": "waiting", "status": "WAITING"},
+        {"key": "dead", "status": "DEAD"},
+        {"key": "unknown", "status": "UNKNOWN"},
+    ]
+    sorted_rows = render.sort_by_attention(rows)
+    assert [r["key"] for r in sorted_rows] == ["waiting", "unknown", "dead", "working", "idle"]
+
+
+def test_sort_by_attention_is_stable_within_same_status():
+    rows = [
+        {"key": "a", "status": "WAITING"},
+        {"key": "b", "status": "IDLE"},
+        {"key": "c", "status": "WAITING"},
+    ]
+    sorted_rows = render.sort_by_attention(rows)
+    # Both WAITING rows come first, in their original relative order.
+    assert [r["key"] for r in sorted_rows] == ["a", "c", "b"]
+
+
+def test_sort_by_attention_does_not_mutate_the_input_list():
+    rows = [{"key": "a", "status": "IDLE"}, {"key": "b", "status": "WAITING"}]
+    original_order = [r["key"] for r in rows]
+    render.sort_by_attention(rows)
+    assert [r["key"] for r in rows] == original_order
+
+
 # -- responsive thresholds ----------------------------------------------
 
 

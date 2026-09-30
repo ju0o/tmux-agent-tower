@@ -189,11 +189,57 @@ def row_matches_filter(row: Dict, filter_text: str) -> bool:
     return any(needle in h.lower() for h in haystacks)
 
 
+# WAITING and UNKNOWN need a decision from the user; DEAD is worth
+# noticing; WORKING is already progressing fine; IDLE is the least
+# interesting. Lower number = more attention-worthy.
+ATTENTION_PRIORITY = {"WAITING": 0, "UNKNOWN": 1, "DEAD": 2, "WORKING": 3, "IDLE": 4}
+
+
+def format_duration(seconds: float) -> str:
+    """"Tower has continuously observed this status for ~N" -- never framed
+    as "the agent started this N ago" (Tower cannot know that; see
+    ``StatusEngine.duration_seconds``'s docstring). Coarse on purpose: a
+    control tower doesn't need seconds-level precision once something's
+    been running for minutes or hours.
+    """
+
+    seconds = max(0, int(seconds))
+
+    if seconds < 60:
+        return f"{seconds}s"
+
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+    if remaining_minutes:
+        return f"{hours}h {remaining_minutes}m"
+    return f"{hours}h"
+
+
+def sort_by_attention(rows: List[Dict]) -> List[Dict]:
+    """Attention View ordering: WAITING > UNKNOWN > DEAD > WORKING > IDLE.
+
+    A stable sort, so rows with the same status keep their existing
+    relative order rather than jumping around unpredictably between
+    refreshes. This is only ever applied to a *separate* presentation
+    (see ui/tower.py's attention-mode toggle) -- the default list's own
+    order must never change on its own, or the selected row would visibly
+    jump around during ordinary use.
+    """
+
+    return sorted(rows, key=lambda r: ATTENTION_PRIORITY.get(r.get("status"), 99))
+
+
 def row_line_count(row: Dict, narrow: bool) -> int:
     """How many physical terminal lines this row occupies: 1 for the
     primary project/agent/status line, +1 more in narrow layout (agent +
     status move to their own line, see ``agent_status_line``), +1 more if
-    there's a meaningful pane-title secondary line to show.
+    there's a meaningful pane-title secondary line to show, +1 more if
+    there's a current-activity line to show. An empty/missing activity
+    never forces a blank line (see ``ui/tower.py``'s row-building).
     """
 
     lines = 1
@@ -201,15 +247,20 @@ def row_line_count(row: Dict, narrow: bool) -> int:
         lines += 1
     if row.get("title_line"):
         lines += 1
+    if row.get("activity_text"):
+        lines += 1
     return lines
 
 
-def agent_status_line(agent: str, status_label: str) -> str:
-    """Narrow-layout line 2: agent + status, since there's no room for
-    them beside the project name on line 1.
+def agent_status_line(agent: str, status_label: str, duration_text: str = "") -> str:
+    """Narrow-layout line 2: agent + status (+ duration, if shown), since
+    there's no room for them beside the project name on line 1.
     """
 
-    return f"{agent}  {status_label}"
+    text = f"{agent}  {status_label}"
+    if duration_text:
+        text += f" · {duration_text}"
+    return text
 
 
 def format_detail_panel(fields: Sequence[Tuple[str, str]]) -> List[str]:
