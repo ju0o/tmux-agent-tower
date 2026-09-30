@@ -68,11 +68,17 @@ def default_project_roots() -> List[str]:
 _ARRAY_RE = re.compile(r'^\s*project_roots\s*=\s*\[(.*)\]\s*$')
 _SECTION_RE = re.compile(r'^\s*\[(\w+)\]\s*$')
 _KV_RE = re.compile(r'^\s*(\w+)\s*=\s*"([^"]*)"\s*$')
+_BOOL_KV_RE = re.compile(r'^\s*(\w+)\s*=\s*(true|false)\s*$', re.IGNORECASE)
 _STRING_ITEM_RE = re.compile(r'"([^"]*)"')
 
 
 def _parse_config_text(text: str) -> Dict:
-    result: Dict = {"project_roots": None, "agents": {}}
+    # "notification_kinds" (the [notifications] section's own sub-keys,
+    # e.g. waiting/dead) is deliberately a different dict key than the
+    # top-level "notifications" boolean toggle -- they'd otherwise collide
+    # (a bare `notifications = true` and a `[notifications]` section both
+    # wanting to write into the same `result["notifications"]` slot).
+    result: Dict = {"project_roots": None, "agents": {}, "notification_kinds": {}}
     section: Optional[str] = None
 
     for raw_line in text.splitlines():
@@ -92,6 +98,15 @@ def _parse_config_text(text: str) -> Dict:
                 result["project_roots"] = [str(Path(p).expanduser()) for p in items]
                 continue
 
+        bool_match = _BOOL_KV_RE.match(line)
+        if bool_match:
+            key, value = bool_match.group(1), bool_match.group(2).lower() == "true"
+            if section == "notifications":
+                result["notification_kinds"][key] = value
+            elif section is None:
+                result[key] = value
+            continue
+
         kv_match = _KV_RE.match(line)
         if kv_match:
             key, value = kv_match.group(1), kv_match.group(2)
@@ -104,11 +119,23 @@ def _parse_config_text(text: str) -> Dict:
 
 
 def load_config() -> Dict:
-    """Returns ``{"language": str|None, "project_roots": [...], "agents": {Label: command}}``."""
+    """Returns ``{"language": str|None, "project_roots": [...],
+    "agents": {Label: command}, "show_activity": bool,
+    "show_status_duration": bool, "notifications": bool,
+    "notification_kinds": {"waiting": bool, "dead": bool}}``.
+
+    Notifications default OFF (safe/quiet by default -- see
+    docs/ROADMAP.md's Task Awareness section); activity and duration
+    display default ON since they're purely informational.
+    """
 
     agents = default_agent_commands()
     project_roots: Optional[List[str]] = None
     language = None
+    show_activity = True
+    show_status_duration = True
+    notifications = False
+    notification_kinds = {"waiting": True, "dead": False}
 
     try:
         text = CONFIG_FILE.read_text(encoding="utf-8")
@@ -116,6 +143,16 @@ def load_config() -> Dict:
         if parsed.get("project_roots"):
             project_roots = parsed["project_roots"]
         language = parsed.get("language")
+
+        if "show_activity" in parsed:
+            show_activity = bool(parsed["show_activity"])
+        if "show_status_duration" in parsed:
+            show_status_duration = bool(parsed["show_status_duration"])
+        if "notifications" in parsed:
+            notifications = bool(parsed["notifications"])
+
+        for kind, value in parsed.get("notification_kinds", {}).items():
+            notification_kinds[kind] = bool(value)
 
         config_key_to_label = {v: k for k, v in AGENT_LABEL_TO_CONFIG_KEY.items()}
         for config_key, command in parsed.get("agents", {}).items():
@@ -131,7 +168,15 @@ def load_config() -> Dict:
     if project_roots is None:
         project_roots = default_project_roots()
 
-    return {"language": language, "project_roots": project_roots, "agents": agents}
+    return {
+        "language": language,
+        "project_roots": project_roots,
+        "agents": agents,
+        "show_activity": show_activity,
+        "show_status_duration": show_status_duration,
+        "notifications": notifications,
+        "notification_kinds": notification_kinds,
+    }
 
 
 def resolve_agent_command(agent_label: str, agents_cfg: Dict[str, str]) -> Optional[str]:

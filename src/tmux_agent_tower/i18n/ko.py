@@ -100,4 +100,9 @@ STRINGS = {
     "edit.current_label": "현재",
     "edit.auto_label": "자동",
     "marker.new": "NEW",
+    "notify.waiting": "{project}: 사용자 입력이 필요합니다",
+    "notify.dead": "{project}: pane이 종료되었습니다",
+    "detail.activity": "현재 작업",
+    "hint.attention": "A 주의 필요",
+    "attention.title": "주의 필요",
 }

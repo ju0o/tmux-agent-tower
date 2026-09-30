@@ -78,3 +78,89 @@ def test_resolve_agent_command_present_binary(monkeypatch):
 
 def test_resolve_agent_command_unknown_label():
     assert config.resolve_agent_command("Nope", {}) is None
+
+
+# -- v0.2.0 Task Awareness settings ----------------------------------
+
+
+def test_default_settings_are_safe_and_quiet(tmp_path, monkeypatch):
+    # Notifications OFF by default; activity/duration display ON by
+    # default (purely informational, no external side effect).
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "nope" / "config.toml")
+    cfg = config.load_config()
+    assert cfg["show_activity"] is True
+    assert cfg["show_status_duration"] is True
+    assert cfg["notifications"] is False
+    assert cfg["notification_kinds"]["waiting"] is True
+    assert cfg["notification_kinds"]["dead"] is False
+
+
+def test_settings_can_be_overridden(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        "\n".join([
+            "show_activity = false",
+            "show_status_duration = false",
+            "notifications = true",
+            "",
+            "[notifications]",
+            "waiting = false",
+            "dead = true",
+        ]),
+        encoding="utf-8",
+    )
+
+    old = config.CONFIG_FILE
+    config.CONFIG_FILE = config_file
+    try:
+        cfg = config.load_config()
+    finally:
+        config.CONFIG_FILE = old
+
+    assert cfg["show_activity"] is False
+    assert cfg["show_status_duration"] is False
+    assert cfg["notifications"] is True
+    assert cfg["notification_kinds"]["waiting"] is False
+    assert cfg["notification_kinds"]["dead"] is True
+
+
+def test_top_level_notifications_bool_and_section_do_not_collide(tmp_path):
+    # Regression: the top-level `notifications = true` toggle and the
+    # `[notifications]` *section* both existing in the same file must not
+    # clobber each other regardless of which comes first in the file.
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        "\n".join([
+            "notifications = true",
+            "",
+            "[notifications]",
+            "waiting = true",
+            "dead = true",
+        ]),
+        encoding="utf-8",
+    )
+
+    old = config.CONFIG_FILE
+    config.CONFIG_FILE = config_file
+    try:
+        cfg = config.load_config()
+    finally:
+        config.CONFIG_FILE = old
+
+    assert cfg["notifications"] is True
+    assert cfg["notification_kinds"]["waiting"] is True
+    assert cfg["notification_kinds"]["dead"] is True
+
+
+def test_malformed_config_still_yields_safe_notification_defaults(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("{ not valid [ toml", encoding="utf-8")
+
+    old = config.CONFIG_FILE
+    config.CONFIG_FILE = config_file
+    try:
+        cfg = config.load_config()
+    finally:
+        config.CONFIG_FILE = old
+
+    assert cfg["notifications"] is False

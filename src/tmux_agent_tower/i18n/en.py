@@ -103,4 +103,9 @@ STRINGS = {
     "edit.current_label": "Current",
     "edit.auto_label": "Auto",
     "marker.new": "NEW",
+    "notify.waiting": "{project}: needs your input",
+    "notify.dead": "{project}: pane has exited",
+    "detail.activity": "Activity",
+    "hint.attention": "A Attention",
+    "attention.title": "Needs attention",
 }
