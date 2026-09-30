@@ -1,5 +1,7 @@
 # Tmux Agent Tower
 
+**English | [한국어](README.ko.md)**
+
 See what your coding agents are doing across tmux panes.
 
 If you run Codex, Claude Code, OpenCode, Grok CLI, or Cursor Agent CLI in
@@ -14,15 +16,15 @@ AGENT CONTROL TOWER
 ● WORKING 3  ! WAITING 1  ○ IDLE 2  ? UNKNOWN 0  × DEAD 0
 
 ▼ MAINPC  ●2 !1 ○1 ?0 ×0
-  Agent-Relay          Codex       ● WORKING    SEEN
-> Insurance CRM        Codex       ! WAITING    NEW
-  JuHome               Grok        ○ IDLE       SEEN
+  alpha-api            Codex       ● WORKING    SEEN
+> web-app              Codex       ! WAITING    NEW
+  docs                 Grok        ○ IDLE       SEEN
 
 ▼ ASUS  ●1 !0 ○1 ?0 ×0
-  CRM Backend          Claude      ● WORKING    NEW
-  JuPaper              OpenCode    ○ IDLE       SEEN
+  billing-service      Claude      ● WORKING    NEW
+  internal-notes       OpenCode    ○ IDLE       SEEN
 
-↑↓ Move   Enter Open   E Rename   R Refresh   Q/Ctrl+C Exit
+↑↓ Move   Enter Open   E Rename   N Add project   W New workspace   R Refresh   Q/Ctrl+C Exit
 ```
 
 ## What it is (and isn't)
@@ -87,9 +89,11 @@ Inside any tmux session:
 tower
 ```
 
-This creates (or jumps to) a `CONTROL` window running the TUI. From
-anywhere else in tmux, `Ctrl+b` then `w` returns you to it (opt-in, see
-below).
+This creates (or jumps to) a `CONTROL` window running the TUI -- **not** in
+the pane you typed it from. There's one Tower per session, and `tower`
+always takes you to that same place, the same way `Ctrl+b` then `w` does
+from anywhere else in tmux (opt-in, see below). If you specifically want
+the TUI running in the current pane instead, use `tower --here`.
 
 | Key | Action |
 |---|---|
@@ -163,17 +167,31 @@ asus:ASUS
 The Tower will then show that host's panes too (title/command-based
 status only -- see limitations below), refreshed less frequently than the
 local host, and marked `UNKNOWN`/offline gracefully if it's unreachable.
-Nothing is installed on the remote host.
+Nothing is installed on the remote host. The Workspace Launcher (`N`/`W`)
+can also target this host: it runs one bounded, read-only `find` over SSH
+to discover git repositories there too, with the same manual-path (`B`)
+fallback if that turns up nothing.
+
+### Language
+
+The TUI asks once, on its very first run, whether to show Korean or
+English, and remembers the answer in
+`~/.config/tmux-agent-tower/config.toml` (`language = "ko"` / `"en"`).
+There's no in-app way to change it again yet in this release -- edit that
+line by hand and restart `tower` if you want to switch.
 
 ## Supported agents
 
 Codex, Claude Code, OpenCode, Grok CLI, Cursor Agent CLI, and a generic
-shell/SSH fallback for anything else. Detection quality varies by agent --
-see [`docs/STATUS_ENGINE.md`](docs/STATUS_ENGINE.md) for exactly what
-evidence each adapter looks for, and its known false-positive/negative
-risks. OpenCode's adapter in particular was written without a live sample
-to test against and should be treated as a starting point, not a verified
-pattern.
+shell/SSH fallback for anything else. Every adapter's WORKING/IDLE (and,
+except OpenCode, WAITING) patterns were verified against a real, live
+session of that CLI -- see [`docs/STATUS_ENGINE.md`](docs/STATUS_ENGINE.md)
+for exactly what evidence each one looks for. OpenCode's own
+permission/approval prompt specifically was never observed live (the
+tested session auto-approved writes), so WAITING falls back to a generic
+pattern for that agent only -- see `adapters/opencode.py`'s docstring.
+Detection is inherently best-effort and will drift as these CLIs' UIs
+change; PRs updating a pattern (with a sanitized fixture) are welcome.
 
 ## Status meanings
 

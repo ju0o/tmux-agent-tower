@@ -76,7 +76,7 @@ def test_cursor_matches_by_full_cmdline_not_short_command():
     # identified via the full process command line instead (real observed
     # shape: the wrapper binary lives under a "cursor-agent" versions dir).
     cmdline = "/home/user/.local/bin/agent --use-system-ca /home/user/.local/share/cursor-agent/versions/1.0/index.js"
-    adapter = resolve_adapter("agent", "JuContentBox Session", cmdline=cmdline)
+    adapter = resolve_adapter("agent", "My Project Session", cmdline=cmdline)
     assert adapter.name == "Cursor"
 
 
