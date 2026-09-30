@@ -8,12 +8,17 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 
 from . import __version__
 from .i18n import t
+from .server import httpapi, netutil
 from .tmux import capture as tmux_capture
 from .tmux import registration
 from .ui.tower import run as run_ui, load_remote_hosts
+
+DEFAULT_SERVE_PORT = 4312
 
 
 def _print_result(label: str, ok: bool, detail: str = "", warn: bool = False) -> bool:
@@ -114,6 +119,65 @@ def focus_active_tower() -> None:
     registration.focus_pane(pane_id)
 
 
+def run_serve(lan: bool, port: int) -> None:
+    """``tower serve``: Tower Remote's tiny read/prompt-send HTTP API +
+    mobile web UI (see ``server/httpapi.py`` for the security boundary).
+
+    Binds to localhost only unless ``--lan`` is explicitly given -- never
+    LAN-reachable by default (see docs/ARCHITECTURE.md's Tower Remote
+    section for why an explicit opt-in matters here).
+    """
+
+    session = tmux_capture.current_session()
+    if not session:
+        print(t("cli.no_tmux_session"), file=sys.stderr)
+        raise SystemExit(1)
+
+    own_pane_id = tmux_capture.current_pane_id()
+
+    host = "0.0.0.0" if lan else "127.0.0.1"
+    allowed_hosts = ["localhost", "127.0.0.1"]
+    lan_ip = netutil.detect_lan_ip() if lan else None
+    if lan_ip:
+        allowed_hosts.append(lan_ip)
+
+    try:
+        server = httpapi.create_server(host, port, session, own_pane_id, allowed_hosts)
+    except OSError as exc:
+        print(f"Could not start Tower Remote on port {port}: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    print("TMUX AGENT TOWER REMOTE")
+    print()
+    print(f"Local:  http://127.0.0.1:{port}")
+    if lan:
+        if lan_ip:
+            print(f"LAN:    http://{lan_ip}:{port}")
+        else:
+            print("LAN:    (could not detect a LAN IP address on this machine)")
+    else:
+        print("(localhost only -- pass --lan to allow your phone to connect)")
+    print()
+    code = server.pairing.current_code()
+    print(f"Pairing code: {code}  (valid 5 minutes, one-time use)")
+    print("Open the address above on your phone's browser and enter this code.")
+    print()
+    print("Press Ctrl+C to stop.")
+    sys.stdout.flush()
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        while thread.is_alive():
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print()
+        print("Stopping Tower Remote...")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def cli(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="tower", description="A local-first TUI control tower for monitoring coding agents across tmux panes.")
     parser.add_argument("--version", action="store_true", help="print version and exit")
@@ -128,7 +192,23 @@ def cli(argv=None) -> None:
         action="store_true",
         help="jump to the currently active Tower pane; does not start a new Tower (for a Ctrl+b w-style binding)",
     )
+
+    subparsers = parser.add_subparsers(dest="command")
+    serve_parser = subparsers.add_parser(
+        "serve", help="start Tower Remote: a small local web UI + API for checking status from your phone"
+    )
+    serve_parser.add_argument(
+        "--lan",
+        action="store_true",
+        help="bind to all interfaces so devices on your LAN can connect (default: localhost only)",
+    )
+    serve_parser.add_argument("--port", type=int, default=DEFAULT_SERVE_PORT, help=f"port to listen on (default: {DEFAULT_SERVE_PORT})")
+
     args = parser.parse_args(argv)
+
+    if args.command == "serve":
+        run_serve(args.lan, args.port)
+        return
 
     if args.version:
         print(f"tower {__version__}")

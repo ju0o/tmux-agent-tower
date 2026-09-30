@@ -72,6 +72,22 @@ while P5 remains a deliberate non-goal for now.
 
 ## P10 - Optional GUI
 
+## Tower Remote (experimental, `feat/tower-remote` branch only)
+
+A small local web UI + API (`tower serve` / `tower serve --lan`) for
+checking status and sending an explicit prompt to one pane from a phone
+browser, LAN only, pairing-gated. See `docs/REMOTE.md` for the full scope,
+security model, and known gaps. Deliberately developed on its own branch
+and worktree, never directly on `main`, until it's been dogfooded enough
+to trust -- see the PM decision that started this branch for the full
+phased plan (main stabilization first, then this).
+
+This is the first and, for now, only allowed sliver of P5 "Action Layer":
+sending a user-typed, user-selected, explicitly-sent prompt into one
+pane the user picked -- everything else P5 originally described
+(auto-approval, kill/restart/interrupt, batched/automatic prompts) is
+still permanently out of scope, on this branch and on `main`.
+
 ## Known limitations from the P4 slice (resolved -- see below)
 
 This section originally listed three P4 gaps. All three were actually
