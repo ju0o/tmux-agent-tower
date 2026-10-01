@@ -35,8 +35,33 @@ bumped until this merges.
   same-Wi-Fi use (plain HTTP; documented as trusted-LAN-only).
 * **One-pane prompt send** (`/api/prompt`) -- explicit pane, typed text, and an explicit tap:
   explicit pane, explicit typed text, explicit tap, paired token, and a
-  live stale/wrong-pane re-check before `tmux send-keys -l`. No exec, no
-  filesystem, no raw transcript, no interrupt/kill/approve.
+  live stale/wrong-pane re-check before anything is sent. No exec, no
+  filesystem, no raw transcript, no interrupt/kill.
+* **Input transport + submit verification** -- the text goes in as one
+  bracketed paste (`tmux load-buffer -` from stdin, then
+  `paste-buffer -d -p`) followed by exactly one Enter. Measured live on
+  Codex 0.159.3, Claude Code 2.1.283 and OpenCode 1.18.32: `send-keys -l`
+  plus an immediate Enter left the text sitting in Codex's composer
+  (the Enter became a newline in the paste burst), while bracketed paste
+  plus one Enter submitted short, Korean, 1200-char and multiline/code
+  prompts on all three. Before sending, Tower snapshots the pane; after
+  the single Enter it watches for up to 3s for adapter-specific evidence
+  (Codex: Working line or `›` echo plus idle hint; Claude: active verb or
+  a new "<Verb>ed for Ns" summary; OpenCode: `esc interrupt` or a new
+  `▣ ... Ns` line). The response carries `submitted: true|false` and
+  `reason: submit_not_confirmed`; it never retries Enter and never fakes
+  success. Phone and TUI share `control.actions.send_text` /
+  `submit_input` / `send_prompt`. The phone button shows "전송 중..." then
+  "제출 확인됨" or "제출 확인 실패", blocks a second tap while in flight,
+  and clears the textarea only when the submit was confirmed.
+* **Claude Code 2.1.x detection fixes** -- the pane title is a static
+  "✳ <conversation title>" while idle *and* while working, so it is no
+  longer read as a spinner; idle is read from the empty/placeholder box or
+  the "? for shortcuts" / "← for agents" footer; the finished-turn summary
+  uses any verb ("Brewed/Crunched/Cooked ... for Ns"), not only "Cooked",
+  and the Result body is the last turn only. `capture_pane` drops trailing
+  blank rows so tall detached windows (OpenCode footer 40+ rows above the
+  bottom) classify like normal panes.
 * **Pairing hardening** -- 6-digit single-use 5-minute code, 7-wrong-guess
   lockout with an indistinguishable `invalid_code` response, local-only
   `r` + Enter regeneration (no HTTP path), tokens at `0600` in a `0700`

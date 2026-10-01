@@ -61,12 +61,24 @@ token file is deleted.
   Tower would show in its own TUI -- same underlying data, same adapters,
   same status engine. Nothing is re-implemented; `server/httpapi.py`
   drives a real, headless `ui.tower.Tower` instance directly.
-* Let you pick one pane and send it a prompt you typed, via
-  `tmux send-keys`. A card opens the detail screen; it does not send.
-  The send button is a separate tap, and it re-checks that the pane
-  still exists, isn't dead, and still matches the project/agent you
-  last saw (stale/wrong-pane rejection -- a pane_id can be reused after a
-  tmux server restart, same caveat as the `E` edit menu's overrides).
+* Let you pick one pane and send it a prompt you typed. A card opens the
+  detail screen; it does not send. The send button is a separate tap,
+  and it re-checks that the pane still exists, isn't dead, and still
+  matches the project/agent you last saw (stale/wrong-pane rejection --
+  a pane_id can be reused after a tmux server restart, same caveat as
+  the `E` edit menu's overrides).
+* Tell you whether the agent actually took the prompt. The text is
+  delivered as one bracketed paste (`tmux load-buffer -` + `paste-buffer
+  -d -p`) and exactly one Enter; Tower then watches the pane for up to
+  3 s for agent-specific evidence of a new turn (Codex: Working line or
+  the `›` echo with the idle hint back; Claude: active verb or a new
+  "<Verb>ed for Ns" summary; OpenCode: `esc interrupt` or a new `▣ ...
+  Ns` line). The response is `{"ok": true, "submitted": true|false,
+  "reason": ""|"submit_not_confirmed"}`. `submitted: false` means the
+  text was sent but the agent did not visibly start a turn (a modal
+  dialog in the pane, for example); the phone shows "제출 확인 실패",
+  keeps your text in the box, and nothing is retried. Tower never sends
+  a second Enter on its own.
 * Open a pane detail from a card: project, agent, status, duration,
   current activity, pane name, host, and a **LIVE PANE** box. The box is
   plain text from `tmux capture-pane` of the visible recent screen
@@ -162,11 +174,14 @@ token file is deleted.
   against DNS rebinding from a malicious page open in another tab on the
   same network. This is a narrow mitigation, not a substitute for TLS --
   see below.
-* **Prompt send**: literal `tmux send-keys -l` (never interpreted as a
-  key name), a hard length cap (4000 chars), a request body size cap
-  (8KB), and the stale/wrong-pane re-check described above. No shell is
-  ever invoked with the prompt text as an argument -- it can't escape
-  into a host command regardless of its content.
+* **Prompt send**: the text travels over stdin into `tmux load-buffer`
+  and is pasted with `paste-buffer -d -p` (bracketed, buffer deleted
+  after use; never interpreted as a key name and never on an argv), a
+  hard length cap (4000 chars), a request body size cap (8KB), and the
+  stale/wrong-pane re-check described above. The only key Tower sends
+  for a prompt is one `Enter`. No shell is ever invoked with the prompt
+  text as an argument -- it can't escape into a host command regardless
+  of its content.
 
 ## No TLS -- read this before using `--lan`
 
@@ -284,6 +299,15 @@ still a later slice. The MagicDNS URL stays stable, so a phone bookmark
 keeps working across starts.
 
 ## Known gaps (v0 MVP)
+
+* **Submit verification is measured for Codex, Claude Code and OpenCode
+  only.** Cursor and Grok panes use the generic rule (confirmed only if
+  the pane turns `WORKING` within 3 s); a fast turn there reports
+  `submitted: false` even when it ran. Shell panes get the text plus one
+  Enter and no confirmation. A Claude Code onboarding dialog (seen live:
+  "Teach auto mode about your environment?") swallows pasted text and
+  is reported as `submit_not_confirmed`; Tower does not detect that
+  dialog as an attention state yet, so dismiss it on the PC.
 
 * **MagicDNS + HTTPS certificates must be enabled on your tailnet** for
   `--tailscale`. Serve's HTTPS mode needs a hostname to issue a

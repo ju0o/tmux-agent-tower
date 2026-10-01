@@ -364,14 +364,19 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
                 self._send_json(409, source_session_missing_payload(self.server.session))  # type: ignore[attr-defined]
                 return
 
-            ok, reason = send_prompt(self._tower(), pane_key, text, expected_project, expected_agent)
+            outcome = send_prompt(self._tower(), pane_key, text, expected_project, expected_agent)
+            ok, reason = outcome.as_tuple()
             if not ok and reason == "send_failed":
                 self._send_json(502, {"ok": False})
                 return
             if not ok:
                 self._send_json(409, {"ok": False, "error": reason})
                 return
-            self._send_json(200, {"ok": True})
+            self._send_json(
+                200,
+                {"ok": True, "submitted": bool(outcome.submitted), "reason": outcome.reason},
+                no_store=True,
+            )
             return
 
         route = self._pane_route(self.path)

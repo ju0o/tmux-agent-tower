@@ -25,6 +25,7 @@ from .base import (
     PaneContext,
     ResultCandidate,
     BRAILLE_SPINNER_CHARS,
+    prompt_head,
     prose_body,
     result_fingerprint,
     title_has_spinner,
@@ -152,6 +153,22 @@ class CodexAdapter(AgentAdapter):
             return "3"
         if _TRUST_RE.search(widget) and _ESC_QUIT_RE.search(widget):
             return "Escape"
+        return None
+
+    def confirm_submitted(self, before: PaneContext, after: PaneContext, text: str) -> Optional[bool]:
+        # Measured on Codex 0.159: a bracketed paste leaves "› <text>" in the
+        # composer with no idle hint. Once Enter is taken the same line
+        # stays as the transcript echo and either a Working line or the
+        # finished "Worked for" + idle hint follows.
+        tail = after.tail(30)
+        if _WORKING_RE.search(tail) or title_has_spinner(after.title, BRAILLE_SPINNER_CHARS):
+            return True
+        head = prompt_head(text)
+        echoed = bool(head) and any(
+            line.strip().startswith("›") and head in line for line in after.lines
+        )
+        if echoed and (_IDLE_HINT_RE.search(tail) or _WORKED_FOR_RE.search(tail)):
+            return True
         return None
 
     def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:

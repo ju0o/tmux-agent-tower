@@ -33,10 +33,21 @@ def run_tmux(args: Sequence[str], capture: bool = True, timeout: float = DEFAULT
 
 
 def capture_pane(pane_id: str, lines: int = 30) -> list:
+    """Visible screen text with trailing blank rows removed.
+
+    A tall pane whose TUI draws in its upper part leaves dozens of empty
+    rows below it; adapters read the bottom N lines, so those rows would
+    hide the real widget (caught live: a 94-row OpenCode pane read as
+    UNKNOWN while its idle footer sat 41 lines above the bottom).
+    """
+
     output = run_tmux(["capture-pane", "-p", "-t", pane_id, "-S", f"-{lines}"])
     if not output:
         return []
-    return output.split("\n")
+    rows = output.split("\n")
+    while rows and not rows[-1].strip():
+        rows.pop()
+    return rows
 
 
 def select_pane(session: str, window_index: str, pane_id: str) -> None:

@@ -8,9 +8,11 @@ Nothing here restarts a fleet, runs a shell, or guesses Enter or y.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from ..state.overrides import FIELDS as OVERRIDE_FIELDS
@@ -179,46 +181,143 @@ def find_prompt_target(
     return False, "not_found", None
 
 
-def send_prompt_to_pane(pane_id: str, text: str) -> bool:
-    """Literal ``send-keys -l`` plus Enter. ``shell=False``."""
+SUBMIT_CONFIRM_SECONDS = 3.0
+SUBMIT_POLL_SECONDS = 0.25
+_SAFE_SUBMIT_KEYS = frozenset({"Enter"})
 
+
+@dataclass
+class SubmitResult:
+    """``ok`` means the text reached the pane. ``submitted`` means the
+    agent was seen taking it as a new turn. They are reported separately
+    so the phone never claims a submit it did not observe."""
+
+    ok: bool
+    submitted: bool = False
+    reason: str = ""
+    pane_id: str = ""
+
+    def as_tuple(self) -> Tuple[bool, str]:
+        return self.ok, self.reason
+
+
+def send_text(pane_id: str, text: str) -> bool:
+    """Deliver text as one bracketed paste.
+
+    Measured live: ``send-keys -l`` followed by Enter is read by Codex as
+    one paste burst and the Enter becomes a newline, so the prompt sat in
+    the composer. ``load-buffer`` + ``paste-buffer -p`` tells the TUI
+    where the paste ends. Korean, multiline, quotes, and code fences
+    arrived intact in Codex, Claude Code, and OpenCode. ``shell=False``.
+    """
+
+    body = (text or "").rstrip("\n")
+    if not body:
+        return False
+    name = f"tower-prompt-{os.getpid()}-{time.monotonic_ns()}"
     try:
-        literal = subprocess.run(
-            ["tmux", "send-keys", "-t", pane_id, "-l", text],
+        loaded = subprocess.run(
+            ["tmux", "load-buffer", "-b", name, "-"],
+            input=body.encode("utf-8"),
             capture_output=True,
             timeout=SEND_TIMEOUT,
             check=False,
         )
-        if literal.returncode != 0:
+        if loaded.returncode != 0:
             return False
-        # A full-screen composer can drop Enter if it arrives in the same
-        # tick as a literal paste. Dogfood: the text sat in the Codex box
-        # until a later Enter.
-        time.sleep(0.2)
-        enter = subprocess.run(
-            ["tmux", "send-keys", "-t", pane_id, "Enter"],
+        pasted = subprocess.run(
+            ["tmux", "paste-buffer", "-d", "-p", "-b", name, "-t", pane_id],
             capture_output=True,
             timeout=SEND_TIMEOUT,
             check=False,
         )
-        return enter.returncode == 0
+        return pasted.returncode == 0
+    except Exception:
+        subprocess.run(["tmux", "delete-buffer", "-b", name], capture_output=True, check=False)
+        return False
+
+
+def submit_input(pane_id: str, key: str = "Enter") -> bool:
+    """Exactly one submit key. No retry lives here or in any caller."""
+
+    if key not in _SAFE_SUBMIT_KEYS:
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "send-keys", "-t", pane_id, key],
+            capture_output=True,
+            timeout=SEND_TIMEOUT,
+            check=False,
+        )
+        return result.returncode == 0
     except Exception:
         return False
 
 
+def send_prompt_to_pane(pane_id: str, text: str, submit_key: str = "Enter") -> bool:
+    """Paste once, then one submit key."""
+
+    if not send_text(pane_id, text):
+        return False
+    return submit_input(pane_id, submit_key)
+
+
+def _observe(pane_id: str):
+    """Adapter and screen for one pane right now. None if it is gone."""
+
+    from ..adapters import resolve_adapter
+    from ..adapters.base import PaneContext
+
+    raw = tmux_capture.run_tmux(
+        ["list-panes", "-t", pane_id, "-F", "#{pane_title}\x1f#{pane_current_command}"]
+    )
+    if "\x1f" not in raw:
+        return None
+    title, command = raw.split("\x1f", 1)
+    lines = tmux_capture.capture_pane(pane_id, lines=40)
+    ctx = PaneContext(title=title, command=command, lines=tuple(lines))
+    return resolve_adapter(command, title, ""), ctx
+
+
+def confirm_submission(pane_id: str, adapter, before, text: str, timeout: Optional[float] = None) -> bool:
+    """Watch the pane briefly for evidence the agent took the text.
+
+    Nothing is sent from here. False means not confirmed, not failed.
+    """
+
+    deadline = time.monotonic() + (SUBMIT_CONFIRM_SECONDS if timeout is None else timeout)
+    while True:
+        fresh = _observe(pane_id)
+        if fresh is not None:
+            _adapter, after = fresh
+            if adapter.confirm_submitted(before, after, text) is True:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(SUBMIT_POLL_SECONDS)
+
+
 def send_prompt(
     tower, pane_key: str, text: str, expected_project: Optional[str] = None, expected_agent: Optional[str] = None
-) -> Tuple[bool, str]:
-    """One explicit prompt into one still-live local pane."""
+) -> SubmitResult:
+    """One explicit prompt into one still-live local pane, then a short
+    before/after check. One paste, one Enter, no blind retry."""
 
-    if not isinstance(text, str) or not text:
-        return False, "missing_text"
+    if not isinstance(text, str) or not text.strip():
+        return SubmitResult(False, reason="missing_text")
     ok, reason, pane_id = find_prompt_target(tower, pane_key, expected_project, expected_agent)
     if not ok or not pane_id:
-        return False, reason or "not_found"
-    if not send_prompt_to_pane(pane_id, text):
-        return False, "send_failed"
-    return True, ""
+        return SubmitResult(False, reason=reason or "not_found")
+    observed = _observe(pane_id)
+    adapter, before = observed if observed is not None else (None, None)
+    submit_key = adapter.submit_key(before) if adapter is not None else "Enter"
+    if not send_prompt_to_pane(pane_id, text, submit_key):
+        return SubmitResult(False, reason="send_failed", pane_id=pane_id)
+    if adapter is None or before is None:
+        return SubmitResult(True, submitted=False, reason="submit_not_confirmed", pane_id=pane_id)
+    if confirm_submission(pane_id, adapter, before, text):
+        return SubmitResult(True, submitted=True, pane_id=pane_id)
+    return SubmitResult(True, submitted=False, reason="submit_not_confirmed", pane_id=pane_id)
 
 
 def focus_pane(session: str, pane_key: str, own_pane_id: str = "") -> Tuple[bool, str]:

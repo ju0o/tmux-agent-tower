@@ -206,9 +206,11 @@ def _prompt(stdscr, tower, row: dict) -> str:
     )
     if not text:
         return ""
-    ok, reason = send_prompt(tower, row.get("key"), text, row.get("project"), row.get("agent"))
-    if not ok:
-        return reason or t("control.prompt_failed")
+    outcome = send_prompt(tower, row.get("key"), text, row.get("project"), row.get("agent"))
+    if not outcome.ok:
+        return outcome.reason or t("control.prompt_failed")
+    if not outcome.submitted:
+        return t("control.prompt_unconfirmed")
     return t("control.prompt_sent")
 
 

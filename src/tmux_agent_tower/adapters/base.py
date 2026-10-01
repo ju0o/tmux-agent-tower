@@ -238,9 +238,43 @@ class AgentAdapter:
 
         return None
 
+    def submit_key(self, ctx: PaneContext) -> str:
+        """The one tmux key that submits this agent's composer. Measured
+        live for Codex, Claude Code, and OpenCode: a bracketed paste
+        followed by a single Enter. Never sent twice by the caller."""
+
+        return "Enter"
+
+    def confirm_submitted(self, before: PaneContext, after: PaneContext, text: str) -> Optional[bool]:
+        """Did the agent take the text as a new turn?
+
+        True when there is evidence, None when unknown. The default only
+        trusts a WORKING signal; agents with a transcript echo override
+        this so a turn that finishes in two seconds is still confirmed.
+        """
+
+        if self.detect_execution(after) == "WORKING":
+            return True
+        return None
+
 
 def looks_like_generic_waiting(text: str) -> bool:
     return bool(_GENERIC_WAIT_RE.search(text))
+
+
+def prompt_head(text: str, width: int = 24) -> str:
+    """The start of the first non-blank line, used to find the echoed
+    user turn in a transcript without matching on the whole prompt."""
+
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if stripped:
+            return stripped[:width]
+    return ""
+
+
+def count_matches(lines: Sequence[str], pattern: "re.Pattern[str]") -> int:
+    return sum(1 for line in lines if pattern.search(line))
 
 
 def title_has_spinner(title: str, chars: set) -> bool:

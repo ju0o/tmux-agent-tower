@@ -234,7 +234,10 @@ While Tower is open, `V` switches the list to a tmux location tree
 
 Enter stays inside Tower and opens Pane Control for that pane (a window
 row opens its active pane's control view). The live area is the same
-recent `capture-pane` text the phone uses. `P` sends one prompt, `E`
+recent `capture-pane` text the phone uses. `P` sends one prompt as a
+bracketed paste plus a single Enter and reports "Submit confirmed" only
+when the agent visibly started a turn (otherwise the text was sent but
+the submit could not be confirmed; nothing is retried), `E`
 edits the display name, `Y` shows a result, `G` is the only action that
 actually moves to the pane, and `X` asks before `kill-pane` of that
 pane id. Cancel is the default. Tower's own pane cannot be closed from

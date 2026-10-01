@@ -24,6 +24,8 @@ from .base import (
     PaneContext,
     ResultCandidate,
     CLAUDE_SPINNER_CHARS,
+    count_matches,
+    prompt_head,
     prose_body,
     result_fingerprint,
     title_has_spinner,
@@ -43,6 +45,21 @@ _BULLET_RE = re.compile(r"^\s*•\s*(.+?)\s*$")
 # the prompt to be the very last non-blank line -- just present near the
 # bottom of the visible tail.
 _EMPTY_PROMPT_RE = re.compile(r"^\s*[❯>]\s*$", re.MULTILINE)
+# Claude Code 2.1 shows a placeholder suggestion in the empty box, e.g.
+# ❯ Try "fix typecheck errors". The pane title is a static "✳ Claude Code"
+# while idle, so the title glyph is not working evidence for this build.
+_PLACEHOLDER_PROMPT_RE = re.compile(r"^\s*[❯>]\s+Try \"", re.MULTILINE)
+# Idle footers seen live: "⏸ manual mode on · ? for shortcuts" and
+# "⏵⏵ auto mode on (shift+tab to cycle) · ← for agents". While a turn
+# runs the footer switches to "esc to interrupt" and the active verb wins.
+_IDLE_FOOTER_RE = re.compile(r"\? for shortcuts|← for agents|shift\+tab to cycle", re.IGNORECASE)
+# Finished-turn summary, e.g. "✻ Sautéed for 2s · done 5:19 PM" or
+# "✻ Cooked for 32m 41s". A new one after a send proves the turn ran.
+_DONE_LINE_RE = re.compile(r"\b[A-Za-zé]+ed for \d+[smh]", re.IGNORECASE)
+# Same summary but anchored to the line start (optionally after the
+# spinner glyph) so a sentence inside the answer body cannot end a turn.
+# The verb is random per turn (Cooked/Brewed/Crunched/Sautéed/Worked...).
+_RESULT_DONE_RE = re.compile(r"^\s*(?:[✻✳✶✽✢·*]\s+)?[A-Za-zé]+ed for \d+[smh]", re.IGNORECASE)
 _PROCEED_RE = re.compile(r"do you want to proceed\?", re.IGNORECASE)
 # Folder trust picker. The highlighted default observed live is "No, exit".
 # There is no numbered key on that screen, so approve() stays None.
@@ -54,6 +71,23 @@ _COOKED_RE = re.compile(r"\bcooked for\b", re.IGNORECASE)
 _USER_LINE_RE = re.compile(r"^\s*[❯>]\s+\S")
 
 
+def _spinner_title(ctx: PaneContext) -> bool:
+    """A glyph plus a verb in the title (older builds).
+
+    Measured on Claude Code 2.1.283: the title is "✳ Claude Code" before
+    the first turn and "✳ <conversation title>" afterwards, and it did not
+    change at all while a turn ran. A leading ✳ therefore says nothing
+    about execution; only the other glyphs keep their older meaning.
+    """
+
+    title = (ctx.title or "").strip()
+    if not title_has_spinner(title, CLAUDE_SPINNER_CHARS):
+        return False
+    if title.startswith("✳"):
+        return False
+    return title.lower() not in {"✻ claude code", "* claude code"}
+
+
 class ClaudeAdapter(AgentAdapter):
     name = "Claude"
     command_names = ("claude",)
@@ -62,11 +96,14 @@ class ClaudeAdapter(AgentAdapter):
     def classify(self, ctx: PaneContext) -> AdapterResult:
         tail = ctx.tail(20)
 
-        if _ACTIVE_VERB_RE.search(tail) or title_has_spinner(ctx.title, CLAUDE_SPINNER_CHARS):
-            return AdapterResult("WORKING", "active-verb-or-spinner")
+        if _ACTIVE_VERB_RE.search(tail):
+            return AdapterResult("WORKING", "active-verb")
 
-        if _EMPTY_PROMPT_RE.search(tail):
+        if _EMPTY_PROMPT_RE.search(tail) or _PLACEHOLDER_PROMPT_RE.search(tail):
             return AdapterResult("IDLE", "empty-prompt")
+
+        if _IDLE_FOOTER_RE.search(tail) and not _spinner_title(ctx):
+            return AdapterResult("IDLE", "shortcuts-footer")
 
         return AdapterResult(None)
 
@@ -75,7 +112,7 @@ class ClaudeAdapter(AgentAdapter):
 
     def detect_attention(self, ctx: PaneContext) -> str:
         widget = self._widget(ctx)
-        if _ACTIVE_VERB_RE.search(widget) or title_has_spinner(ctx.title, CLAUDE_SPINNER_CHARS):
+        if _ACTIVE_VERB_RE.search(widget) or _spinner_title(ctx):
             return "none"
         if _COOKED_RE.search(widget):
             return "none"
@@ -122,6 +159,24 @@ class ClaudeAdapter(AgentAdapter):
             return "3"
         return None
 
+    def confirm_submitted(self, before: PaneContext, after: PaneContext, text: str) -> Optional[bool]:
+        # Measured on Claude Code 2.1: the pasted text sits in the box as
+        # "❯ <text>". After Enter the echo stays in the transcript, the
+        # box returns to empty or its placeholder, and a short turn ends
+        # with a new "<Verb>ed for Ns" line within two seconds.
+        if _ACTIVE_VERB_RE.search(after.tail(30)):
+            return True
+        if count_matches(after.lines, _DONE_LINE_RE) > count_matches(before.lines, _DONE_LINE_RE):
+            return True
+        head = prompt_head(text)
+        if not head:
+            return None
+        echo_lines = [line for line in after.lines if _USER_LINE_RE.match(line) and head in line]
+        box_is_free = bool(_EMPTY_PROMPT_RE.search(after.tail(8)) or _PLACEHOLDER_PROMPT_RE.search(after.tail(8)))
+        if echo_lines and box_is_free:
+            return True
+        return None
+
     def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:
         # Full capture, not ctx.tail(20): a short reply can leave enough
         # blank padding that the relevant line falls outside the last 20
@@ -144,14 +199,26 @@ class ClaudeAdapter(AgentAdapter):
     def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
         lines = list(ctx.lines)
         full = "\n".join(lines)
-        if _ACTIVE_VERB_RE.search(full) or title_has_spinner(ctx.title, CLAUDE_SPINNER_CHARS):
+        if _ACTIVE_VERB_RE.search(full) or _spinner_title(ctx):
             return None
-        if not _EMPTY_PROMPT_RE.search(ctx.tail(20)):
+        # The box may hold a ghost suggestion (e.g. "❯ pong 7") that a plain
+        # capture cannot tell from typed text; the idle footer still proves
+        # the turn is over.
+        tail = ctx.tail(20)
+        if not (_EMPTY_PROMPT_RE.search(tail) or _IDLE_FOOTER_RE.search(tail)):
             return None
-        cooked = [i for i, line in enumerate(lines) if re.search(r"\bCooked for\b", line)]
+        cooked = [i for i, line in enumerate(lines) if _RESULT_DONE_RE.search(line)]
         if not cooked:
             return None
-        text = prose_body(lines[: cooked[-1]])
+        end = cooked[-1]
+        # Only the last turn: everything after the user's own ❯ line that
+        # precedes the done summary. Older turns stay in scrollback.
+        start = 0
+        for i in range(end - 1, -1, -1):
+            if _USER_LINE_RE.match(lines[i]):
+                start = i + 1
+                break
+        text = prose_body(lines[start:end])
         if text is None:
             return None
         return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

@@ -703,27 +703,43 @@ PAGE_HTML = """<!doctype html>
     }
 
     sending = true;
-    sendBtn.disabled = true;
+    setSendState("전송 중...", true);
     api("/api/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pane_key: p.key, text: text, project: p.project, agent: p.agent }),
     }).then(function (res) {
       sending = false;
-      sendBtn.disabled = false;
-      if (res.status === 200 && res.body.ok) {
-        showToast("전송했습니다.");
+      if (res.status === 200 && res.body.ok && res.body.submitted) {
+        // Only a confirmed submit clears the box.
         promptText.value = "";
+        setSendState("제출 확인됨", false, 2000);
+        showToast("제출 확인됨");
+        pollScreen();
+      } else if (res.status === 200 && res.body.ok) {
+        setSendState("제출 확인 실패", false, 2500);
+        showToast("입력은 전송했지만 제출 여부를 확인하지 못했습니다. 입력한 글은 그대로 두었습니다.");
         pollScreen();
       } else {
+        setSendState("전송", false);
         showToast("전송 실패 (" + (res.body.error || res.status) + ")");
       }
     }).catch(function () {
       sending = false;
-      sendBtn.disabled = false;
+      setSendState("전송", false);
       showToast("Tower에 연결할 수 없습니다.");
     });
   });
+
+  var sendStateTimer = null;
+  function setSendState(label, disabled, revertMs) {
+    sendBtn.textContent = label;
+    sendBtn.disabled = disabled;
+    if (sendStateTimer) { clearTimeout(sendStateTimer); sendStateTimer = null; }
+    if (revertMs) {
+      sendStateTimer = setTimeout(function () { sendBtn.textContent = "전송"; sendBtn.disabled = false; }, revertMs);
+    }
+  }
 
   // -- identity edit: same OverrideStore as the PC's E menu -----------
 

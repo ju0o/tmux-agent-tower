@@ -30,9 +30,14 @@ from .base import (
     AdapterResult,
     PaneContext,
     ResultCandidate,
+    count_matches,
+    prompt_head,
     prose_body,
     result_fingerprint,
 )
+
+# "▣  Build · <model> · 5.2s" closes a turn.
+_TURN_DONE_RE = re.compile(r"▣.*\d+(?:\.\d+)?s\b")
 
 _WORKING_RE = re.compile(r"\besc interrupt\b", re.IGNORECASE)
 _IDLE_HINT_RE = re.compile(r"ctrl\+p commands", re.IGNORECASE)
@@ -49,12 +54,16 @@ class OpenCodeAdapter(AgentAdapter):
     title_hints = ("opencode",)
 
     def classify(self, ctx: PaneContext) -> AdapterResult:
-        tail = ctx.tail(20)
+        # OpenCode runs on the alternate screen, so the whole capture is
+        # the current frame. Its welcome layout centers the prompt box,
+        # which put the idle hint 41 rows above the bottom of a tall pane
+        # (caught live). The status region is one widget either way.
+        full = "\n".join(ctx.lines)
 
-        if _WORKING_RE.search(tail):
+        if _WORKING_RE.search(full):
             return AdapterResult("WORKING", "interrupt-hint")
 
-        if _IDLE_HINT_RE.search(tail):
+        if _IDLE_HINT_RE.search(full):
             return AdapterResult("IDLE", "commands-hint-no-interrupt")
 
         return AdapterResult(None)
@@ -81,6 +90,20 @@ class OpenCodeAdapter(AgentAdapter):
             if "?" in line:
                 return clamp_prompt(line.strip())
         return ""
+
+    def confirm_submitted(self, before: PaneContext, after: PaneContext, text: str) -> Optional[bool]:
+        # Measured on OpenCode 1.18: the submitted message is drawn as a
+        # "┃  <text>" block and "esc interrupt" appears while it runs; a
+        # finished turn adds a "▣ … Ns" line.
+        full = "\n".join(after.lines)
+        if _WORKING_RE.search(full):
+            return True
+        if count_matches(after.lines, _TURN_DONE_RE) > count_matches(before.lines, _TURN_DONE_RE):
+            return True
+        head = prompt_head(text)
+        if head and any(line.strip().startswith("┃") and head in line for line in after.lines):
+            return True
+        return None
 
     def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:
         # Deliberately the FULL capture, not ctx.tail(20): a short response
