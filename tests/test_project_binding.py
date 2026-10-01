@@ -15,29 +15,14 @@ class _FakeTmux:
 
     def run_tmux(self, args, capture=True, timeout=None):
         cmd = args[0]
-        if cmd == "list-windows":
-            return "\n".join(self.windows)
-        if cmd == "list-panes":
-            window = args[args.index("-t") + 1].split(":", 1)[1]
-            return "\n".join(self.windows.get(window, []))
         if cmd == "new-window":
-            name = args[args.index("-n") + 1]
             pane = f"%{self._next}"
             self._next += 1
-            self.windows[name] = [pane]
             self.pids[pane] = "4242"
-            return ""
+            return f"@9\t{pane}"
         if cmd == "display-message":
             pane = args[args.index("-t") + 1]
             return self.pids.get(pane, "")
-        if cmd in ("send-keys", "select-pane", "select-layout", "split-window"):
-            if cmd == "split-window":
-                window = args[args.index("-t") + 1].split(":", 1)[1]
-                pane = f"%{self._next}"
-                self._next += 1
-                self.windows.setdefault(window, []).append(pane)
-                self.pids[pane] = "5252"
-            return ""
         return ""
 
 
@@ -51,7 +36,6 @@ def test_launcher_records_a_project_binding(tmp_path, monkeypatch):
 
     spawn.spawn_local(
         "0",
-        "MAINPC",
         [SpawnTarget(str(project), "Agent-Relay", "Claude")],
         {"Claude": "claude"},
         bindings=store,

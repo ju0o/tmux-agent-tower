@@ -8,6 +8,11 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **Launcher isolation** -- `N` always opens a new window, and `W` splits
+  and applies layout only inside the one window that launch created.
+  The host label is not the window name. Later commands use the window
+  id and pane id tmux returns, so a duplicate name is not reused and an
+  existing window is not retiled. The client stays where it was (`-d`).
 * **Project binding** -- the Workspace Launcher records the pane id,
   project path, project name, agent, session, and the pane's process id
   when it creates a pane. That binding is the project name until the user

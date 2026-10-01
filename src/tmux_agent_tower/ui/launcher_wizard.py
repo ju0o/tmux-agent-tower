@@ -23,7 +23,7 @@ from ..launcher.discovery import (
     manual_path_entry,
     ProjectEntry,
 )
-from ..launcher.spawn import SpawnTarget, spawn_local, spawn_remote
+from ..launcher.spawn import SpawnTarget, launch_window_name, spawn_local, spawn_remote
 from ..state.bindings import ProjectBindingStore
 from .widgets import is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add, show_message_screen
 
@@ -252,12 +252,15 @@ def run_launcher(stdscr, tower, multi: bool, state_dir: Path) -> None:
         for p, (_, agent) in zip(projects, final_rows)
     ]
 
+    # host_label is the machine, not a tmux window. The window name comes
+    # from the projects, and spawn addresses the new window by id.
+    window_name = launch_window_name(targets)
     if is_remote:
-        results = spawn_remote(host_key, host_label, targets, cfg["agents"], layout=layout)
+        results = spawn_remote(host_key, window_name, targets, cfg["agents"], layout=layout)
     else:
         bindings = ProjectBindingStore(state_dir / "project-bindings.json")
         results = spawn_local(
-            tower.session, host_label, targets, cfg["agents"], layout=layout, bindings=bindings
+            tower.session, targets, cfg["agents"], layout=layout, bindings=bindings
         )
 
     for p in projects:
