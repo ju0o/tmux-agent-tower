@@ -40,7 +40,10 @@ def enter_intent(row: Optional[dict]) -> str:
 
     if not row or row.get("offline") or row.get("placeholder"):
         return "ignore"
-    if row.get("kind") == "window" or row.get("pane_id") or row.get("key"):
+    if row.get("kind") == "window":
+        # Window labels are not rows anymore; nothing to open.
+        return "ignore"
+    if row.get("pane_id") or row.get("key"):
         return "control"
     return "ignore"
 

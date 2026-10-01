@@ -13,7 +13,6 @@ def test_enter_opens_control_and_does_not_focus(tmp_path, monkeypatch):
     monkeypatch.setattr(tower_module, "HOST_FILE", tmp_path / "config" / "host")
     monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
     moved = []
-    monkeypatch.setattr(tower_module, "active_pane_in_window", lambda session, index: "%51")
     monkeypatch.setattr(
         "tmux_agent_tower.control.actions.focus_local_pane",
         lambda *args, **kwargs: moved.append(args) or True,
@@ -28,11 +27,13 @@ def test_enter_opens_control_and_does_not_focus(tmp_path, monkeypatch):
     assert tower.control_key() == "%44"
     assert moved == []
 
+    # A window label is not a row: Enter opens nothing and moves nothing.
     tower.visible_rows = [
         {"kind": "window", "key": "win:0:1", "session": "0", "window_index": "1", "remote": False}
     ]
     tower.selected = 0
-    assert tower.control_key() == "%51"
+    assert actions.enter_intent(tower.visible_rows[0]) == "ignore"
+    assert tower.control_key() is None
     assert moved == []
 
 

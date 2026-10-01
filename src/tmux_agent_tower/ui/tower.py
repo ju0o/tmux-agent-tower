@@ -29,7 +29,6 @@ from ..tmux import capture as tmux_capture
 from ..tmux import discovery
 from ..tmux import registration
 from ..control.actions import enter_intent, update_identity
-from ..tmux.navigation import active_pane_in_window
 from . import render
 from .launcher_wizard import run_launcher
 from .widgets import is_backspace, is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
@@ -90,11 +89,13 @@ def load_remote_hosts() -> List[Dict[str, str]]:
 
 
 def navigator_rows(panes: List[Dict]) -> List[Dict]:
-    """Local panes grouped under a selectable window row.
+    """Local panes in session/window order, each tagged with its group.
 
-    Remote rows stay at the end. They are visible, and Enter does not
-    move the PC to them. Grouping follows session + window index, so a
-    renamed window is a label change, not a different target.
+    Only panes are rows: a window is a label drawn above its panes
+    (``nav_group``), never something the cursor lands on or Enter opens.
+    Remote rows stay at the end, untagged. Grouping follows session +
+    window index, so a renamed window is a label change, not a different
+    target.
     """
 
     local = [row for row in panes if not row.get("remote") and row.get("pane_id")]
@@ -114,25 +115,12 @@ def navigator_rows(panes: List[Dict]) -> List[Dict]:
     out: List[Dict] = []
     for key in order:
         session, index, name = key
-        sample = buckets[key][0]
-        out.append(
-            {
-                "kind": "window",
-                "key": f"win:{session}:{index}",
-                "session": session,
-                "window_index": index,
-                "window_name": name,
-                "host": sample.get("host", ""),
-                "project": t("nav.window").format(index=index, name=name),
-                "agent": "",
-                "status": "",
-                "remote": False,
-                "pane_id": "",
-            }
-        )
+        label = t("nav.window").format(index=index, name=name)
         for row in buckets[key]:
             item = dict(row)
             item["kind"] = "pane"
+            item["nav_group"] = f"win:{session}:{index}"
+            item["nav_group_label"] = label
             out.append(item)
     for row in remote:
         item = dict(row)
@@ -435,10 +423,13 @@ class Tower:
 
     def _build_visual(self) -> None:
         if self.navigator_mode:
+            # Session and window are labels only. The cursor moves over
+            # panes; a window line is a divider above its panes.
             visual = []
             seen = []
+            current_group = None
             for idx, row in enumerate(self.visible_rows):
-                if row.get("kind") == "window":
+                if row.get("nav_group"):
                     label = f'Session {row.get("session")}'
                 elif row.get("remote"):
                     label = row.get("host") or ""
@@ -447,6 +438,10 @@ class Tower:
                 if label and label not in seen:
                     seen.append(label)
                     visual.append({"type": "header", "host": label})
+                group = row.get("nav_group")
+                if group and group != current_group:
+                    visual.append({"type": "header", "host": row.get("nav_group_label") or "", "level": "window"})
+                current_group = group
                 visual.append({"type": "data", "row": row, "row_index": idx})
             self.visual = visual
             return
@@ -503,8 +498,8 @@ class Tower:
     def control_key(self) -> Optional[str]:
         """Enter. Opens the in-Tower control view. Does not move tmux.
 
-        A window row resolves that window's active pane id and opens it.
-        A missing window refreshes and stays on the list.
+        Only panes are rows, so Enter always names one pane id; a window
+        label is not selectable and cannot be opened.
         """
 
         if not self.visible_rows:
@@ -512,13 +507,6 @@ class Tower:
         row = self.visible_rows[self.selected]
         if enter_intent(row) != "control":
             return None
-        if row.get("kind") == "window":
-            pane_id = active_pane_in_window(str(row.get("session") or ""), str(row.get("window_index") or ""))
-            if not pane_id:
-                self.notice = "stale"
-                self.load()
-                return None
-            return pane_id
         if row.get("pane_id"):
             self.visits.mark_seen(self.session, row["pane_id"])
         return row.get("key")
@@ -659,13 +647,6 @@ def _duration_text(tower: Tower, row: Dict) -> str:
 
 
 def _build_detail_fields(tower: Tower, row: Dict) -> List[Tuple[str, str]]:
-    if row.get("kind") == "window":
-        return [
-            (t("detail.session"), row.get("session") or ""),
-            (t("detail.window"), f'{row.get("window_index")}: {row.get("window_name") or ""}'),
-            (t("detail.nav_target"), t("detail.nav_window_hint")),
-        ]
-
     status = row["status"]
     status_text = f'{STATUS_SYMBOL.get(status, "?")} {t("status." + status)}'
     duration = _duration_text(tower, row)
@@ -716,14 +697,12 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
 
     for i, item in enumerate(tower.visual):
         if item["type"] == "header":
-            physical.append({"kind": "header", "item_index": i, "host": item["host"]})
+            physical.append({"kind": "header", "item_index": i, "host": item["host"], "level": item.get("level", "host")})
             continue
 
         row = item["row"]
         row_index = item["row_index"]
         physical.append({"kind": "primary", "row": row, "row_index": row_index})
-        if row.get("kind") == "window":
-            continue
 
         if narrow:
             physical.append({"kind": "agent_status", "row": row, "row_index": row_index})
@@ -827,6 +806,11 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
         y = start_y + offset
 
         if p["kind"] == "header":
+            if p.get("level") == "window":
+                # A window is a divider above its panes, not a row.
+                label = f'  ┄ {p["host"]} '
+                safe_add(stdscr, y, 0, label + "┄" * max(0, width - render.display_width(label) - 1), curses.A_DIM)
+                continue
             label = f'── {p["host"]} '
             safe_add(stdscr, y, 0, label + "─" * max(0, width - len(label) - 1), curses.A_BOLD)
             continue
@@ -840,11 +824,6 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
 
         if is_selected:
             safe_add(stdscr, y, 0, " " * max(1, width - 1), base_attr)
-
-        if p["kind"] == "primary" and row.get("kind") == "window":
-            marker = ">" if is_selected else " "
-            safe_add(stdscr, y, 0, f"{marker} {row.get('project') or ''}", base_attr if is_selected else curses.A_BOLD)
-            continue
 
         if p["kind"] == "primary":
             marker = ">" if is_selected else " "

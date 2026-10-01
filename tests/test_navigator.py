@@ -27,7 +27,7 @@ def _pane(pane_id, window_index, window_name, pane_index="0", active=False, sess
     }
 
 
-def test_navigator_groups_panes_under_windows_without_using_names_as_ids():
+def test_navigator_windows_are_labels_and_only_panes_are_rows():
     rows = navigator_rows(
         [
             _pane("%6", "0", "main", active=True),
@@ -37,25 +37,47 @@ def test_navigator_groups_panes_under_windows_without_using_names_as_ids():
             {"key": "asus:%43", "remote": True, "pane_id": "%43", "host": "ASUS", "session": "0", "window_index": "2", "window_name": "ssh"},
         ]
     )
-    kinds = [(row["kind"], row.get("pane_id") or row["key"]) for row in rows]
-    assert kinds == [
-        ("window", "win:0:0"),
-        ("pane", "%6"),
-        ("pane", "%44"),
-        ("window", "win:0:1"),
-        ("pane", "%51"),
-        ("pane", "%52"),
-        ("pane", "%43"),
-    ]
+    assert all(row["kind"] == "pane" for row in rows)
+    assert [row["pane_id"] for row in rows] == ["%6", "%44", "%51", "%52", "%43"]
+    assert [row.get("nav_group") for row in rows] == ["win:0:0", "win:0:0", "win:0:1", "win:0:1", None]
+    assert rows[0]["nav_group_label"] == rows[1]["nav_group_label"]
+    assert "main" in rows[0]["nav_group_label"]
     assert rows[-1]["remote"] is True
+
+
+def test_navigator_visual_draws_a_window_divider_once_per_group(tmp_path, monkeypatch):
+    from tmux_agent_tower.ui import tower as tower_module
+
+    monkeypatch.setattr(tower_module, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(tower_module, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(tower_module, "HOST_FILE", tmp_path / "config" / "host")
+    monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
+    tower = tower_module.Tower("0", own_pane_id="%6")
+    tower.navigator_mode = True
+    tower.rows = [_pane("%6", "0", "main"), _pane("%44", "0", "main", pane_index="1"), _pane("%51", "1", "agents")]
+    tower._apply_filter()
+
+    assert [row["pane_id"] for row in tower.visible_rows] == ["%6", "%44", "%51"]
+    headers = [(item["host"], item.get("level")) for item in tower.visual if item["type"] == "header"]
+    assert headers[0] == ("Session 0", None)
+    assert [h for h in headers if h[1] == "window"] == [
+        (tower.visible_rows[0]["nav_group_label"], "window"),
+        (tower.visible_rows[2]["nav_group_label"], "window"),
+    ]
+    # The cursor cycles over panes only.
+    tower.selected = 2
+    tower.move_down()
+    assert tower.selected == 0
+    assert tower.control_key() == "%6"
 
 
 def test_renamed_window_is_only_a_label():
     before = navigator_rows([_pane("%44", "0", "main")])
     after = navigator_rows([_pane("%44", "0", "renamed")])
-    assert before[1]["pane_id"] == after[1]["pane_id"] == "%44"
-    assert before[1]["key"] == after[1]["key"] == "%44"
-    assert after[0]["window_name"] == "renamed"
+    assert before[0]["pane_id"] == after[0]["pane_id"] == "%44"
+    assert before[0]["key"] == after[0]["key"] == "%44"
+    assert before[0]["nav_group"] == after[0]["nav_group"] == "win:0:0"
+    assert "renamed" in after[0]["nav_group_label"]
 
 
 def test_enter_prefers_pane_id_over_window_index(monkeypatch):

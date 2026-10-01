@@ -230,10 +230,11 @@ and puts the recorded `w` command back. `tower --focus` still only
 navigates; it never starts a new TUI.
 
 While Tower is open, `V` switches the list to a tmux location tree
-(session, window, pane id). The project/agent list stays the default.
+(session, window, pane id). Sessions and windows are dividers only; the
+cursor moves over panes. The project/agent list stays the default.
 
-Enter stays inside Tower and opens Pane Control for that pane (a window
-row opens its active pane's control view). The live area is the same
+Enter stays inside Tower and opens Pane Control for that pane (window
+dividers cannot be selected or opened). The live area is the same
 recent `capture-pane` text the phone uses. `P` sends one prompt as a
 bracketed paste plus a single Enter and reports "Submit confirmed" only
 when the agent visibly started a turn (otherwise the text was sent but

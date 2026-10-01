@@ -314,7 +314,7 @@ PAGE_HTML = """<!doctype html>
           try { localStorage.setItem(TOKEN_KEY, token); } catch (e) {}
           pairScreen.style.display = "none";
           main.style.display = "block";
-          pollList();
+          startTimers();
         } else {
           err.textContent = "코드가 틀렸거나 만료되었습니다.";
         }
@@ -443,11 +443,16 @@ PAGE_HTML = """<!doctype html>
   }
 
   function pollList() {
-    if (document.hidden) return;
+    // A status poll from the pair screen has no token. Its 401 used to
+    // arrive after a successful pair and hide the dashboard again.
+    if (document.hidden || !token) return;
+    var sentToken = token;
     api("/api/status").then(function (res) {
+      if (token !== sentToken) return;
       if (res.status === 401) {
         try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
         token = null;
+        stopTimers();
         closeDetail();
         main.style.display = "none";
         pairScreen.style.display = "flex";
@@ -696,7 +701,7 @@ PAGE_HTML = """<!doctype html>
     if (p.attention === "input_required") {
       var who = p.agent || "Agent";
       var asked = p.attention_prompt || "";
-      if (!window.confirm(who + "에게 답변을 보냅니다.\n" + asked + "\n\n전송할까요?")) return;
+      if (!window.confirm(who + "에게 답변을 보냅니다.\\n" + asked + "\\n\\n전송할까요?")) return;
     }
     if (p.agent === "Shell" || p.agent === "SSH") {
       if (!window.confirm("이 pane은 일반 셸입니다. 입력한 내용이 그대로 실행됩니다. 보낼까요?")) return;
@@ -795,6 +800,7 @@ PAGE_HTML = """<!doctype html>
   // -- polling lifecycle: nothing runs while the page is hidden -------
 
   function startTimers() {
+    if (!token) return;
     if (listTimer) clearInterval(listTimer);
     listTimer = setInterval(pollList, LIST_POLL_MS);
     pollList();
@@ -813,8 +819,8 @@ PAGE_HTML = """<!doctype html>
   if (token) {
     pairScreen.style.display = "none";
     main.style.display = "block";
+    startTimers();
   }
-  startTimers();
 })();
 </script>
 </body>

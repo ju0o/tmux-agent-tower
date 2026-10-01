@@ -251,6 +251,16 @@ def test_capture_pane_drops_trailing_blank_rows(monkeypatch):
     assert capture.capture_pane("%1") == ["a", "b"]
 
 
+def test_pairing_is_not_kicked_back_by_an_unauthenticated_status_poll():
+    html = webui.PAGE_HTML
+    poll = html.split("function pollList()")[1].split("function fillDetailMeta")[0]
+    assert "if (document.hidden || !token) return;" in poll
+    assert "if (token !== sentToken) return;" in poll
+    boot = html.split("document.addEventListener(\"visibilitychange\"")[1]
+    assert boot.count("startTimers();") == 2
+    assert "if (token)" in boot
+
+
 def test_phone_keeps_text_unless_submit_was_confirmed():
     html = webui.PAGE_HTML
     handler = html.split('sendBtn.addEventListener("click"')[1].split("var sendStateTimer")[0]

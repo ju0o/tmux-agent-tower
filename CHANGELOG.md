@@ -25,8 +25,9 @@ bumped until this merges.
   (confirm first; Tower's own pane is refused) all go through one action
   layer shared with the phone. `G` is the only move.
 * **tmux navigator** -- `V` groups local panes by session and window.
-  Enter selects that pane id (`select-window` + `select-pane`), or a
-  window's active pane. Stale ids refresh instead of moving. The phone
+  Windows are dim divider lines, not rows: the cursor only lands on
+  panes and Enter always opens exactly one pane id. Stale ids refresh
+  instead of moving. The phone
   detail shows the same location and moves the PC only from
   **PC를 이 Pane으로 이동** (`POST /api/panes/<key>/focus`), never from
   a card tap, and never onto an SSH host.
@@ -54,6 +55,11 @@ bumped until this merges.
   `submit_input` / `send_prompt`. The phone button shows "전송 중..." then
   "제출 확인됨" or "제출 확인 실패", blocks a second tap while in flight,
   and clears the textarea only when the submit was confirmed.
+* **Phone page fixes** -- the pairing screen's confirm text held a raw
+  newline that broke the whole inline script (the page never polled or
+  sent), and an unauthenticated status poll fired from the pair screen
+  could return 401 right after a successful pair and hide the dashboard
+  again. Polling now starts only once a token exists.
 * **Claude Code 2.1.x detection fixes** -- the pane title is a static
   "✳ <conversation title>" while idle *and* while working, so it is no
   longer read as a spinner; idle is read from the empty/placeholder box or
