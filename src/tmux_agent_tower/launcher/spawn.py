@@ -68,6 +68,7 @@ def spawn_local(
     targets: List[SpawnTarget],
     agents_cfg: Dict[str, str],
     layout: str = DEFAULT_LAYOUT,
+    bindings=None,
 ) -> List[SpawnResult]:
     if not targets:
         return []
@@ -99,6 +100,19 @@ def spawn_local(
         if not pane_id:
             results.append(SpawnResult(target, False, "pane을 생성하지 못했습니다."))
             continue
+
+        if bindings is not None:
+            pane_pid = tmux_capture.run_tmux(
+                ["display-message", "-p", "-t", pane_id, "#{pane_pid}"]
+            ).strip()
+            bindings.record(
+                pane_id,
+                session,
+                pane_pid,
+                target.project_path,
+                target.project_name,
+                target.agent_label,
+            )
 
         if command:
             tmux_capture.run_tmux(["send-keys", "-t", pane_id, command, "Enter"], capture=False)

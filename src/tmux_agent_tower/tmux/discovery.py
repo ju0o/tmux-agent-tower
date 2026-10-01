@@ -11,7 +11,7 @@ from typing import Dict, List
 
 from . import capture
 from ..detection import process as process_detection
-from ..detection.identity import evidence_cmdline
+from ..detection.identity import agent_process_cwd, evidence_cmdline
 from ..detection.project import discover_project, git_project_name
 
 FIELD_SEP = "\x1f"
@@ -85,6 +85,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
             continue
 
         lines = capture.capture_pane(pane_id, lines=capture_lines) if dead != "1" else []
+        agent_cwd = "" if dead == "1" else (agent_process_cwd(pane_pid, cmdline_map, ppid_map) or "")
 
         rows.append(
             {
@@ -93,9 +94,12 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
                 "window_name": window_name,
                 "pane_index": pane_index,
                 "pane_id": pane_id,
+                "pane_pid": pane_pid,
                 "title": title or "(unnamed)",
                 "command": command,
                 "cmdline": evidence_cmdline(pane_pid, command, cmdline_map, ppid_map),
+                "agent_cwd": agent_cwd,
+                "process_git": git_project_name(agent_cwd) if agent_cwd else None,
                 "path": current_path,
                 "auto_project": discover_project(current_path),
                 "git_project": git_project_name(current_path),

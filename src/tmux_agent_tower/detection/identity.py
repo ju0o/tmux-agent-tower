@@ -11,9 +11,10 @@ just an agent or tool name is not a project.
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence, Tuple
 
 _SHELLS = {"bash", "zsh", "fish", "sh", "ssh", "dash"}
 
@@ -79,6 +80,39 @@ def agent_name_from_args(args: str) -> Optional[str]:
     return None
 
 
+def _deepest_agent(
+    pane_pid: str,
+    cmdline_map: Dict[str, str],
+    ppid_map: Dict[str, str],
+) -> Tuple[str, str]:
+    """``(pid, args)`` of the deepest agent under the pane.
+
+    A tool shell under that agent is not an agent, so it does not win.
+    ``("", "")`` when the tree has no agent executable.
+    """
+
+    children: Dict[str, list] = {}
+    for pid, parent in ppid_map.items():
+        children.setdefault(parent, []).append(pid)
+
+    best_depth = -1
+    best: Tuple[str, str] = ("", "")
+    stack = [(str(pane_pid), 0)]
+    seen = set()
+    while stack:
+        pid, depth = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        args = cmdline_map.get(pid, "")
+        if agent_name_from_args(args) and depth >= best_depth:
+            best_depth = depth
+            best = (pid, args)
+        for child in children.get(pid, []):
+            stack.append((child, depth + 1))
+    return best
+
+
 def evidence_cmdline(
     pane_pid: str,
     command: str,
@@ -92,32 +126,45 @@ def evidence_cmdline(
     real shell can beat a misleading title.
     """
 
-    children: Dict[str, list] = {}
-    for pid, parent in ppid_map.items():
-        children.setdefault(parent, []).append(pid)
-
-    best_depth = -1
-    best_args = ""
-    stack = [(str(pane_pid), 0)]
-    seen = set()
-    while stack:
-        pid, depth = stack.pop()
-        if pid in seen:
-            continue
-        seen.add(pid)
-        args = cmdline_map.get(pid, "")
-        if agent_name_from_args(args) and depth >= best_depth:
-            best_depth = depth
-            best_args = args
-        for child in children.get(pid, []):
-            stack.append((child, depth + 1))
-
-    if best_args:
-        return best_args
+    _pid, args = _deepest_agent(pane_pid, cmdline_map, ppid_map)
+    if args:
+        return args
     own = cmdline_map.get(str(pane_pid), "")
     if own:
         return own
     return (command or "").strip()
+
+
+def read_process_cwd(pid: str) -> Optional[str]:
+    """``/proc/<pid>/cwd``. None when the process is gone or not readable."""
+
+    if not pid or not str(pid).isdigit():
+        return None
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return None
+
+
+def agent_process_cwd(
+    pane_pid: str,
+    cmdline_map: Dict[str, str],
+    ppid_map: Dict[str, str],
+    read_cwd: Callable[[str], Optional[str]] = read_process_cwd,
+) -> Optional[str]:
+    """Cwd of the active agent process, not of a tool shell it spawned.
+
+    tmux ``pane_current_path`` stays ``/mnt/f`` when the agent never
+    changed the pane directory. The agent's own cwd can still be the repo.
+    A child that merely ``cd``'d somewhere is not used: that is a tool,
+    not the project binding.
+    """
+
+    pid, _args = _deepest_agent(pane_pid, cmdline_map, ppid_map)
+    if not pid:
+        return None
+    cwd = read_cwd(pid)
+    return cwd or None
 
 
 def _title_agent(title: str) -> Optional[str]:

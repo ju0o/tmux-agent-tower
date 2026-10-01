@@ -8,6 +8,14 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **Project binding** -- the Workspace Launcher records the pane id,
+  project path, project name, agent, session, and the pane's process id
+  when it creates a pane. That binding is the project name until the user
+  overrides it. It is ignored when the session or process id no longer
+  matches, or the path is gone. Otherwise the project is the git repo of
+  the agent process cwd, then the tmux pane cwd, then a title that is not
+  an agent name. A tool shell's cwd is not the project. `command-code`
+  is unchanged.
 * **Identity** -- the running executable wins over the pane title, and a
   shell stays a shell when the title says Claude. A child agent wins over
   a parent terminal. Cursor's `agent` binary is recognized from its

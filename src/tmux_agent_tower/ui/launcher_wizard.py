@@ -24,6 +24,7 @@ from ..launcher.discovery import (
     ProjectEntry,
 )
 from ..launcher.spawn import SpawnTarget, spawn_local, spawn_remote
+from ..state.bindings import ProjectBindingStore
 from .widgets import is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add, show_message_screen
 
 LAYOUT_CYCLE = ["tiled", "even-horizontal", "even-vertical"]
@@ -254,7 +255,10 @@ def run_launcher(stdscr, tower, multi: bool, state_dir: Path) -> None:
     if is_remote:
         results = spawn_remote(host_key, host_label, targets, cfg["agents"], layout=layout)
     else:
-        results = spawn_local(tower.session, host_label, targets, cfg["agents"], layout=layout)
+        bindings = ProjectBindingStore(state_dir / "project-bindings.json")
+        results = spawn_local(
+            tower.session, host_label, targets, cfg["agents"], layout=layout, bindings=bindings
+        )
 
     for p in projects:
         record_recent(state_dir, host_key, p.path)

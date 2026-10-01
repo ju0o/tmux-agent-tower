@@ -245,17 +245,25 @@ def resolve_project_identity(
     basename: Optional[str],
     local_host: str,
     no_name_label: str,
+    binding_name: Optional[str] = None,
+    process_git_name: Optional[str] = None,
 ) -> tuple:
     """``(project name, source)``.
 
-    Source is ``override``, ``git``, ``title``, ``path``, or ``none``.
-    A title that only names an agent (``Claude Tmux Control``) is not a
-    project. A real task title still fills in when the directory itself
-    says nothing.
+    Source is ``override``, ``binding``, ``process``, ``git``, ``title``,
+    ``path``, or ``none``. A title that only names an agent is not a
+    project. ``process`` is the git repo of the agent process cwd.
+    ``git`` is the tmux pane cwd. Neither is invented from a title.
     """
 
     if custom:
         return custom, "override"
+
+    if binding_name and not is_low_confidence_name(binding_name):
+        return binding_name, "binding"
+
+    if process_git_name and not is_low_confidence_name(process_git_name):
+        return process_git_name, "process"
 
     if git_name and not is_low_confidence_name(git_name):
         return git_name, "git"
@@ -279,9 +287,10 @@ def resolve_display_project(
 ) -> str:
     """The project name shown as a row's primary text.
 
-    Priority: an explicit user override > the enclosing git repo's name >
-    a meaningful pane title that is not an agent label > the raw directory
-    basename > an honest "no name" placeholder. A single-letter or generic
+    Priority: an explicit user override > a launcher binding > the agent
+    process cwd's git repo > the tmux pane cwd's git repo > a meaningful
+    pane title that is not an agent label > the raw directory basename >
+    an honest "no name" placeholder. A single-letter or generic
     mount-point-ish basename (see ``detection.project.is_low_confidence_name``)
     is never shown as-is if something better is available.
     """

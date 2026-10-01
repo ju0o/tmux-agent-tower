@@ -24,7 +24,9 @@ from ..i18n import t
 from ..launcher.config import AGENT_LAUNCH_ORDER, load_config
 from .. import notify
 from ..remote.collector import fetch_remote, HOST_STATUS_ONLINE
+from ..state.bindings import ProjectBindingStore
 from ..state.overrides import OverrideStore
+from ..detection.project import git_project_name
 from ..state.visits import VisitStore
 from ..tmux import capture as tmux_capture
 from ..tmux import discovery
@@ -139,6 +141,7 @@ class Tower:
 
         self.visits = VisitStore(STATE_DIR)
         self.overrides = OverrideStore(STATE_DIR / "overrides.json")
+        self.bindings = ProjectBindingStore(STATE_DIR / "project-bindings.json")
         # The TUI owns one engine for its lifetime. Remote passes the
         # server's engine in so hysteresis survives across HTTP polls.
         self.status_engine = status_engine or StatusEngine()
@@ -198,6 +201,19 @@ class Tower:
         candidate = None if dead else adapter.extract_result(ctx)
         return self.results.observe(key, status, candidate).state
 
+    def _binding_name(self, key: str, session: Optional[str], pane_pid: Optional[str]) -> Optional[str]:
+        """Launcher binding for this pane, or None when it does not match.
+
+        The git name at the bound path wins over the name stored at
+        creation, but only while that directory is still there.
+        """
+
+        record = self.bindings.usable(key, session or "", pane_pid or "")
+        if not record:
+            return None
+        git_name = git_project_name(record.get("project_path") or "")
+        return git_name or (record.get("project_name") or "").strip() or None
+
     def _identity(
         self,
         key: str,
@@ -209,6 +225,8 @@ class Tower:
         basename: Optional[str],
         host: str,
         no_name: str,
+        binding_name: Optional[str] = None,
+        process_git: Optional[str] = None,
     ) -> Dict:
         """Displayed names plus where they came from.
 
@@ -220,7 +238,14 @@ class Tower:
 
         auto_agent, auto_agent_source = identify_agent(command, title, cmdline, lines)
         auto_project, auto_project_source = render.resolve_project_identity(
-            None, git_project, title, basename, host, no_name
+            None,
+            git_project,
+            title,
+            basename,
+            host,
+            no_name,
+            binding_name=binding_name,
+            process_git_name=process_git,
         )
         project, project_source = prefer_override(
             auto_project, auto_project_source, self.overrides.get_project(key)
@@ -264,6 +289,8 @@ class Tower:
                 pane.get("path_basename"),
                 _raw_hostname(),
                 no_name,
+                binding_name=self._binding_name(key, pane.get("session"), pane.get("pane_pid")),
+                process_git=pane.get("process_git"),
             )
             project = identity["project"]
             agent = identity["agent"]
