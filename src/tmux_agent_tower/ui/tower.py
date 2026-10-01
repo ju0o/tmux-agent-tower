@@ -1,9 +1,9 @@
 """Curses TUI: the actual "Control Tower" screen.
 
-Read-only monitoring plus pane navigation. ``M`` starts or stops the
-phone-remote service (see ``ui/remote_menu.py``); it never sends
-keystrokes into a monitored pane. Quitting this TUI leaves that service
-running. See docs/ROADMAP.md for everything else that stays out of scope.
+The list monitors panes. Enter opens the in-Tower control view
+(``ui/control_view.py``), which is where prompt, edit, focus, and close
+happen. ``M`` starts or stops the phone remote. Quitting this TUI leaves
+that service running.
 """
 
 from __future__ import annotations
@@ -28,7 +28,8 @@ from ..state.visits import VisitStore
 from ..tmux import capture as tmux_capture
 from ..tmux import discovery
 from ..tmux import registration
-from ..tmux.navigation import focus_window, open_pane
+from ..control.actions import enter_intent, update_identity
+from ..tmux.navigation import active_pane_in_window
 from . import render
 from .launcher_wizard import run_launcher
 from .widgets import is_backspace, is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
@@ -492,30 +493,28 @@ class Tower:
             return
         self.selected = (self.selected + 1) % len(self.visible_rows)
 
-    def open_selected(self) -> bool:
-        """Enter. A window row jumps to that window's active pane. A pane
-        row jumps by pane id. A missing target refreshes and does not move.
+    def control_key(self) -> Optional[str]:
+        """Enter. Opens the in-Tower control view. Does not move tmux.
+
+        A window row resolves that window's active pane id and opens it.
+        A missing window refreshes and stays on the list.
         """
 
         if not self.visible_rows:
-            return False
+            return None
         row = self.visible_rows[self.selected]
+        if enter_intent(row) != "control":
+            return None
         if row.get("kind") == "window":
-            ok = focus_window(str(row.get("session") or ""), str(row.get("window_index") or ""))
-            if not ok:
+            pane_id = active_pane_in_window(str(row.get("session") or ""), str(row.get("window_index") or ""))
+            if not pane_id:
                 self.notice = "stale"
                 self.load()
-            return ok
-        if row.get("remote") or row.get("offline") or not row.get("pane_id"):
-            return False
-        ok = open_pane(str(row.get("session") or self.session), str(row.get("window_index") or ""), row["pane_id"])
-        if not ok:
-            self.notice = "stale"
-            self.load()
-            return False
-        self.visits.mark_seen(self.session, row["pane_id"])
-        self.notice = ""
-        return True
+                return None
+            return pane_id
+        if row.get("pane_id"):
+            self.visits.mark_seen(self.session, row["pane_id"])
+        return row.get("key")
 
     def edit_selected(self, stdscr) -> None:
         """The "E" menu: edit this pane's *display* identity only.
@@ -559,7 +558,7 @@ class Tower:
             context = _context(self.overrides.get_project(key), row.get("auto_project"))
             name = prompt_text(stdscr, t("prompt.rename"), context_lines=context)
             if name:
-                self.overrides.set_project(key, name)
+                update_identity(self, key, {"project": name})
 
         elif pick.selected_key == "agent":
             agent_items = [(label, label) for label in AGENT_LAUNCH_ORDER]
@@ -573,25 +572,20 @@ class Tower:
                 context = _context(self.overrides.get_agent(key), row.get("auto_agent"))
                 custom = prompt_text(stdscr, t("prompt.agent_name"), context_lines=context)
                 if custom:
-                    self.overrides.set_agent(key, custom)
+                    update_identity(self, key, {"agent": custom})
             elif agent_pick.selected_key == "__auto__":
-                self.overrides.clear_field(key, "agent")
+                update_identity(self, key, {"agent": None})
             else:
-                self.overrides.set_agent(key, agent_pick.selected_key)
+                update_identity(self, key, {"agent": agent_pick.selected_key})
 
         elif pick.selected_key == "title":
             context = _context(self.overrides.get_title(key), row.get("pane_title"))
             title = prompt_text(stdscr, t("prompt.pane_title"), context_lines=context)
             if title:
-                self.overrides.set_title(key, title)
-                if not row.get("remote"):
-                    # Best-effort: a failed tmux call here never raises
-                    # (see tmux/capture.py), so it can't take the rest of
-                    # Tower down with it.
-                    tmux_capture.run_tmux(["select-pane", "-t", row["pane_id"], "-T", title], capture=False)
+                update_identity(self, key, {"title": title})
 
         elif pick.selected_key == "reset":
-            self.overrides.reset(key)
+            update_identity(self, key, {"reset": True})
 
         self.load()
 
@@ -960,7 +954,7 @@ def _remote_state() -> str:
 def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
     from ..server import service
 
-    tower = Tower(session, own_pane_id)
+    tower = Tower(session, own_pane_id, results=ResultTracker())
     tower.load()
     tower.last_refresh = time.monotonic()
     filtering = False
@@ -1032,7 +1026,11 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if is_enter(key):
-            tower.open_selected()
+            pane_key = tower.control_key()
+            if pane_key:
+                from .control_view import open_control_view
+
+                open_control_view(stdscr, tower, pane_key)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 

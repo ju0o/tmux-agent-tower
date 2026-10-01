@@ -8,6 +8,10 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **Pane control** -- Enter stays in Tower and opens a live view of that
+  pane. `P` prompt, `E` identity, `Y` result, `G` focus, and `X` close
+  (confirm first; Tower's own pane is refused) all go through one action
+  layer shared with the phone. `G` is the only move.
 * **tmux navigator** -- `V` groups local panes by session and window.
   Enter selects that pane id (`select-window` + `select-pane`), or a
   window's active pane. Stale ids refresh instead of moving. The phone

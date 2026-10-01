@@ -35,15 +35,14 @@ def focus_local_pane(session: str, pane_id: str) -> bool:
     return True
 
 
-def focus_window(session: str, window_index: str) -> bool:
-    """Move to the active pane of ``session:window_index``.
+def active_pane_in_window(session: str, window_index: str) -> str:
+    """The live active pane id of ``session:window_index``, or ``""``.
 
-    Refuses a window that is already gone. The active pane id is resolved
-    at move time, then handed to ``focus_local_pane``.
+    Does not move the client. A missing window is an empty string.
     """
 
     if not session or window_index is None or window_index == "":
-        return False
+        return ""
     output = capture.run_tmux(
         [
             "list-panes",
@@ -63,7 +62,17 @@ def focus_window(session: str, window_index: str) -> bool:
             first = parts[0]
         if parts[1] == "1":
             active = parts[0]
-    target = active or first
+    return active or first
+
+
+def focus_window(session: str, window_index: str) -> bool:
+    """Move to the active pane of ``session:window_index``.
+
+    Refuses a window that is already gone. The active pane id is resolved
+    at move time, then handed to ``focus_local_pane``.
+    """
+
+    target = active_pane_in_window(session, window_index)
     if not target:
         return False
     return focus_local_pane(session, target)

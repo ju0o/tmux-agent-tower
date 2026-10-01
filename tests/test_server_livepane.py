@@ -272,7 +272,7 @@ def test_identity_edit_is_shared_with_the_pc_tower(env):
 
 def test_prompt_send_still_works_from_the_detail_flow(env, monkeypatch):
     sent = []
-    monkeypatch.setattr(httpapi, "send_prompt_to_pane", lambda pane_id, text: sent.append((pane_id, text)) or True)
+    monkeypatch.setattr("tmux_agent_tower.control.actions.send_prompt_to_pane", lambda pane_id, text: sent.append((pane_id, text)) or True)
     status, body = _post(
         env["srv"], "/api/prompt", {"pane_key": "%1", "text": "hello", "project": "my-project", "agent": "Shell"}, env["token"]
     )

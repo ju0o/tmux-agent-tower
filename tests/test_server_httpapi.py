@@ -239,7 +239,7 @@ def test_invalid_host_header_rejected(server):
 
 def test_prompt_send_calls_send_prompt_to_pane(server, monkeypatch):
     calls = []
-    monkeypatch.setattr(httpapi, "send_prompt_to_pane", lambda pane_id, text: calls.append((pane_id, text)) or True)
+    monkeypatch.setattr("tmux_agent_tower.control.actions.send_prompt_to_pane", lambda pane_id, text: calls.append((pane_id, text)) or True)
 
     code = server.pairing.current_code()
     _, body = _post(server, "/api/pair", {"code": code})
@@ -255,7 +255,7 @@ def test_prompt_send_calls_send_prompt_to_pane(server, monkeypatch):
 
 def test_prompt_send_without_auth_rejected(server, monkeypatch):
     calls = []
-    monkeypatch.setattr(httpapi, "send_prompt_to_pane", lambda pane_id, text: calls.append((pane_id, text)) or True)
+    monkeypatch.setattr("tmux_agent_tower.control.actions.send_prompt_to_pane", lambda pane_id, text: calls.append((pane_id, text)) or True)
 
     status, body = _post(server, "/api/prompt", {"pane_key": "%1", "text": "hello"})
     assert status == 401

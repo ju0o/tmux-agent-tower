@@ -229,10 +229,14 @@ navigates; it never starts a new TUI.
 
 While Tower is open, `V` switches the list to a tmux location tree
 (session, window, pane id). The project/agent list stays the default.
-Enter on a pane runs `select-window` and `select-pane` for that pane id.
-Enter on a window goes to that window's active pane. A pane that has
-already disappeared is not selected; the list refreshes instead. The
-detail panel shows Session, Window, pane id, and pane index.
+
+Enter stays inside Tower and opens Pane Control for that pane (a window
+row opens its active pane's control view). The live area is the same
+recent `capture-pane` text the phone uses. `P` sends one prompt, `E`
+edits the display name, `Y` shows a result, `G` is the only action that
+actually moves to the pane, and `X` asks before `kill-pane` of that
+pane id. Cancel is the default. Tower's own pane cannot be closed from
+there. `Ctrl+b w` still comes back.
 
 ### `tower --doctor`
 

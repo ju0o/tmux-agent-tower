@@ -29,8 +29,6 @@ Hard boundaries enforced here, not just documented:
 from __future__ import annotations
 
 import json
-import re
-import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,159 +36,31 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
 from .. import __version__
+from ..control.actions import (
+    MAX_IDENTITY_CHARS,
+    MAX_PROMPT_CHARS,
+    MAX_SCREEN_BYTES,
+    MAX_SCREEN_LINE_CHARS,
+    MAX_SCREEN_LINES,
+    apply_identity_edit,
+    build_screen_payload,
+    find_prompt_target,
+    find_row,
+    find_screen_target,
+    focus_pane,
+    get_pane_screen,
+    get_result,
+    send_prompt,
+    send_prompt_to_pane,
+)
 from ..detection.result import ResultTracker
 from ..detection.status import StatusEngine
-from ..state.overrides import FIELDS as OVERRIDE_FIELDS
 from ..tmux import capture as tmux_capture
-from ..tmux.navigation import focus_local_pane
 from ..ui.tower import Tower
 from . import auth
 from .webui import PAGE_HTML
 
 MAX_BODY_BYTES = 8 * 1024
-MAX_PROMPT_CHARS = 4000
-SEND_TIMEOUT = 3.0
-
-# Live pane view (GET /api/panes/<key>/screen): the *recent screen*, not
-# the scrollback. Small on purpose -- this is polled once a second from a
-# phone, so payload size is the whole feature's cost.
-MAX_SCREEN_LINES = 60
-MAX_SCREEN_LINE_CHARS = 400
-MAX_SCREEN_BYTES = 16 * 1024
-MAX_IDENTITY_CHARS = 80
-
-_ANSI_RE = re.compile(
-    r"\x1b\[[0-?]*[ -/]*[@-~]"  # CSI ... final byte
-    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL / ST
-    r"|\x1b[@-Z\\-_]"  # two-byte escapes
-)
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-
-
-def sanitize_screen_line(line: str) -> str:
-    """Plain text only: drop ANSI escapes and control bytes (keep tabs),
-    clamp width. Colour is not preserved in V0 -- readable beats pretty.
-    """
-
-    text = _ANSI_RE.sub("", line)
-    text = _CONTROL_RE.sub("", text)
-    if len(text) > MAX_SCREEN_LINE_CHARS:
-        text = text[: MAX_SCREEN_LINE_CHARS - 1] + "…"
-    return text
-
-
-def build_screen_payload(pane_key: str, raw_lines: List[str]) -> dict:
-    """Recent screen text within hard limits. Trailing blank lines (an
-    idle pane's empty bottom half) are dropped; then the *last*
-    ``MAX_SCREEN_LINES`` lines are kept, and the byte budget is enforced
-    by dropping from the top so the prompt line always survives.
-    """
-
-    lines = [sanitize_screen_line(line) for line in raw_lines]
-    while lines and not lines[-1].strip():
-        lines.pop()
-    truncated = len(lines) > MAX_SCREEN_LINES
-    lines = lines[-MAX_SCREEN_LINES:]
-
-    def size(items: List[str]) -> int:
-        return sum(len(item.encode("utf-8")) + 1 for item in items)
-
-    while lines and size(lines) > MAX_SCREEN_BYTES:
-        lines.pop(0)
-        truncated = True
-
-    return {
-        "ok": True,
-        "pane_key": pane_key,
-        "lines": lines,
-        "truncated": truncated,
-        "generated_at": time.time(),
-    }
-
-
-_LOCAL_PANE_KEY_RE = re.compile(r"^%\d+$")
-
-
-def find_screen_target(session: str, pane_key: str, own_pane_id: str = "") -> Tuple[bool, str, Optional[str]]:
-    """``(ok, reason, tmux_pane_id)`` for the live view. Reasons:
-    ``not_found``, ``remote_unsupported`` (SSH hosts are title-only, see
-    docs/ARCHITECTURE.md -- there is no remote capture to show), or
-    ``stale`` when the pane was listed but is already gone.
-
-    Deliberately does *not* build a ``Tower`` snapshot: that would capture
-    every pane and poll the SSH hosts once per phone poll. Two cheap tmux
-    calls are enough -- and the membership check keeps the endpoint from
-    ever reading a pane outside the bound session.
-    """
-
-    if not _LOCAL_PANE_KEY_RE.match(pane_key):
-        # Remote rows are keyed ``<alias>:<pane_id>`` / ``remote:<alias>:...``.
-        return False, ("remote_unsupported" if ":" in pane_key else "not_found"), None
-    if own_pane_id and pane_key == own_pane_id:
-        return False, "not_found", None
-    listed = tmux_capture.run_tmux(["list-panes", "-s", "-t", session, "-F", "#{pane_id}"]).split("\n")
-    if pane_key not in listed:
-        return False, "not_found", None
-    if not tmux_capture.pane_exists(pane_key):
-        return False, "stale", None
-    return True, "", pane_key
-
-
-def _clean_identity_value(value) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = "".join(ch for ch in value if ch.isprintable()).strip()
-    if not text or len(text) > MAX_IDENTITY_CHARS:
-        return None
-    return text
-
-
-def apply_identity_edit(tower: Tower, pane_key: str, body: dict) -> Tuple[bool, str]:
-    """The phone's "편집": exactly what the TUI's ``E`` menu does, on the
-    same ``OverrideStore`` file, so the PC picks it up on its next refresh.
-
-    Body: ``{"reset": true}`` clears every override for the pane;
-    otherwise any of ``project`` / ``agent`` / ``title`` set to a string
-    (set) or ``null`` (back to auto-detected). Display metadata only --
-    nothing here touches the process in the pane.
-    """
-
-    tower.load()
-    row = next((r for r in tower.rows if r.get("key") == pane_key and not r.get("placeholder")), None)
-    if row is None:
-        return False, "not_found"
-
-    if body.get("reset") is True:
-        tower.overrides.reset(pane_key)
-        return True, ""
-
-    touched = False
-    for field in OVERRIDE_FIELDS:
-        if field not in body:
-            continue
-        value = body[field]
-        if value is None:
-            tower.overrides.clear_field(pane_key, field)
-            touched = True
-            continue
-        cleaned = _clean_identity_value(value)
-        if cleaned is None:
-            return False, f"invalid_{field}"
-        getattr(tower.overrides, f"set_{field}")(pane_key, cleaned)
-        touched = True
-        if field == "title" and not row.get("remote"):
-            # Same best-effort push the TUI does: the real tmux pane title
-            # changes too, so the two views never disagree.
-            tmux_capture.run_tmux(["select-pane", "-t", row["pane_id"], "-T", cleaned], capture=False)
-
-    if not touched:
-        return False, "bad_request"
-    return True, ""
-
-
-def find_row(tower: Tower, pane_key: str) -> Optional[dict]:
-    tower.load()
-    return next((r for r in tower.rows if r.get("key") == pane_key), None)
 
 
 def build_status_payload(tower: Tower) -> dict:
@@ -259,73 +129,6 @@ def source_session_missing_payload(session: str) -> dict:
     """
 
     return {"ok": False, "error": "source_session_missing", "session": session}
-
-
-def find_prompt_target(
-    tower: Tower, pane_key: str, expected_project: Optional[str], expected_agent: Optional[str]
-) -> Tuple[bool, str, Optional[str]]:
-    """Re-resolves ``pane_key`` against a *fresh* pane snapshot (never a
-    cached one) and returns ``(ok, reason, tmux_pane_id)``.
-
-    ``reason`` is one of: "not_found", "dead", "remote_unsupported",
-    "mismatch", or "" on success. The mismatch check exists because a
-    pane_id can be reused after a tmux server restart (see
-    ``state/overrides.py``'s module docstring) -- if the project/agent the
-    mobile client last saw no longer matches what's actually at that key
-    right now, refuse rather than silently sending the prompt to an
-    unrelated pane.
-    """
-
-    tower.load()
-
-    for row in tower.rows:
-        if row.get("key") != pane_key or row.get("placeholder"):
-            continue
-
-        if row.get("remote"):
-            return False, "remote_unsupported", None
-
-        status = row.get("status")
-        if status == "DEAD":
-            return False, "dead", None
-
-        if expected_project is not None and row.get("project") != expected_project:
-            return False, "mismatch", None
-        if expected_agent is not None and row.get("agent") != expected_agent:
-            return False, "mismatch", None
-
-        return True, "", row.get("pane_id") or row.get("key")
-
-    return False, "not_found", None
-
-
-def send_prompt_to_pane(pane_id: str, text: str) -> bool:
-    """``tmux send-keys -l <text>`` (literal -- never interpreted as tmux
-    key names) followed by a separate Enter, matching what a person
-    typing directly into that pane would produce. Both calls run with
-    ``shell=False`` and a fixed argument list, so the prompt text can
-    never escape into a host shell command regardless of its content.
-    """
-
-    try:
-        literal = subprocess.run(
-            ["tmux", "send-keys", "-t", pane_id, "-l", text],
-            capture_output=True,
-            timeout=SEND_TIMEOUT,
-            check=False,
-        )
-        if literal.returncode != 0:
-            return False
-
-        enter = subprocess.run(
-            ["tmux", "send-keys", "-t", pane_id, "Enter"],
-            capture_output=True,
-            timeout=SEND_TIMEOUT,
-            check=False,
-        )
-        return enter.returncode == 0
-    except Exception:
-        return False
 
 
 class TowerRemoteHandler(BaseHTTPRequestHandler):
@@ -445,12 +248,11 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
             self._send_json(409, source_session_missing_payload(self.server.session), no_store=True)  # type: ignore[attr-defined]
             return
         server = self.server
-        ok, reason, pane_id = find_screen_target(server.session, pane_key, server._own_pane_id)  # type: ignore[attr-defined]
+        ok, reason, payload = get_pane_screen(server.session, pane_key, server._own_pane_id)  # type: ignore[attr-defined]
         if not ok:
             self._send_json(404 if reason == "not_found" else 409, {"ok": False, "error": reason}, no_store=True)
             return
-        raw = tmux_capture.capture_pane(pane_id, lines=MAX_SCREEN_LINES)
-        self._send_json(200, build_screen_payload(pane_key, raw), no_store=True)
+        self._send_json(200, payload, no_store=True)
 
     def _get_result(self, pane_key: str) -> None:
         """Extracted final answer only. Does not mark it read -- opening
@@ -463,27 +265,11 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
         if not self.server.source_session_alive():  # type: ignore[attr-defined]
             self._send_json(409, source_session_missing_payload(self.server.session), no_store=True)  # type: ignore[attr-defined]
             return
-        tower = self._tower()
-        tower.load()
-        row = find_row(tower, pane_key)
-        if row is None:
-            self._send_json(404, {"ok": False, "error": "not_found"}, no_store=True)
+        ok, reason, payload = get_result(self._tower(), pane_key)
+        if not ok:
+            self._send_json(404 if reason == "not_found" else 409, {"ok": False, "error": reason}, no_store=True)
             return
-        if row.get("remote"):
-            self._send_json(409, {"ok": False, "error": "remote_unsupported"}, no_store=True)
-            return
-        snap = self.server.results.snapshot(pane_key)  # type: ignore[attr-defined]
-        self._send_json(
-            200,
-            {
-                "ok": True,
-                "state": snap.state,
-                "text": snap.text if snap.state in ("ready", "read") else "",
-                "fingerprint": snap.fingerprint,
-                "generated_at": snap.generated_at,
-            },
-            no_store=True,
-        )
+        self._send_json(200, {"ok": True, **payload}, no_store=True)
 
     def _post_result_read(self, pane_key: str) -> None:
         if not self._require_auth():
@@ -573,13 +359,14 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
                 self._send_json(409, source_session_missing_payload(self.server.session))  # type: ignore[attr-defined]
                 return
 
-            ok, reason, pane_id = find_prompt_target(self._tower(), pane_key, expected_project, expected_agent)
+            ok, reason = send_prompt(self._tower(), pane_key, text, expected_project, expected_agent)
+            if not ok and reason == "send_failed":
+                self._send_json(502, {"ok": False})
+                return
             if not ok:
                 self._send_json(409, {"ok": False, "error": reason})
                 return
-
-            sent = send_prompt_to_pane(pane_id, text)
-            self._send_json(200 if sent else 502, {"ok": sent})
+            self._send_json(200, {"ok": True})
             return
 
         route = self._pane_route(self.path)
@@ -607,15 +394,11 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
             self._send_json(409, source_session_missing_payload(self.server.session), no_store=True)  # type: ignore[attr-defined]
             return
         server = self.server
-        ok, reason, pane_id = find_screen_target(server.session, pane_key, server._own_pane_id)  # type: ignore[attr-defined]
-        if not ok or not pane_id:
+        ok, reason = focus_pane(server.session, pane_key, server._own_pane_id)  # type: ignore[attr-defined]
+        if not ok:
             self._send_json(404 if reason == "not_found" else 409, {"ok": False, "error": reason}, no_store=True)
             return
-        moved = focus_local_pane(server.session, pane_id)  # type: ignore[attr-defined]
-        if not moved:
-            self._send_json(409, {"ok": False, "error": "stale"}, no_store=True)
-            return
-        self._send_json(200, {"ok": True, "pane_id": pane_id}, no_store=True)
+        self._send_json(200, {"ok": True, "pane_id": pane_key}, no_store=True)
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003
         # Silence BaseHTTPRequestHandler's default stderr access log --
