@@ -621,6 +621,7 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             t("hint.add_project"),
             t("hint.new_workspace"),
             t("hint.remote"),
+            t("hint.settings"),
         ]
         hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
         hint_keys.append(t("hint.attention"))
@@ -894,6 +895,13 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
 
             open_remote_menu(stdscr, tower)
             remote_state = _remote_state()
+            draw(stdscr, tower, remote_state=remote_state)
+            continue
+
+        if matches_letter(key, "c"):
+            from .settings_menu import open_settings
+
+            open_settings(stdscr)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 

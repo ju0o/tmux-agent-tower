@@ -13,6 +13,7 @@ from . import __version__
 from .i18n import t
 from .server import service as remote_service
 from .tmux import capture as tmux_capture
+from .tmux import keybind
 from .tmux import registration
 from .ui.tower import run as run_ui, load_remote_hosts
 
@@ -117,6 +118,37 @@ def focus_active_tower() -> None:
     registration.focus_pane(pane_id)
 
 
+def has_active_tower() -> int:
+    """Exit status for ``tower --has-active``.
+
+    0 when this session has a live registered Tower pane, 1 otherwise.
+    Prints nothing and does not start a TUI or move the client. A stale
+    registration is cleared by ``resolve_active_pane``.
+    """
+
+    session = tmux_capture.current_session()
+    if not session:
+        return 1
+    return 0 if registration.resolve_active_pane(session) else 1
+
+
+def run_keys(action: str) -> int:
+    try:
+        if action == "install":
+            keybind.install_for_user()
+            print(t("cli.keys.installed"))
+            return 0
+        if action == "restore":
+            keybind.restore_for_user()
+            print(t("cli.keys.restored"))
+            return 0
+    except Exception:
+        print(t("cli.keys.failed"), file=sys.stderr)
+        return 1
+    print(t("cli.keys.failed"), file=sys.stderr)
+    return 1
+
+
 def run_serve(lan: bool, port: int, use_tailscale: bool = False) -> None:
     """``tower serve``: foreground wrapper around ``server.service``.
 
@@ -152,6 +184,11 @@ def cli(argv=None) -> None:
         action="store_true",
         help="jump to the currently active Tower pane; does not start a new Tower (for a Ctrl+b w-style binding)",
     )
+    parser.add_argument(
+        "--has-active",
+        action="store_true",
+        help="exit 0 when a live Tower pane is registered, 1 otherwise; prints nothing",
+    )
 
     subparsers = parser.add_subparsers(dest="command")
     serve_parser = subparsers.add_parser(
@@ -170,6 +207,9 @@ def cli(argv=None) -> None:
     )
     serve_parser.add_argument("--port", type=int, default=DEFAULT_SERVE_PORT, help=f"port to listen on (default: {DEFAULT_SERVE_PORT})")
 
+    keys_parser = subparsers.add_parser("keys", help="install or remove the opt-in smart Ctrl+b w binding")
+    keys_parser.add_argument("action", choices=("install", "restore"))
+
     args = parser.parse_args(argv)
 
     if args.command == "serve":
@@ -183,9 +223,15 @@ def cli(argv=None) -> None:
     if args.doctor:
         raise SystemExit(run_doctor())
 
+    if args.has_active:
+        raise SystemExit(has_active_tower())
+
     if args.focus:
         focus_active_tower()
         return
+
+    if args.command == "keys":
+        raise SystemExit(run_keys(args.action))
 
     run_ui()
 
