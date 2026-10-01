@@ -156,7 +156,7 @@ def test_status_payload_exposes_state_but_not_result_text():
 
 
 def test_phone_page_copies_the_result_not_the_live_pane():
-    assert "✓ 새 Result" in PAGE_HTML
+    assert "✓ 새 결과" in PAGE_HTML
     assert "navigator.clipboard" in PAGE_HTML
     assert "결과 복사" in PAGE_HTML
     assert "결과 보기" in PAGE_HTML

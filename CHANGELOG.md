@@ -8,6 +8,18 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **UX polish** -- PC and phone share one set of marks (`● 작업 중`,
+  `! 승인 필요`, `? 입력 필요`, `✓ 새 결과`, `○ 대기`, `× 종료`,
+  `◇ 확인 불가`). Input needed stays `?` so it is not the same mark as an
+  unreadable pane. The main list shows project, agent, and that mark;
+  pane id, path, and title stay on the selected detail. The header
+  counts approval, input, new results, and working panes, and hides a
+  zero. `A` is still the attention sort and `V` is still location.
+  Phone cards match the list, and the live pane can pause auto-follow,
+  jump to the latest line, change font size, wrap, and go fullscreen.
+  Esc leaves the control view without the default one-second pause, and
+  a narrow terminal shows a shorter hint so the line is not cut off.
+  Pin is not in this slice.
 * **Attention** -- execution (`WORKING` / `IDLE` / `UNKNOWN` / `DEAD`),
   attention (`none` / `approval_required` / `input_required` / `error`),
   and result (`none` / `ready` / `read`) stay separate. Each agent

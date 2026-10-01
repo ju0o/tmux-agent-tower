@@ -252,16 +252,13 @@ def test_row_line_count_wide_no_title():
     assert render.row_line_count({"title_line": None}, narrow=False) == 1
 
 
-def test_row_line_count_wide_with_title():
-    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=False) == 2
+def test_row_line_count_title_stays_off_the_list():
+    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=False) == 1
+    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=True) == 1
 
 
-def test_row_line_count_narrow_no_title():
-    assert render.row_line_count({"title_line": None}, narrow=True) == 2
-
-
-def test_row_line_count_narrow_with_title():
-    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=True) == 3
+def test_row_line_count_narrow_is_project_and_state_only():
+    assert render.row_line_count({"title_line": None, "activity_text": "테스트 실행 중"}, narrow=True) == 1
 
 
 def test_agent_status_line_format():
@@ -278,7 +275,7 @@ def test_row_line_count_with_activity():
 
 def test_row_line_count_with_title_and_activity():
     row = {"title_line": "JuHome Dev", "activity_text": "테스트 실행 중"}
-    assert render.row_line_count(row, narrow=False) == 3
+    assert render.row_line_count(row, narrow=False) == 2
 
 
 def test_row_line_count_empty_activity_does_not_add_a_line():
@@ -324,7 +321,7 @@ def test_sort_by_attention_priority_order():
         {"key": "unknown", "status": "UNKNOWN"},
     ]
     sorted_rows = render.sort_by_attention(rows)
-    assert [r["key"] for r in sorted_rows] == ["waiting", "working", "idle", "unknown", "dead"]
+    assert [r["key"] for r in sorted_rows] == ["waiting", "unknown", "working", "idle", "dead"]
 
 
 def test_sort_by_attention_is_stable_within_same_status():

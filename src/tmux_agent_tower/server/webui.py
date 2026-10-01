@@ -57,6 +57,15 @@ PAGE_HTML = """<!doctype html>
   #source-gone .sub { font-size: 13px; color: var(--dim); }
   h1 { font-size: 15px; letter-spacing: .04em; color: var(--dim); margin: 4px 4px 12px; text-transform: uppercase; }
   .host { font-size: 12px; color: var(--dim); margin: 16px 4px 6px; }
+  #counts { font-size: 14px; font-weight: 650; margin: 0 4px 8px; letter-spacing: .01em; }
+  #counts:empty { display: none; }
+  #d-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+  #d-badges span { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; font-size: 13px; }
+  .live-tools { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+  .live-tools button { flex: 0 0 auto; min-height: 36px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font-size: 13px; }
+  #screen-wrap.full { position: fixed; inset: 0; z-index: 6; max-height: none; min-height: 100vh; border-radius: 0; }
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--working); margin-right: 6px; }
+  .live-dot.paused { background: var(--idle); }
   .window-label {
     font-size: 12px; color: var(--dim); margin: 8px 4px 4px; padding: 2px 0;
     border-bottom: 1px dashed var(--line); cursor: default;
@@ -169,6 +178,7 @@ PAGE_HTML = """<!doctype html>
 
 <div id="main" style="display:none">
   <h1>Tmux Agent Tower</h1>
+  <div id="counts"></div>
   <div id="banner"></div>
   <div id="source-gone">
     <div class="title">관제 중이던 tmux 세션이 종료되었습니다.</div>
@@ -184,33 +194,24 @@ PAGE_HTML = """<!doctype html>
     <button id="back" aria-label="뒤로">←</button>
     <div class="d-title" id="d-project"></div>
   </div>
+  <div id="d-badges"></div>
   <div class="d-meta">
     <div class="kv"><span class="k">Agent</span><span class="v" id="d-agent"></span></div>
-    <div class="kv"><span class="k">상태</span><span class="v" id="d-status"></span></div>
-    <div class="kv"><span class="k">현재 작업</span><span class="v wrap" id="d-activity"></span></div>
-    <div class="kv"><span class="k">Pane 이름</span><span class="v" id="d-title"></span></div>
-    <div class="kv"><span class="k">Host</span><span class="v" id="d-host"></span></div>
-    <div class="kv"><span class="k">주의</span><span class="v" id="d-attention"></span></div>
     <div class="kv"><span class="k">질문</span><span class="v wrap" id="d-question"></span></div>
     <div class="actions">
       <button id="approve" type="button">승인</button>
       <button id="reject" type="button">거절</button>
     </div>
-    <div class="kv"><span class="k">위치</span><span class="v wrap" id="d-location"></span></div>
-    <div class="actions"><button id="focus-pc" type="button">PC를 이 Pane으로 이동</button></div>
-    <div class="kv" id="result-row"><span class="k">결과</span><span class="v" id="d-result">-</span></div>
   </div>
 
-  <div id="result-box">
-    <pre id="result-text"></pre>
-    <div class="actions">
-      <button id="result-view" type="button">결과 보기</button>
-      <button id="result-copy" type="button">결과 복사</button>
-    </div>
-    <div class="hint" id="result-msg"></div>
+  <div class="live-label"><span><i id="live-dot" class="live-dot"></i>LIVE PANE</span><span id="live-meta"></span></div>
+  <div class="live-tools">
+    <button id="live-latest" type="button">최신으로</button>
+    <button id="live-smaller" type="button">A-</button>
+    <button id="live-larger" type="button">A+</button>
+    <button id="live-wrap" type="button">줄바꿈</button>
+    <button id="live-full" type="button">전체화면</button>
   </div>
-
-  <div class="live-label"><span>LIVE PANE</span><span id="live-meta"></span></div>
   <div id="screen-wrap"><pre id="screen"></pre></div>
 
   <div class="send-box">
@@ -220,6 +221,26 @@ PAGE_HTML = """<!doctype html>
       <button id="send">전송</button>
       <button id="edit-toggle">편집</button>
     </div>
+  </div>
+
+  <div id="result-box">
+    <div class="kv" id="result-row"><span class="k">결과</span><span class="v" id="d-result">-</span></div>
+    <pre id="result-text"></pre>
+    <div class="actions">
+      <button id="result-view" type="button">결과 보기</button>
+      <button id="result-copy" type="button">결과 복사</button>
+    </div>
+    <div class="hint" id="result-msg"></div>
+  </div>
+
+  <div class="d-meta">
+    <div class="kv"><span class="k">실행</span><span class="v" id="d-status"></span></div>
+    <div class="kv"><span class="k">현재 작업</span><span class="v wrap" id="d-activity"></span></div>
+    <div class="kv"><span class="k">주의</span><span class="v" id="d-attention"></span></div>
+    <div class="kv"><span class="k">Pane 이름</span><span class="v" id="d-title"></span></div>
+    <div class="kv"><span class="k">Host</span><span class="v" id="d-host"></span></div>
+    <div class="kv"><span class="k">위치</span><span class="v wrap" id="d-location"></span></div>
+    <div class="actions"><button id="focus-pc" type="button">PC를 이 Pane으로 이동</button></div>
   </div>
 
   <div id="edit">
@@ -270,6 +291,9 @@ PAGE_HTML = """<!doctype html>
   var screenInterval = SCREEN_POLL_MIN_MS;
   var screenInFlight = false;
   var lastScreenText = null;
+  var followLive = true;
+  var liveFont = 12;
+  var liveWrap = false;
 
   function showToast(msg) {
     toast.textContent = msg;
@@ -353,9 +377,47 @@ PAGE_HTML = """<!doctype html>
 
   // -- list view ----------------------------------------------------
 
+  function primaryState(p) {
+    if (!p) return { mark: "◇", label: "확인 불가" };
+    if (p.attention === "approval_required") return { mark: "!", label: "승인 필요" };
+    if (p.attention === "input_required" || p.status === "WAITING") return { mark: "?", label: "입력 필요" };
+    if (p.result_state === "ready") return { mark: "✓", label: "새 결과" };
+    if (p.attention === "error") return { mark: "!", label: "오류" };
+    if (p.status === "WORKING") return { mark: "●", label: "작업 중" };
+    if (p.status === "IDLE") return { mark: "○", label: "대기" };
+    if (p.status === "DEAD") return { mark: "×", label: "종료" };
+    return { mark: "◇", label: "확인 불가" };
+  }
+
+  function executionState(p) {
+    if (p.status === "WORKING") return "● 작업 중";
+    if (p.status === "IDLE") return "○ 대기";
+    if (p.status === "DEAD") return "× 종료";
+    if (p.status === "WAITING") return "? 입력 필요";
+    return "◇ 확인 불가";
+  }
+
+  function renderCounts(items) {
+    var counts = { approval: 0, input: 0, result: 0, working: 0 };
+    items.forEach(function (p) {
+      if (p.offline) return;
+      if (p.attention === "approval_required") counts.approval += 1;
+      else if (p.attention === "input_required" || p.status === "WAITING") counts.input += 1;
+      else if (p.result_state === "ready") counts.result += 1;
+      else if (p.status === "WORKING") counts.working += 1;
+    });
+    var parts = [];
+    if (counts.approval) parts.push("! 승인 " + counts.approval);
+    if (counts.input) parts.push("? 입력 " + counts.input);
+    if (counts.result) parts.push("✓ 결과 " + counts.result);
+    if (counts.working) parts.push("● 작업 " + counts.working);
+    $("counts").textContent = parts.join("   ");
+  }
+
   function render(payload) {
     list.innerHTML = "";
     panes = {};
+    renderCounts(payload.panes || []);
     var byHost = {};
     var order = [];
     payload.panes.forEach(function (p) {
@@ -420,35 +482,10 @@ PAGE_HTML = """<!doctype html>
 
         var statusLine = document.createElement("div");
         statusLine.className = "status-line";
-        statusLine.textContent = statusLabel(p.status) + " · " + formatDuration(p.duration_seconds);
-
+        var state = primaryState(p);
+        statusLine.textContent = state.mark + " " + state.label + " · " + formatDuration(p.duration_seconds);
         card.appendChild(row1);
         card.appendChild(statusLine);
-
-        if (p.activity) {
-          var act = document.createElement("div");
-          act.className = "activity";
-          act.textContent = p.activity;
-          card.appendChild(act);
-        }
-        var mark = attentionMark(p);
-        if (mark) {
-          var flag = document.createElement("div");
-          flag.className = "result-flag";
-          flag.textContent = mark;
-          card.appendChild(flag);
-        } else if (p.result_state === "ready") {
-          var ready = document.createElement("div");
-          ready.className = "result-flag";
-          ready.textContent = "✓ 새 Result";
-          card.appendChild(ready);
-        }
-        if (p.attention_prompt) {
-          var question = document.createElement("div");
-          question.className = "activity";
-          question.textContent = p.attention_prompt;
-          card.appendChild(question);
-        }
         list.appendChild(card);
         });
       });
@@ -495,7 +532,24 @@ PAGE_HTML = """<!doctype html>
     if (!p) return;
     $("d-project").textContent = p.project || "(이름 없음)";
     $("d-agent").textContent = p.agent || "-";
-    $("d-status").textContent = statusDot(p.status) + " " + statusLabel(p.status) + " · " + formatDuration(p.duration_seconds);
+    var badgeBox = $("d-badges");
+    badgeBox.innerHTML = "";
+    var seen = {};
+    function addBadge(text) {
+      if (!text || seen[text]) return;
+      seen[text] = true;
+      var chip = document.createElement("span");
+      chip.textContent = text;
+      badgeBox.appendChild(chip);
+    }
+    var lead = primaryState(p);
+    addBadge(lead.mark + " " + lead.label);
+    if (p.attention === "approval_required") addBadge("! 승인 필요");
+    if (p.attention === "input_required" || p.status === "WAITING") addBadge("? 입력 필요");
+    if (p.result_state === "ready") addBadge("✓ 새 결과");
+    if (p.attention === "error") addBadge("! 오류");
+    addBadge(executionState(p));
+    $("d-status").textContent = executionState(p) + " · " + formatDuration(p.duration_seconds);
     $("d-activity").textContent = p.activity || "-";
     $("d-title").textContent = p.pane_title || "-";
     $("d-host").textContent = p.host || "-";
@@ -512,8 +566,8 @@ PAGE_HTML = """<!doctype html>
     $("d-location").textContent = where;
     $("focus-pc").style.display = p.remote ? "none" : "block";
     var resultLabel = $("d-result");
-    if (p.result_state === "ready") resultLabel.textContent = "✓ 새 Result";
-    else if (p.result_state === "read") resultLabel.textContent = "확인한 Result";
+    if (p.result_state === "ready") resultLabel.textContent = "✓ 새 결과";
+    else if (p.result_state === "read") resultLabel.textContent = "확인한 결과";
     else resultLabel.textContent = "-";
     resultBox.classList.toggle("open", p.result_state === "ready" || p.result_state === "read");
     // The target is always visible right above the textarea.
@@ -528,7 +582,8 @@ PAGE_HTML = """<!doctype html>
     screenEl.textContent = "";
     screenEl.classList.remove("stale");
     lastScreenText = null;
-    liveMeta.textContent = "";
+    followLive = true;
+    liveMeta.textContent = "LIVE";
     promptText.value = "";
     resultText.textContent = "";
     resultMsg.textContent = "";
@@ -554,6 +609,32 @@ PAGE_HTML = """<!doctype html>
   }
 
   $("back").addEventListener("click", closeDetail);
+
+  screenWrap.addEventListener("scroll", function () {
+    var gap = screenWrap.scrollHeight - screenWrap.scrollTop - screenWrap.clientHeight;
+    followLive = gap < 24;
+    if (!followLive && current) liveMeta.textContent = "스크롤 중";
+  });
+  $("live-latest").addEventListener("click", function () {
+    followLive = true;
+    screenWrap.scrollTop = screenWrap.scrollHeight;
+    if (current) liveMeta.textContent = "LIVE";
+  });
+  $("live-smaller").addEventListener("click", function () {
+    liveFont = Math.max(10, liveFont - 1);
+    screenEl.style.fontSize = liveFont + "px";
+  });
+  $("live-larger").addEventListener("click", function () {
+    liveFont = Math.min(22, liveFont + 1);
+    screenEl.style.fontSize = liveFont + "px";
+  });
+  $("live-wrap").addEventListener("click", function () {
+    liveWrap = !liveWrap;
+    screenEl.style.whiteSpace = liveWrap ? "pre-wrap" : "pre";
+  });
+  $("live-full").addEventListener("click", function () {
+    screenWrap.classList.toggle("full");
+  });
 
   function postAttention(action) {
     if (!current) return;
@@ -622,13 +703,14 @@ PAGE_HTML = """<!doctype html>
       if (res.status === 200 && res.body && res.body.lines) {
         var text = res.body.lines.join("\\n");
         if (text !== lastScreenText) {
-          var atBottom = screenWrap.scrollHeight - screenWrap.scrollTop - screenWrap.clientHeight < 24;
           screenEl.textContent = text || "(비어 있음)";
           lastScreenText = text;
-          if (atBottom) screenWrap.scrollTop = screenWrap.scrollHeight;
+          if (followLive) screenWrap.scrollTop = screenWrap.scrollHeight;
         }
         screenEl.classList.remove("stale");
-        liveMeta.textContent = rtt + "ms · " + (screenInterval / 1000) + "s" + (res.body.truncated ? " · 일부" : "");
+        var pace = rtt + "ms" + (res.body.truncated ? " · 일부" : "");
+        liveMeta.textContent = (followLive ? "LIVE" : "스크롤 중") + " · " + pace;
+        $("live-dot").className = "live-dot";
       } else if (res.body && res.body.error === "source_session_missing") {
         closeDetail();
         showSourceGone(res.body.session);
@@ -828,7 +910,14 @@ PAGE_HTML = """<!doctype html>
   }
 
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden) { stopTimers(); } else { startTimers(); }
+    if (document.hidden) {
+      stopTimers();
+      $("live-dot").className = "live-dot paused";
+      if (current) liveMeta.textContent = "일시정지";
+    } else {
+      $("live-dot").className = "live-dot";
+      startTimers();
+    }
   });
 
   if (token) {

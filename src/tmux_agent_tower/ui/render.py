@@ -61,7 +61,7 @@ STATUS_SYMBOL = {
     "WORKING": "●",
     "WAITING": "!",
     "IDLE": "○",
-    "UNKNOWN": "?",
+    "UNKNOWN": "◇",
     "DEAD": "×",
 }
 
@@ -82,6 +82,124 @@ def use_narrow_layout(width: int) -> bool:
 
 def should_show_detail_panel(height: int) -> bool:
     return height >= SHORT_HEIGHT_THRESHOLD
+
+
+def primary_badge(row: Dict) -> Tuple[str, str]:
+    """The one mark a list row leads with.
+
+    Returns ``(symbol, i18n key)``. The key is never an execution enum,
+    so the UI cannot print ``WORKING`` at the user. Priority matches
+    ``card_rank``: approval, input, a new result, an error, then execution.
+    """
+
+    attention = row.get("attention") or "none"
+    if attention == "approval_required":
+        return "!", "state.approval"
+    if attention == "input_required" or row.get("status") == "WAITING":
+        return "?", "state.input"
+    if row.get("result_state") == "ready":
+        return "✓", "state.result"
+    if attention == "error":
+        return "!", "state.error"
+    return _execution_badge(row.get("status") or "")
+
+
+def execution_badge(status: str) -> Tuple[str, str]:
+    """Execution only, for the detail line next to attention and result."""
+
+    return _execution_badge(status)
+
+
+def _execution_badge(status: str) -> Tuple[str, str]:
+    return {
+        "WORKING": ("●", "state.working"),
+        "IDLE": ("○", "state.idle"),
+        "DEAD": ("×", "state.dead"),
+        "UNKNOWN": ("◇", "state.unknown"),
+        "WAITING": ("?", "state.input"),
+    }.get(status or "", ("◇", "state.unknown"))
+
+
+def detail_badges(row: Dict) -> List[Tuple[str, str]]:
+    """Every mark worth showing once a row is selected. A list row uses
+    ``primary_badge`` alone so the scan stays one glance.
+    """
+
+    badges: List[Tuple[str, str]] = []
+    attention = row.get("attention") or "none"
+    if attention == "approval_required":
+        badges.append(("!", "state.approval"))
+    if attention == "input_required" or row.get("status") == "WAITING":
+        badges.append(("?", "state.input"))
+    if row.get("result_state") == "ready":
+        badges.append(("✓", "state.result"))
+    if attention == "error":
+        badges.append(("!", "state.error"))
+    badges.append(_execution_badge(row.get("status") or ""))
+    return badges
+
+
+def watch_counts(rows: Sequence[Dict]) -> Dict[str, int]:
+    """Header counters. A pane counts once, as the reason to look at it."""
+
+    counts = {"approval": 0, "input": 0, "result": 0, "working": 0}
+    for row in rows:
+        if row.get("placeholder") or row.get("offline") or row.get("kind") == "window":
+            continue
+        attention = row.get("attention") or "none"
+        if attention == "approval_required":
+            counts["approval"] += 1
+        elif attention == "input_required" or row.get("status") == "WAITING":
+            counts["input"] += 1
+        elif row.get("result_state") == "ready":
+            counts["result"] += 1
+        elif row.get("status") == "WORKING":
+            counts["working"] += 1
+    return counts
+
+
+WATCH_HEADER = (
+    ("approval", "!", "header.approval"),
+    ("input", "?", "header.input"),
+    ("result", "✓", "header.result"),
+    ("working", "●", "header.working"),
+)
+
+
+def format_watch_header(counts: Dict[str, int], label: Callable[[str], str]) -> str:
+    """``! 승인 2   ? 입력 1``. A zero count is omitted."""
+
+    parts = [
+        f"{symbol} {label(key)} {counts.get(name, 0)}"
+        for name, symbol, key in WATCH_HEADER
+        if counts.get(name, 0) > 0
+    ]
+    return "   ".join(parts)
+
+
+def control_actions(row: Dict) -> List[Tuple[str, bool]]:
+    """Keys the control view offers, and whether each one can do something.
+
+    Navigation keys are not in this list. Opening the view is not a write.
+    """
+
+    remote = bool(row.get("remote"))
+    local_pane = (not remote) and str(row.get("key") or "").startswith("%")
+    actions = [("P", True)]
+    if row.get("approval_known"):
+        actions.append(("A", True))
+    if row.get("reject_known"):
+        actions.append(("N", True))
+    actions.extend(
+        [
+            ("Y", True),
+            ("E", True),
+            ("G", local_pane),
+            ("X", local_pane),
+            ("Esc", True),
+        ]
+    )
+    return actions
 
 
 def format_host_summary(counts: Dict[str, int], status_label: Callable[[str], str]) -> str:
@@ -232,22 +350,16 @@ def sort_by_attention(rows: List[Dict]) -> List[Dict]:
 
 
 def row_line_count(row: Dict, narrow: bool) -> int:
-    """How many physical terminal lines this row occupies: 1 for the
-    primary project/agent/status line, +1 more in narrow layout (agent +
-    status move to their own line, see ``agent_status_line``), +1 more if
-    there's a meaningful pane-title secondary line to show, +1 more if
-    there's a current-activity line to show. An empty/missing activity
-    never forces a blank line (see ``ui/tower.py``'s row-building).
+    """Physical lines for one pane in the main list.
+
+    Narrow terminals keep a single line (project + state). Wide terminals
+    add the current activity under it. Pane title, path, and pane id stay
+    in the selected detail, so they never add a list line.
     """
 
-    lines = 1
-    if narrow:
-        lines += 1
-    if row.get("title_line"):
-        lines += 1
-    if row.get("activity_text"):
-        lines += 1
-    return lines
+    if narrow or not row.get("activity_text"):
+        return 1
+    return 2
 
 
 def agent_status_line(agent: str, status_label: str, duration_text: str = "") -> str:

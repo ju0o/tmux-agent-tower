@@ -33,6 +33,8 @@ def open_control_view(stdscr, tower, pane_key: str) -> None:
 
     notice = ""
     show_result = False
+    follow = True
+    scroll = 0
     stdscr.timeout(int(CONTROL_REFRESH_SECONDS * 1000))
     try:
         while True:
@@ -41,10 +43,23 @@ def open_control_view(stdscr, tower, pane_key: str) -> None:
             if row is None or row.get("placeholder"):
                 tower.notice = "stale"
                 return
-            _draw(stdscr, tower, row, notice, show_result)
+            room = _draw(stdscr, tower, row, notice, show_result, follow, scroll)
             notice = ""
             key = read_key(stdscr)
             if key == -1 or key == curses.KEY_RESIZE:
+                continue
+            if key in (curses.KEY_UP, curses.KEY_PPAGE):
+                follow = False
+                scroll += room if key == curses.KEY_PPAGE else 1
+                continue
+            if key in (curses.KEY_DOWN, curses.KEY_NPAGE):
+                step = room if key == curses.KEY_NPAGE else 1
+                scroll = max(0, scroll - step)
+                follow = scroll == 0
+                continue
+            if key == curses.KEY_END:
+                follow = True
+                scroll = 0
                 continue
             if is_escape(key) or matches_letter(key, "q"):
                 return
@@ -83,29 +98,30 @@ def _select(tower, pane_key: str) -> None:
             return
 
 
-def _draw(stdscr, tower, row: dict, notice: str, show_result: bool) -> None:
+def _draw(stdscr, tower, row: dict, notice: str, show_result: bool, follow: bool = True, scroll: int = 0) -> int:
+    """Paint the control view. Returns how many live lines fit, for paging."""
+
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     project = row.get("project") or t("project.no_name")
     safe_add(stdscr, 0, 2, f'{t("control.title")}  {project}', curses.A_BOLD)
 
-    status = row.get("status") or ""
+    symbol, key = render.execution_badge(row.get("status") or "")
     duration = ""
     seconds = row.get("duration_seconds") or 0
     if seconds and tower.config.get("show_status_duration"):
         duration = " · " + render.format_duration(seconds)
-    status_line = f'{row.get("agent") or "-"}   {status}{duration}'
-    safe_add(stdscr, 1, 2, status_line)
-    safe_add(stdscr, 2, 2, f'{t("detail.activity")}: {row.get("activity_text") or "-"}', curses.A_DIM)
-
-    result_label = _result_label(row.get("result_state") or "none")
-    safe_add(stdscr, 3, 2, f'{t("control.result")}: {result_label}   {_attention_label(row)}')
+    badges = "   ".join(f"{mark} {t(name)}" for mark, name in render.detail_badges(row))
+    safe_add(stdscr, 1, 2, f'{row.get("agent") or "-"}   {symbol} {t(key)}{duration}')
+    safe_add(stdscr, 2, 2, badges)
+    safe_add(stdscr, 3, 2, f'{t("detail.activity")}: {row.get("activity_text") or "-"}', curses.A_DIM)
     where = (
         f'{t("detail.session")} {row.get("session") or "-"}   '
         f'{t("detail.window")} {row.get("window_index")}: {row.get("window_name") or ""}   '
         f'{t("detail.pane_id")} {row.get("pane_id") or row.get("key") or "-"}'
     )
     safe_add(stdscr, 4, 2, where, curses.A_DIM)
+
     live_label_y = 5
     if row.get("attention_prompt"):
         safe_add(stdscr, 5, 2, row.get("attention_prompt") or "", curses.A_BOLD)
@@ -120,10 +136,16 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool) -> None:
         result_lines = (body.split("\n") if body else [t("control.no_result")])[:6]
 
     live_bottom = footer_y - (len(result_lines) + 1 if result_lines else 0)
-    safe_add(stdscr, live_label_y, 2, t("control.live"), curses.A_BOLD)
-    lines = _live_lines(tower, row)
-    room = max(0, live_bottom - live_top)
-    for offset, line in enumerate(lines[-room:]):
+    live_mark = t("control.live_follow") if follow else t("control.live_paused")
+    safe_add(stdscr, live_label_y, 2, f'{t("control.live")}  {live_mark}', curses.A_BOLD)
+    lines = [_fit_live_line(line, width) for line in _live_lines(tower, row)]
+    room = max(1, live_bottom - live_top)
+    if follow:
+        view = lines[-room:]
+    else:
+        start = max(0, len(lines) - room - scroll)
+        view = lines[start : start + room]
+    for offset, line in enumerate(view):
         safe_add(stdscr, live_top + offset, 2, line)
 
     y = live_bottom
@@ -131,10 +153,39 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool) -> None:
         safe_add(stdscr, y, 2, line)
         y += 1
 
-    footer = notice or _hint(row)
-    safe_add(stdscr, footer_y, 2, footer[: max(0, width - 3)], curses.A_DIM)
+    if notice:
+        safe_add(stdscr, footer_y, 2, notice[: max(0, width - 3)], curses.A_BOLD)
+    else:
+        _draw_actions(stdscr, footer_y, row)
     stdscr.noutrefresh()
     curses.doupdate()
+    return room
+
+
+def _fit_live_line(line: str, width: int) -> str:
+    return render.truncate_to_width(line, max(4, width - 4))
+
+
+def _draw_actions(stdscr, y: int, row: dict) -> None:
+    """Available keys are bright. A key that cannot run is left out."""
+
+    labels = {
+        "P": t("control.key_prompt"),
+        "A": t("control.key_approve"),
+        "N": t("control.key_reject"),
+        "Y": t("control.key_result"),
+        "E": t("control.key_edit"),
+        "G": t("control.key_go"),
+        "X": t("control.key_close"),
+        "Esc": t("control.key_back"),
+    }
+    x = 2
+    for key_name, available in render.control_actions(row):
+        if not available:
+            continue
+        text = labels[key_name]
+        safe_add(stdscr, y, x, text, curses.A_BOLD)
+        x += render.display_width(text) + 2
 
 
 def _result_label(state: str) -> str:

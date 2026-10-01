@@ -338,9 +338,10 @@ updating a pattern (with a sanitized fixture) are welcome.
 * `! 승인 필요` / `? 입력 필요` -- attention, not a status. Approval is a
   permission widget. Input is a free-text or choice question. They are
   never the same mark.
-* `? UNKNOWN` -- not enough evidence either way. This is a deliberate,
-  honest fallback -- see `docs/STATUS_ENGINE.md` for why "unknown" beats a
-  confident wrong answer.
+* `◇ UNKNOWN` -- not enough evidence either way (`확인 불가`). This is a
+  deliberate, honest fallback -- see `docs/STATUS_ENGINE.md` for why
+  "unknown" beats a confident wrong answer. The mark is not `?`, which
+  is reserved for input needed.
 * `× DEAD` -- the pane or its process has exited.
 
 Visited state is completely independent of status -- it only tracks

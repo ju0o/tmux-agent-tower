@@ -37,6 +37,7 @@ def card_rank(row: dict) -> int:
         return 1
     if row.get("result_state") == "ready":
         return 2
-    if attention == ATTENTION_ERROR:
+    # Error and an unreadable screen both need a look before ordinary work.
+    if attention == ATTENTION_ERROR or row.get("status") == "UNKNOWN":
         return 3
-    return {"WORKING": 4, "IDLE": 5, "UNKNOWN": 6, "DEAD": 7}.get(row.get("status") or "", 8)
+    return {"WORKING": 4, "IDLE": 5, "DEAD": 6}.get(row.get("status") or "", 7)

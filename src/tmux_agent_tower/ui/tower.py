@@ -646,20 +646,42 @@ def _duration_text(tower: Tower, row: Dict) -> str:
     return render.format_duration(seconds)
 
 
+def _badge_text(symbol: str, key: str) -> str:
+    return f"{symbol} {t(key)}"
+
+
 def _build_detail_fields(tower: Tower, row: Dict) -> List[Tuple[str, str]]:
-    status = row["status"]
-    status_text = f'{STATUS_SYMBOL.get(status, "?")} {t("status." + status)}'
+    symbol, key = render.execution_badge(row.get("status") or "")
+    status_text = _badge_text(symbol, key)
     duration = _duration_text(tower, row)
     if duration:
         status_text = f"{status_text} · {duration}"
 
+    kind = row.get("attention") or "none"
+    if kind == "approval_required":
+        attention_text = _badge_text("!", "state.approval")
+    elif kind == "input_required":
+        attention_text = _badge_text("?", "state.input")
+    elif kind == "error":
+        attention_text = _badge_text("!", "state.error")
+    else:
+        attention_text = "-"
+    if row.get("result_state") == "ready":
+        result_text = _badge_text("✓", "state.result")
+    elif row.get("result_state") == "read":
+        result_text = t("control.result_read")
+    else:
+        result_text = "-"
+
     fields = [
         (t("detail.project"), _project_text(row)),
         (t("detail.agent"), row.get("agent")),
+        (t("detail.status"), status_text),
+        (t("detail.attention"), attention_text),
+        (t("detail.result"), result_text),
         (t("detail.activity"), row.get("activity_text") if tower.config.get("show_activity") else None),
         (t("detail.pane_title"), row.get("pane_title")),
         (t("detail.path"), row.get("path")),
-        (t("detail.status"), status_text),
         (t("detail.host"), row.get("host")),
     ]
     fields.extend(_location_fields(row))
@@ -704,13 +726,7 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
         row_index = item["row_index"]
         physical.append({"kind": "primary", "row": row, "row_index": row_index})
 
-        if narrow:
-            physical.append({"kind": "agent_status", "row": row, "row_index": row_index})
-
-        if row.get("title_line"):
-            physical.append({"kind": "secondary", "row": row, "row_index": row_index})
-
-        if row.get("activity_text"):
+        if not narrow and row.get("activity_text"):
             physical.append({"kind": "activity", "row": row, "row_index": row_index})
 
     return physical
@@ -731,13 +747,7 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
     badge_x = 2 + render.display_width(title) + 3
     safe_add(stdscr, 0, badge_x, badge, curses.A_DIM)
 
-    host_bits = [
-        f"{host} {summary}"
-        for host in _hosts_in_order(tower)
-        for summary in [render.format_host_summary(tower.status_counts(host), _status_label)]
-        if summary
-    ]
-    host_line = "   ".join(host_bits)
+    host_line = render.format_watch_header(render.watch_counts(tower.visible_rows), t)
     if host_line and not narrow:
         min_x = badge_x + render.display_width(badge) + 2
         x = max(min_x, width - render.display_width(host_line) - 2)
@@ -748,23 +758,40 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
 
     if filtering:
         safe_add(stdscr, 1, 2, f'{t("filter.label")} {tower.filter_text}_', curses.A_BOLD)
+        start_y = 3
     else:
-        hint_keys = [
-            t("hint.move"),
-            t("hint.open"),
-            t("hint.rename"),
-            t("hint.add_project"),
-            t("hint.new_workspace"),
-            t("hint.remote"),
-            t("hint.settings"),
-        ]
-        hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
-        hint_keys.append(t("hint.navigator"))
-        hint_keys.append(t("hint.attention"))
-        hint_keys += [t("hint.refresh"), t("hint.quit")]
-        safe_add(stdscr, 1, 2, "   ".join(hint_keys), curses.A_DIM)
-
-    start_y = 3
+        if narrow:
+            hint_keys = [
+                t("hint.move"),
+                t("hint.open"),
+                t("hint.navigator"),
+                t("hint.attention"),
+                t("hint.quit"),
+            ]
+        else:
+            hint_keys = [
+                t("hint.move"),
+                t("hint.open"),
+                t("hint.rename"),
+                t("hint.add_project"),
+                t("hint.new_workspace"),
+                t("hint.remote"),
+                t("hint.settings"),
+            ]
+            hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
+            hint_keys.append(t("hint.navigator"))
+            hint_keys.append(t("hint.attention"))
+            hint_keys += [t("hint.refresh"), t("hint.quit")]
+        hint = "   ".join(hint_keys)
+        # One clipped line hides V/A/Q. Wrap onto a second line instead.
+        if render.display_width(hint) <= max(0, width - 4):
+            safe_add(stdscr, 1, 2, hint, curses.A_DIM)
+            start_y = 3
+        else:
+            mid = (len(hint_keys) + 1) // 2
+            safe_add(stdscr, 1, 2, "   ".join(hint_keys[:mid]), curses.A_DIM)
+            safe_add(stdscr, 2, 2, "   ".join(hint_keys[mid:]), curses.A_DIM)
+            start_y = 4
     bottom_hint_y = height - 1
 
     # -- selected-item detail panel (bottom), skipped on a short terminal -
@@ -827,40 +854,27 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
 
         if p["kind"] == "primary":
             marker = ">" if is_selected else " "
-            new_flag = t("marker.new") if row.get("visit") == "NEW" else ""
-            symbol = STATUS_SYMBOL.get(row["status"], "?")
-            prefix = f"{marker} {new_flag:<3} {symbol} "
-
-            project_width = (width - len(prefix) - 2) if narrow else max(10, agent_x - len(prefix) - 2)
-            label = _project_text(row)
-            if row.get("attention") == "approval_required":
-                label = "! " + label
-            elif row.get("attention") == "input_required":
-                label = "? " + label
-            elif row.get("attention") == "error":
-                label = "! " + label
-            text = render.truncate_to_width(label, project_width)
+            symbol, state_key = render.primary_badge(row)
+            state_text = f"{symbol} {t(state_key)}"
+            duration = _duration_text(tower, row)
+            if duration and not narrow:
+                state_text = f"{state_text} · {duration}"
+            prefix = f"{marker} "
+            state_width = render.display_width(state_text)
+            project_budget = max(8, width - render.display_width(prefix) - state_width - 4)
+            if not narrow:
+                project_budget = max(10, agent_x - render.display_width(prefix) - 2)
+            text = render.truncate_to_width(_project_text(row), project_budget)
 
             safe_add(stdscr, y, 0, prefix, base_attr if is_selected else curses.A_BOLD)
-            safe_add(stdscr, y, len(prefix), text, base_attr if is_selected else 0)
+            safe_add(stdscr, y, render.display_width(prefix), text, base_attr if is_selected else 0)
 
             if not narrow:
-                safe_add(stdscr, y, agent_x, row["agent"][:14], base_attr)
-                status_attr_here = base_attr if is_selected else status_attr(row["status"])
-                status_text = t("status." + row["status"])
-                duration = _duration_text(tower, row)
-                if duration:
-                    status_text = f"{status_text} · {duration}"
-                safe_add(stdscr, y, status_x, status_text, status_attr_here)
-
-        elif p["kind"] == "agent_status":
-            text = render.agent_status_line(row["agent"], t("status." + row["status"]), _duration_text(tower, row))
-            attr = base_attr if is_selected else curses.A_DIM
-            safe_add(stdscr, y, 4, text, attr)
-
-        elif p["kind"] == "secondary":
-            attr = base_attr if is_selected else curses.A_DIM
-            safe_add(stdscr, y, 4, row["title_line"], attr)
+                safe_add(stdscr, y, agent_x, (row.get("agent") or "")[:14], base_attr)
+            state_x = max(render.display_width(prefix) + render.display_width(text) + 2, width - state_width - 2)
+            if state_x > render.display_width(prefix) + 1:
+                status_attr_here = base_attr if is_selected else status_attr(row.get("status") or "")
+                safe_add(stdscr, y, state_x, state_text, status_attr_here)
 
         elif p["kind"] == "activity":
             attr = base_attr if is_selected else curses.A_DIM
@@ -1085,9 +1099,12 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
 def run() -> None:
     # Must happen before curses.wrapper()'s initscr() for ncurses to fully
     # honor the terminal's UTF-8 locale in get_wch() (see widgets.read_key).
+    # The default Esc delay is about a second, so Back felt ignored.
     import locale
+    import os
 
     locale.setlocale(locale.LC_ALL, "")
+    os.environ.setdefault("ESCDELAY", "25")
 
     try:
         curses.wrapper(main)

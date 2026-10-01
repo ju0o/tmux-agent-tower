@@ -47,7 +47,7 @@ def test_phone_sort_keeps_axes_and_orders_attention_first():
         {"key": "unk", "status": "UNKNOWN", "attention": "none", "result_state": "none"},
     ]
     ordered = [row["key"] for row in sorted(rows, key=card_rank)]
-    assert ordered == ["yes", "ask", "ready", "err", "work", "idle", "unk", "dead"]
+    assert ordered == ["yes", "ask", "ready", "err", "unk", "work", "idle", "dead"]
 
 
 def test_codex_scrollback_approval_is_not_current(fixture_lines):
@@ -350,7 +350,7 @@ def test_phone_buttons_are_not_the_card_click():
     html = webui.PAGE_HTML
     assert "! 승인 필요" in html
     assert "? 입력 필요" in html
-    assert "✓ 새 Result" in html
+    assert "✓ 새 결과" in html
     card = html.split('card.addEventListener("click"')[1].split("});")[0]
     assert "openDetail" in card
     assert "postAttention" not in card
