@@ -240,6 +240,7 @@ PAGE_HTML = """<!doctype html>
     <div class="kv"><span class="k">Pane 이름</span><span class="v" id="d-title"></span></div>
     <div class="kv"><span class="k">Host</span><span class="v" id="d-host"></span></div>
     <div class="kv"><span class="k">위치</span><span class="v wrap" id="d-location"></span></div>
+    <div class="kv"><span class="k">감지</span><span class="v wrap" id="d-sense"></span></div>
     <div class="actions"><button id="focus-pc" type="button">PC를 이 Pane으로 이동</button></div>
   </div>
 
@@ -564,6 +565,11 @@ PAGE_HTML = """<!doctype html>
     }
     if (p.pane_id) where += "\\nPane " + p.pane_id + (p.pane_index != null && p.pane_index !== "" ? " · index " + p.pane_index : "");
     $("d-location").textContent = where;
+    var senseAgent = p.agent_source || "-";
+    var senseProject = p.project_source || "-";
+    if (senseAgent === "override" && p.auto_agent_source) senseAgent = "override→" + p.auto_agent_source;
+    if (senseProject === "override" && p.auto_project_source) senseProject = "override→" + p.auto_project_source;
+    $("d-sense").textContent = senseAgent + " / " + senseProject;
     $("focus-pc").style.display = p.remote ? "none" : "block";
     var resultLabel = $("d-result");
     if (p.result_state === "ready") resultLabel.textContent = "✓ 새 결과";

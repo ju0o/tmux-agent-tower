@@ -16,9 +16,19 @@ ADAPTERS = [
 ]
 
 
-def resolve_adapter(command: str, title: str, cmdline: str = "") -> AgentAdapter:
+def resolve_adapter(command: str, title: str, cmdline: str = "", lines=()) -> AgentAdapter:
+    """Pick an adapter from process evidence before the pane title.
+
+    ``matches()`` still exists for a single adapter's own check, but the
+    walk here does not let a title hint outrank an executable. A verified
+    shell stays a shell even when the title says Claude.
+    """
+
+    from ..detection.identity import identify_agent
+
+    name, _source = identify_agent(command, title, cmdline, lines)
     for adapter in ADAPTERS:
-        if adapter.matches(command, title, cmdline):
+        if adapter.name == name:
             return adapter
     return ShellAdapter.UNKNOWN_FALLBACK
 

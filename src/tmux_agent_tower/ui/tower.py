@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..adapters import resolve_adapter
+from ..detection.identity import identify_agent, prefer_override
 from ..adapters.base import PaneContext
 from ..detection.result import ResultTracker
 from ..detection.status import StatusEngine, STATUS_DEAD
@@ -197,27 +198,76 @@ class Tower:
         candidate = None if dead else adapter.extract_result(ctx)
         return self.results.observe(key, status, candidate).state
 
+    def _identity(
+        self,
+        key: str,
+        command: str,
+        title: str,
+        cmdline: str,
+        lines,
+        git_project: Optional[str],
+        basename: Optional[str],
+        host: str,
+        no_name: str,
+    ) -> Dict:
+        """Displayed names plus where they came from.
+
+        The override, when present, replaces the label only. ``auto_*``
+        stays the fresh detection so the next refresh can show a shell
+        again after Claude exits, and so Reset Auto has something to
+        return to.
+        """
+
+        auto_agent, auto_agent_source = identify_agent(command, title, cmdline, lines)
+        auto_project, auto_project_source = render.resolve_project_identity(
+            None, git_project, title, basename, host, no_name
+        )
+        project, project_source = prefer_override(
+            auto_project, auto_project_source, self.overrides.get_project(key)
+        )
+        agent, agent_source = prefer_override(
+            auto_agent, auto_agent_source, self.overrides.get_agent(key)
+        )
+        return {
+            "project": project,
+            "auto_project": auto_project,
+            "project_source": project_source,
+            "auto_project_source": auto_project_source,
+            "agent": agent,
+            "auto_agent": auto_agent,
+            "agent_source": agent_source,
+            "auto_agent_source": auto_agent_source,
+        }
+
     def _local_rows(self) -> List[Dict]:
         panes = discovery.list_panes(self.session, self.own_pane_id, CAPTURE_LINES)
         out = []
         no_name = t("project.no_name")
 
         for pane in panes:
-            adapter = resolve_adapter(pane["command"], pane["title"], pane["cmdline"])
+            adapter = resolve_adapter(
+                pane["command"], pane["title"], pane.get("cmdline") or "", pane.get("lines") or ()
+            )
             ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
             status = self.status_engine.evaluate(pane["pane_id"], pane["dead"], adapter, ctx)
             visit = self.visits.visit_label(self.session, pane["pane_id"])
 
             key = pane["pane_id"]
-            custom_project = self.overrides.get_project(key)
-            custom_agent = self.overrides.get_agent(key)
             effective_title = pane["title"]  # local title edits are pushed to real tmux -- see edit_selected
-
-            auto_project = render.resolve_display_project(
-                None, pane.get("git_project"), effective_title, pane.get("path_basename"), _raw_hostname(), no_name
+            identity = self._identity(
+                key,
+                pane["command"],
+                effective_title,
+                pane.get("cmdline") or "",
+                pane.get("lines") or (),
+                pane.get("git_project"),
+                pane.get("path_basename"),
+                _raw_hostname(),
+                no_name,
             )
-            project = custom_project or auto_project
-            agent = custom_agent or adapter.name
+            project = identity["project"]
+            agent = identity["agent"]
+            auto_project = identity["auto_project"]
             title_line = render.title_secondary_line(project, effective_title, _raw_hostname())
             activity_text, duration_seconds = self._activity_and_duration(key, adapter, ctx, status, pane["dead"])
             result_state = self._result_state(key, status, adapter, ctx, pane["dead"])
@@ -232,8 +282,12 @@ class Tower:
                     "host": self.local_host,
                     "project": project,
                     "auto_project": auto_project,
+                    "project_source": identity["project_source"],
+                    "auto_project_source": identity["auto_project_source"],
                     "agent": agent,
-                    "auto_agent": adapter.name,
+                    "auto_agent": identity["auto_agent"],
+                    "agent_source": identity["agent_source"],
+                    "auto_agent_source": identity["auto_agent_source"],
                     "title_line": title_line,
                     "activity_text": activity_text,
                     "duration_seconds": duration_seconds,
@@ -310,24 +364,32 @@ class Tower:
 
             for pane in snapshot["panes"]:
                 composite_key = f"{alias}:{pane['pane_id']}"
-                adapter = resolve_adapter(pane["command"], pane["title"], pane.get("cmdline", ""))
+                adapter = resolve_adapter(
+                    pane["command"], pane["title"], pane.get("cmdline") or "", pane.get("lines") or ()
+                )
                 ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
                 status = self.status_engine.evaluate(composite_key, pane["dead"], adapter, ctx)
                 visit = self.visits.visit_label(remote_session, pane["pane_id"])
 
-                custom_project = self.overrides.get_project(composite_key)
-                custom_agent = self.overrides.get_agent(composite_key)
                 # Remote title overrides aren't pushed to the real remote
                 # tmux (no remote install -- see docs/ARCHITECTURE.md), so
                 # the override itself is the effective title here.
                 effective_title = self.overrides.get_title(composite_key) or pane["title"]
                 basename = Path(pane["path"] or "").name or pane["path"]
-
-                auto_project = render.resolve_display_project(
-                    None, None, effective_title, basename, name, no_name
+                identity = self._identity(
+                    composite_key,
+                    pane["command"],
+                    effective_title,
+                    pane.get("cmdline") or "",
+                    pane.get("lines") or (),
+                    None,
+                    basename,
+                    name,
+                    no_name,
                 )
-                project = custom_project or auto_project
-                agent = custom_agent or adapter.name
+                project = identity["project"]
+                agent = identity["agent"]
+                auto_project = identity["auto_project"]
                 title_line = render.title_secondary_line(project, effective_title, name)
                 # Remote captures are title-only (see docs/ARCHITECTURE.md),
                 # so activity extraction has nothing to search -- almost
@@ -343,8 +405,12 @@ class Tower:
                         "host": name,
                         "project": project,
                         "auto_project": auto_project,
+                        "project_source": identity["project_source"],
+                        "auto_project_source": identity["auto_project_source"],
                         "agent": agent,
-                        "auto_agent": adapter.name,
+                        "auto_agent": identity["auto_agent"],
+                        "agent_source": identity["agent_source"],
+                        "auto_agent_source": identity["auto_agent_source"],
                         "title_line": title_line,
                         "activity_text": activity_text,
                         "duration_seconds": duration_seconds,

@@ -13,6 +13,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..detection.attention import card_rank
 
+from ..detection.identity import title_is_agent_label
 from ..detection.project import is_low_confidence_name
 
 
@@ -237,6 +238,37 @@ def looks_meaningful_title(title: Optional[str], local_host: str) -> bool:
     return True
 
 
+def resolve_project_identity(
+    custom: Optional[str],
+    git_name: Optional[str],
+    title: Optional[str],
+    basename: Optional[str],
+    local_host: str,
+    no_name_label: str,
+) -> tuple:
+    """``(project name, source)``.
+
+    Source is ``override``, ``git``, ``title``, ``path``, or ``none``.
+    A title that only names an agent (``Claude Tmux Control``) is not a
+    project. A real task title still fills in when the directory itself
+    says nothing.
+    """
+
+    if custom:
+        return custom, "override"
+
+    if git_name and not is_low_confidence_name(git_name):
+        return git_name, "git"
+
+    if looks_meaningful_title(title, local_host) and not title_is_agent_label(title):
+        return title.strip(), "title"
+
+    if basename and not is_low_confidence_name(basename):
+        return basename, "path"
+
+    return no_name_label, "none"
+
+
 def resolve_display_project(
     custom: Optional[str],
     git_name: Optional[str],
@@ -248,25 +280,35 @@ def resolve_display_project(
     """The project name shown as a row's primary text.
 
     Priority: an explicit user override > the enclosing git repo's name >
-    a meaningful pane title > the raw directory basename > an honest
-    "no name" placeholder. A single-letter or generic mount-point-ish
-    basename (see ``detection.project.is_low_confidence_name``) is never
-    shown as-is if something better is available.
+    a meaningful pane title that is not an agent label > the raw directory
+    basename > an honest "no name" placeholder. A single-letter or generic
+    mount-point-ish basename (see ``detection.project.is_low_confidence_name``)
+    is never shown as-is if something better is available.
     """
 
-    if custom:
-        return custom
+    name, _source = resolve_project_identity(
+        custom, git_name, title, basename, local_host, no_name_label
+    )
+    return name
 
-    if git_name and not is_low_confidence_name(git_name):
-        return git_name
 
-    if looks_meaningful_title(title, local_host):
-        return title.strip()
+def format_identity_sense(
+    agent_source: Optional[str],
+    project_source: Optional[str],
+    auto_agent_source: Optional[str] = None,
+    auto_project_source: Optional[str] = None,
+) -> str:
+    """``override→process / git`` so a stuck edit still shows what
+    detection would have said.
+    """
 
-    if basename and not is_low_confidence_name(basename):
-        return basename
+    def part(shown: Optional[str], auto: Optional[str]) -> str:
+        label = shown or "-"
+        if label == "override" and auto and auto != "override":
+            return f"override→{auto}"
+        return label
 
-    return no_name_label
+    return f"{part(agent_source, auto_agent_source)} / {part(project_source, auto_project_source)}"
 
 
 def title_secondary_line(project: str, title: Optional[str], local_host: str) -> Optional[str]:

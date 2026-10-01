@@ -112,6 +112,7 @@ STRINGS = {
     "detail.title": "Selected item",
     "detail.project": "Project",
     "detail.agent": "Agent",
+    "detail.sense": "Detected",
     "detail.pane_title": "Pane title",
     "detail.path": "Path",
     "detail.status": "Execution",

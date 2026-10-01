@@ -109,6 +109,7 @@ STRINGS = {
     "detail.title": "선택한 항목",
     "detail.project": "프로젝트",
     "detail.agent": "에이전트",
+    "detail.sense": "감지",
     "detail.pane_title": "Pane 이름",
     "detail.path": "경로",
     "detail.status": "실행",

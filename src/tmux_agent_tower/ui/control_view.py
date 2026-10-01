@@ -125,11 +125,18 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool, follow: bool
         f'{t("detail.pane_id")} {row.get("pane_id") or row.get("key") or "-"}'
     )
     safe_add(stdscr, 4, 2, where, curses.A_DIM)
+    sense = render.format_identity_sense(
+        row.get("agent_source"),
+        row.get("project_source"),
+        row.get("auto_agent_source"),
+        row.get("auto_project_source"),
+    )
+    safe_add(stdscr, 5, 2, f'{t("detail.sense")}: {sense}', curses.A_DIM)
 
-    live_label_y = 5
+    live_label_y = 6
     if row.get("attention_prompt"):
-        safe_add(stdscr, 5, 2, row.get("attention_prompt") or "", curses.A_BOLD)
-        live_label_y = 6
+        safe_add(stdscr, 6, 2, row.get("attention_prompt") or "", curses.A_BOLD)
+        live_label_y = 7
 
     live_top = live_label_y + 1
     footer_y = height - 1

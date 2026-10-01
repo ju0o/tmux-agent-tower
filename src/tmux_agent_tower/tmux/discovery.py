@@ -11,6 +11,7 @@ from typing import Dict, List
 
 from . import capture
 from ..detection import process as process_detection
+from ..detection.identity import evidence_cmdline
 from ..detection.project import discover_project, git_project_name
 
 FIELD_SEP = "\x1f"
@@ -54,6 +55,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
         return []
 
     cmdline_map = process_detection.cmdline_by_pid()
+    ppid_map = process_detection.ppid_by_pid()
 
     rows: List[Dict] = []
 
@@ -93,7 +95,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
                 "pane_id": pane_id,
                 "title": title or "(unnamed)",
                 "command": command,
-                "cmdline": cmdline_map.get(pane_pid, ""),
+                "cmdline": evidence_cmdline(pane_pid, command, cmdline_map, ppid_map),
                 "path": current_path,
                 "auto_project": discover_project(current_path),
                 "git_project": git_project_name(current_path),

@@ -8,6 +8,15 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **Identity** -- the running executable wins over the pane title, and a
+  shell stays a shell when the title says Claude. A child agent wins over
+  a parent terminal. Cursor's `agent` binary is recognized from its
+  `cursor-agent` path, including when a tool shell is the child. The
+  project name prefers the git repo; a title that is only an agent name
+  is not a project. Saved `E` / phone edits still win until Reset Auto.
+  Each refresh re-reads the process tree. Control view and the phone
+  detail show `감지: process / git` (or `override→process` when an edit
+  is hiding the detection).
 * **UX polish** -- PC and phone share one set of marks (`● 작업 중`,
   `! 승인 필요`, `? 입력 필요`, `✓ 새 결과`, `○ 대기`, `× 종료`,
   `◇ 확인 불가`). Input needed stays `?` so it is not the same mark as an
