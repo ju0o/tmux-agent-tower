@@ -233,8 +233,11 @@ class Tower:
             title_line = render.title_secondary_line(project, effective_title, _raw_hostname())
             activity_text, duration_seconds = self._activity_and_duration(key, adapter, ctx, status, pane["dead"])
             result_state = self._result_state(key, status, adapter, ctx, pane["dead"])
+            attention = "none" if pane["dead"] else adapter.detect_attention(ctx)
+            attention_prompt = adapter.extract_attention_prompt(ctx) if attention != "none" else ""
+            notify_status = "WAITING" if attention in ("approval_required", "input_required") else status
 
-            self.notifier.observe(key, status, project)
+            self.notifier.observe(key, notify_status, project)
 
             out.append(
                 {
@@ -249,6 +252,10 @@ class Tower:
                     "pane_title": effective_title,
                     "path": pane["path"],
                     "status": status,
+                    "attention": attention,
+                    "attention_prompt": attention_prompt,
+                    "approval_known": bool(attention == "approval_required" and adapter.approve(ctx)),
+                    "reject_known": bool(attention == "approval_required" and adapter.reject(ctx)),
                     "result_state": result_state,
                     "visit": visit,
                     "key": key,
@@ -846,7 +853,14 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             prefix = f"{marker} {new_flag:<3} {symbol} "
 
             project_width = (width - len(prefix) - 2) if narrow else max(10, agent_x - len(prefix) - 2)
-            text = render.truncate_to_width(_project_text(row), project_width)
+            label = _project_text(row)
+            if row.get("attention") == "approval_required":
+                label = "! " + label
+            elif row.get("attention") == "input_required":
+                label = "? " + label
+            elif row.get("attention") == "error":
+                label = "! " + label
+            text = render.truncate_to_width(label, project_width)
 
             safe_add(stdscr, y, 0, prefix, base_attr if is_selected else curses.A_BOLD)
             safe_add(stdscr, y, len(prefix), text, base_attr if is_selected else 0)

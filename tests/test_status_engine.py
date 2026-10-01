@@ -3,7 +3,6 @@ from tmux_agent_tower.adapters.base import PaneContext
 from tmux_agent_tower.detection.status import (
     StatusEngine,
     STATUS_WORKING,
-    STATUS_WAITING,
     STATUS_IDLE,
     STATUS_UNKNOWN,
     STATUS_DEAD,
@@ -85,7 +84,8 @@ def test_generic_waiting_fallback_for_unknown_adapter():
     engine = StatusEngine()
     adapter = resolve_adapter("some-random-tool", "")
     ctx = _ctx(["Do you want to proceed?", "(y/n)"], command="some-random-tool")
-    assert engine.evaluate("p1", False, adapter, ctx) == STATUS_WAITING
+    assert engine.evaluate("p1", False, adapter, ctx) == STATUS_UNKNOWN
+    assert adapter.detect_attention(ctx) == "none"
 
 
 def test_forget_clears_state():
@@ -140,15 +140,14 @@ def test_duration_resets_on_status_transition():
     engine.evaluate("p1", False, adapter, working_ctx, now=now + 30)
     assert engine.duration_seconds("p1", now=now + 30) == 30.0
 
-    # Transition WORKING -> WAITING: duration must restart from 0, not
-    # keep accumulating from when it started WORKING. The content change
-    # itself is provisionally read as WORKING for one tick (existing,
-    # intentional anti-flicker rule); it settles into WAITING once the
-    # same new content is observed unchanged on the following tick.
+    # Transition WORKING -> IDLE: an approval screen is not an execution
+    # state. The content change is WORKING for one tick; once it is
+    # unchanged and the hold expires, execution is IDLE. Attention is
+    # separate and is not what this duration tracks.
     waiting_ctx = _ctx(["Allow this command to run?", "1. Yes", "2. No"])
     engine.evaluate("p1", False, adapter, waiting_ctx, now=now + 31)
     status = engine.evaluate("p1", False, adapter, waiting_ctx, now=now + 35)
-    assert status == STATUS_WAITING
+    assert status == STATUS_IDLE
     assert engine.duration_seconds("p1", now=now + 35) == 0.0
     engine.evaluate("p1", False, adapter, waiting_ctx, now=now + 44)
     assert engine.duration_seconds("p1", now=now + 44) == 9.0

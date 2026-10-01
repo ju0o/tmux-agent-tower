@@ -16,6 +16,7 @@ from ..control.actions import (
     focus_pane,
     get_pane_screen,
     get_result,
+    respond_attention,
     send_prompt,
 )
 from ..i18n import t
@@ -47,6 +48,12 @@ def open_control_view(stdscr, tower, pane_key: str) -> None:
                 continue
             if is_escape(key) or matches_letter(key, "q"):
                 return
+            if matches_letter(key, "a"):
+                notice = _attention_action(tower, row, "approve")
+                continue
+            if matches_letter(key, "n") and row and row.get("attention") == "approval_required":
+                notice = _attention_action(tower, row, "reject")
+                continue
             if matches_letter(key, "p"):
                 notice = _prompt(stdscr, tower, row)
                 show_result = False
@@ -92,15 +99,19 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool) -> None:
     safe_add(stdscr, 2, 2, f'{t("detail.activity")}: {row.get("activity_text") or "-"}', curses.A_DIM)
 
     result_label = _result_label(row.get("result_state") or "none")
-    safe_add(stdscr, 3, 2, f'{t("control.result")}: {result_label}')
+    safe_add(stdscr, 3, 2, f'{t("control.result")}: {result_label}   {_attention_label(row)}')
     where = (
         f'{t("detail.session")} {row.get("session") or "-"}   '
         f'{t("detail.window")} {row.get("window_index")}: {row.get("window_name") or ""}   '
         f'{t("detail.pane_id")} {row.get("pane_id") or row.get("key") or "-"}'
     )
     safe_add(stdscr, 4, 2, where, curses.A_DIM)
+    live_label_y = 5
+    if row.get("attention_prompt"):
+        safe_add(stdscr, 5, 2, row.get("attention_prompt") or "", curses.A_BOLD)
+        live_label_y = 6
 
-    live_top = 6
+    live_top = live_label_y + 1
     footer_y = height - 1
     result_lines: list = []
     if show_result:
@@ -109,7 +120,7 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool) -> None:
         result_lines = (body.split("\n") if body else [t("control.no_result")])[:6]
 
     live_bottom = footer_y - (len(result_lines) + 1 if result_lines else 0)
-    safe_add(stdscr, 5, 2, t("control.live"), curses.A_BOLD)
+    safe_add(stdscr, live_label_y, 2, t("control.live"), curses.A_BOLD)
     lines = _live_lines(tower, row)
     room = max(0, live_bottom - live_top)
     for offset, line in enumerate(lines[-room:]):
@@ -120,7 +131,7 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool) -> None:
         safe_add(stdscr, y, 2, line)
         y += 1
 
-    footer = notice or t("control.hint")
+    footer = notice or _hint(row)
     safe_add(stdscr, footer_y, 2, footer[: max(0, width - 3)], curses.A_DIM)
     stdscr.noutrefresh()
     curses.doupdate()
@@ -145,13 +156,53 @@ def _live_lines(tower, row: dict) -> list:
     return payload.get("lines") or [t("control.empty_live")]
 
 
+def _attention_label(row: dict) -> str:
+    kind = row.get("attention") or "none"
+    if kind == "approval_required":
+        return t("attention.approval")
+    if kind == "input_required":
+        return t("attention.input")
+    if kind == "error":
+        return t("attention.error")
+    return ""
+
+
+def _hint(row: dict) -> str:
+    parts = []
+    if row.get("attention") == "approval_required" and not row.get("approval_known"):
+        parts.append(t("control.approve_unknown"))
+    if row.get("approval_known"):
+        parts.append(t("control.key_approve"))
+    if row.get("reject_known"):
+        parts.append(t("control.key_reject"))
+    if row.get("attention") == "input_required":
+        parts.append(t("control.key_answer"))
+    parts.extend([t("control.key_prompt"), t("control.key_result"), "E", "G", "X", "Esc"])
+    return "   ".join(parts)
+
+
+def _attention_action(tower, row: dict, action: str) -> str:
+    if row.get("attention") != "approval_required":
+        return ""
+    ok, reason = respond_attention(tower, row.get("key"), action)
+    if reason == "approval_unknown":
+        return t("control.approve_unknown")
+    if not ok:
+        return t("nav.stale") if reason in ("stale", "not_found", "not_approval") else (reason or "")
+    return t("control.approved") if action == "approve" else t("control.rejected")
+
+
 def _prompt(stdscr, tower, row: dict) -> str:
     if row.get("remote"):
         return t("control.remote_unsupported")
+    question = row.get("attention_prompt") or ""
     text = prompt_text(
         stdscr,
         t("control.prompt_label"),
-        context_lines=[f'{row.get("project") or "-"} / {row.get("agent") or "-"}'],
+        context_lines=[
+            f'{row.get("project") or "-"} / {row.get("agent") or "-"}',
+            question,
+        ],
     )
     if not text:
         return ""

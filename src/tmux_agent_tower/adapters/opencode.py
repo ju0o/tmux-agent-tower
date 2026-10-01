@@ -30,7 +30,6 @@ from .base import (
     AdapterResult,
     PaneContext,
     ResultCandidate,
-    looks_like_generic_waiting,
     prose_body,
     result_fingerprint,
 )
@@ -55,13 +54,33 @@ class OpenCodeAdapter(AgentAdapter):
         if _WORKING_RE.search(tail):
             return AdapterResult("WORKING", "interrupt-hint")
 
-        if looks_like_generic_waiting(tail):
-            return AdapterResult("WAITING", "approval-prompt")
-
         if _IDLE_HINT_RE.search(tail):
             return AdapterResult("IDLE", "commands-hint-no-interrupt")
 
         return AdapterResult(None)
+
+    def _widget(self, ctx: PaneContext) -> str:
+        return "\n".join(ctx.lines[-8:])
+
+    def detect_attention(self, ctx: PaneContext) -> str:
+        # The live approval widget was never captured. This matches only the
+        # synthesized fixture shape, and approve() stays None on purpose.
+        widget = self._widget(ctx)
+        if _WORKING_RE.search(widget) or _IDLE_HINT_RE.search(widget):
+            return "none"
+        if re.search(r"allow this tool call\?", widget, re.IGNORECASE) and re.search(r"\(y/n\)", widget, re.IGNORECASE):
+            return "approval_required"
+        return "none"
+
+    def extract_attention_prompt(self, ctx: PaneContext) -> str:
+        from ..detection.attention import clamp_prompt
+
+        if self.detect_attention(ctx) == "none":
+            return ""
+        for line in reversed(self._widget(ctx).split("\n")):
+            if "?" in line:
+                return clamp_prompt(line.strip())
+        return ""
 
     def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:
         # Deliberately the FULL capture, not ctx.tail(20): a short response

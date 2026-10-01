@@ -8,7 +8,7 @@ idle just because the shell prompt regex fails to match some exotic PS1.
 
 from __future__ import annotations
 
-from .base import AgentAdapter, AdapterResult, PaneContext, SHELL_PROMPT_RE, looks_like_generic_waiting
+from .base import AgentAdapter, AdapterResult, PaneContext, SHELL_PROMPT_RE
 
 
 class ShellAdapter(AgentAdapter):
@@ -17,11 +17,6 @@ class ShellAdapter(AgentAdapter):
     title_hints = ()
 
     def classify(self, ctx: PaneContext) -> AdapterResult:
-        tail = ctx.tail(20)
-
-        if looks_like_generic_waiting(tail):
-            return AdapterResult("WAITING", "approval-prompt")
-
         last = ctx.last_nonblank()
         if last and SHELL_PROMPT_RE.search(last):
             return AdapterResult("IDLE", "shell-prompt")

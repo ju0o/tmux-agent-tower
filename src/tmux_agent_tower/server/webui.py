@@ -186,6 +186,12 @@ PAGE_HTML = """<!doctype html>
     <div class="kv"><span class="k">현재 작업</span><span class="v wrap" id="d-activity"></span></div>
     <div class="kv"><span class="k">Pane 이름</span><span class="v" id="d-title"></span></div>
     <div class="kv"><span class="k">Host</span><span class="v" id="d-host"></span></div>
+    <div class="kv"><span class="k">주의</span><span class="v" id="d-attention"></span></div>
+    <div class="kv"><span class="k">질문</span><span class="v wrap" id="d-question"></span></div>
+    <div class="actions">
+      <button id="approve" type="button">승인</button>
+      <button id="reject" type="button">거절</button>
+    </div>
     <div class="kv"><span class="k">위치</span><span class="v wrap" id="d-location"></span></div>
     <div class="actions"><button id="focus-pc" type="button">PC를 이 Pane으로 이동</button></div>
     <div class="kv" id="result-row"><span class="k">결과</span><span class="v" id="d-result">-</span></div>
@@ -320,6 +326,14 @@ PAGE_HTML = """<!doctype html>
     return { WORKING: "작업 중", WAITING: "입력 대기", IDLE: "대기", UNKNOWN: "확인 불가", DEAD: "종료" }[s] || s;
   }
 
+  function attentionMark(p) {
+    if (!p) return "";
+    if (p.attention === "approval_required") return "! 승인 필요";
+    if (p.attention === "input_required") return "? 입력 필요";
+    if (p.attention === "error") return "! 오류";
+    return "";
+  }
+
   function statusDot(s) {
     return { WORKING: "●", WAITING: "!", IDLE: "○", UNKNOWN: "?", DEAD: "✕" }[s] || "○";
   }
@@ -354,11 +368,14 @@ PAGE_HTML = """<!doctype html>
 
       byHost[host].sort(function (a, b) {
         function rank(p) {
-          if (p.status === "WAITING") return 0;
-          if (p.result_state === "ready") return 1;
-          if (p.status === "WORKING") return 2;
-          if (p.status === "IDLE") return 3;
-          return 4;
+          if (p.attention === "approval_required") return 0;
+          if (p.attention === "input_required" || p.status === "WAITING") return 1;
+          if (p.result_state === "ready") return 2;
+          if (p.attention === "error") return 3;
+          if (p.status === "WORKING") return 4;
+          if (p.status === "IDLE") return 5;
+          if (p.status === "UNKNOWN") return 6;
+          return 7;
         }
         return rank(a) - rank(b);
       });
@@ -400,11 +417,23 @@ PAGE_HTML = """<!doctype html>
           act.textContent = p.activity;
           card.appendChild(act);
         }
-        if (p.result_state === "ready") {
+        var mark = attentionMark(p);
+        if (mark) {
           var flag = document.createElement("div");
           flag.className = "result-flag";
-          flag.textContent = "✓ 새 Result";
+          flag.textContent = mark;
           card.appendChild(flag);
+        } else if (p.result_state === "ready") {
+          var ready = document.createElement("div");
+          ready.className = "result-flag";
+          ready.textContent = "✓ 새 Result";
+          card.appendChild(ready);
+        }
+        if (p.attention_prompt) {
+          var question = document.createElement("div");
+          question.className = "activity";
+          question.textContent = p.attention_prompt;
+          card.appendChild(question);
         }
         list.appendChild(card);
       });
@@ -450,6 +479,11 @@ PAGE_HTML = """<!doctype html>
     $("d-activity").textContent = p.activity || "-";
     $("d-title").textContent = p.pane_title || "-";
     $("d-host").textContent = p.host || "-";
+    var mark = attentionMark(p);
+    $("d-attention").textContent = mark || "-";
+    $("d-question").textContent = p.attention_prompt || "-";
+    $("approve").style.display = p.approval_known ? "block" : "none";
+    $("reject").style.display = p.reject_known ? "block" : "none";
     var where = "Session " + (p.session || "-");
     if (p.window_index != null && p.window_index !== "") {
       where += "\\nWindow " + p.window_index + ": " + (p.window_name || "");
@@ -500,6 +534,32 @@ PAGE_HTML = """<!doctype html>
   }
 
   $("back").addEventListener("click", closeDetail);
+
+  function postAttention(action) {
+    if (!current) return;
+    var p = panes[current];
+    if (!p || p.remote) return;
+    var key = current;
+    api(paneUrl(key, "attention"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: action })
+    }).then(function (res) {
+      if (current !== key) return;
+      if (res.status === 200 && res.body && res.body.ok) {
+        showToast(action === "approve" ? "승인 키를 보냈습니다." : "거절 키를 보냈습니다.");
+        return;
+      }
+      if (res.body && res.body.error === "approval_unknown") {
+        showToast("승인은 실제 Pane에서 처리하세요.");
+        return;
+      }
+      showToast((res.body && res.body.error) || "처리하지 못했습니다.");
+    }).catch(function () { showToast("처리하지 못했습니다."); });
+  }
+
+  $("approve").addEventListener("click", function () { postAttention("approve"); });
+  $("reject").addEventListener("click", function () { postAttention("reject"); });
 
   $("focus-pc").addEventListener("click", function () {
     if (!current || sending) return;
@@ -633,6 +693,11 @@ PAGE_HTML = """<!doctype html>
     var text = promptText.value;
     if (!text.trim()) return;
     if (p.status === "DEAD") { showToast("이 pane은 종료되었습니다."); return; }
+    if (p.attention === "input_required") {
+      var who = p.agent || "Agent";
+      var asked = p.attention_prompt || "";
+      if (!window.confirm(who + "에게 답변을 보냅니다.\n" + asked + "\n\n전송할까요?")) return;
+    }
     if (p.agent === "Shell" || p.agent === "SSH") {
       if (!window.confirm("이 pane은 일반 셸입니다. 입력한 내용이 그대로 실행됩니다. 보낼까요?")) return;
     }

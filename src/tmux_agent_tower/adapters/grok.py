@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from .base import Activity, AgentAdapter, AdapterResult, PaneContext, looks_like_generic_waiting
+from .base import Activity, AgentAdapter, AdapterResult, PaneContext
 
 _RUNNING_RE = re.compile(r"loop[s]?\s+(is\s+|are\s+)?still running", re.IGNORECASE)
 _IDLE_HINT_RE = re.compile(r"send a message", re.IGNORECASE)
@@ -31,9 +31,6 @@ class GrokAdapter(AgentAdapter):
 
         if _RUNNING_RE.search(tail):
             return AdapterResult("WORKING", "loop-running")
-
-        if looks_like_generic_waiting(tail):
-            return AdapterResult("WAITING", "approval-prompt")
 
         if _IDLE_HINT_RE.search(tail):
             return AdapterResult("IDLE", "send-a-message-hint")

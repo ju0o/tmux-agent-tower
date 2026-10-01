@@ -193,6 +193,43 @@ class AgentAdapter:
 
         return None
 
+    def detect_execution(self, ctx: PaneContext) -> Optional[str]:
+        """WORKING or IDLE when this agent is sure. Never an attention value."""
+
+        status = self.classify(ctx).status
+        if status in ("WORKING", "IDLE"):
+            return status
+        return None
+
+    def detect_attention(self, ctx: PaneContext) -> str:
+        """``none``, ``approval_required``, ``input_required``, or ``error``.
+
+        The default never guesses. A shared regex is not an attention detector.
+        """
+
+        return "none"
+
+    def extract_attention_prompt(self, ctx: PaneContext) -> str:
+        """The current question only, already clamped. Empty when there is none."""
+
+        return ""
+
+    def detect_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        return self.extract_result(ctx)
+
+    def approve(self, ctx: PaneContext) -> Optional[str]:
+        """One tmux key this agent's current approval widget documents, or None.
+
+        None means Tower must not send a key. Callers must not invent Enter or y.
+        """
+
+        return None
+
+    def reject(self, ctx: PaneContext) -> Optional[str]:
+        """One tmux key for the labeled reject choice, or None."""
+
+        return None
+
     def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
         """Final answer body, or None. Silence is not a result. The
         default has no final-response concept (shells and unknown

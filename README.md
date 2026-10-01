@@ -83,10 +83,12 @@ NEW ! web-app                                        Codex          WAITING
   its current status (`대기 · 4m`), shown next to the status and in the
   detail panel.
 * **Attention View** (`A`) re-sorts the list by what needs you first --
-  `WAITING > UNKNOWN > DEAD > WORKING > IDLE` -- without changing the
-  default per-host order; press `A` again to go back.
+  approval, then a question, then a new result, then an error, then
+  `WORKING > IDLE > UNKNOWN > DEAD` -- without changing the default
+  per-host order; press `A` again to go back. Execution, attention, and
+  result stay separate fields.
 * Optional, **off-by-default** notifications on a genuine status change
-  (e.g. an agent starts WAITING on you), via `notify-send` or a
+  (e.g. an agent starts waiting on approval or a question), via `notify-send` or a
   `tmux display-message` fallback wherever there's no desktop
   notification daemon. One-shot per transition -- no repeat spam while a
   pane just sits in the same status.
@@ -236,7 +238,11 @@ recent `capture-pane` text the phone uses. `P` sends one prompt, `E`
 edits the display name, `Y` shows a result, `G` is the only action that
 actually moves to the pane, and `X` asks before `kill-pane` of that
 pane id. Cancel is the default. Tower's own pane cannot be closed from
-there. `Ctrl+b w` still comes back.
+there. `Ctrl+b w` still comes back. When the bottom widget is an
+approval Codex or Claude Code names, `A` sends that documented yes key
+and `N` sends the documented no key. Any other agent shows that the
+approval has to be done in the real pane. Tower does not guess `y` or
+Enter.
 
 ### `tower --doctor`
 
@@ -309,22 +315,25 @@ actually "done."
 ## Supported agents
 
 Codex, Claude Code, OpenCode, Grok CLI, Cursor Agent CLI, and a generic
-shell/SSH fallback for anything else. Every adapter's WORKING/IDLE (and,
-except OpenCode, WAITING) patterns were verified against a real, live
-session of that CLI -- see [`docs/STATUS_ENGINE.md`](docs/STATUS_ENGINE.md)
-for exactly what evidence each one looks for. OpenCode's own
-permission/approval prompt specifically was never observed live (the
-tested session auto-approved writes), so WAITING falls back to a generic
-pattern for that agent only -- see `adapters/opencode.py`'s docstring.
-Detection is inherently best-effort and will drift as these CLIs' UIs
-change; PRs updating a pattern (with a sanitized fixture) are welcome.
+shell/SSH fallback for anything else. Each adapter owns its own
+execution and attention detection. There is no shared regex that marks
+every agent as waiting. Codex and Claude Code numbered approval menus
+are the only ones Tower will answer with a key (`1` / `3`). OpenCode
+and Cursor can be recognized as approval from fixtures, but Tower does
+not send a key for them because those widgets were not verified live.
+See [`docs/STATUS_ENGINE.md`](docs/STATUS_ENGINE.md). Detection is
+inherently best-effort and will drift as these CLIs' UIs change; PRs
+updating a pattern (with a sanitized fixture) are welcome.
 
 ## Status meanings
 
 * `● WORKING` -- actively producing output or showing an agent-specific
   "I'm working" signal.
-* `! WAITING` -- looks like it's waiting on your approval/input.
-* `○ IDLE` -- alive, nothing pending.
+* `○ IDLE` -- alive, with no agent-specific working signal. An approval
+  or a question can still be set on the attention axis at the same time.
+* `! 승인 필요` / `? 입력 필요` -- attention, not a status. Approval is a
+  permission widget. Input is a free-text or choice question. They are
+  never the same mark.
 * `? UNKNOWN` -- not enough evidence either way. This is a deliberate,
   honest fallback -- see `docs/STATUS_ENGINE.md` for why "unknown" beats a
   confident wrong answer.

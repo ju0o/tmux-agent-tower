@@ -8,6 +8,18 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **Attention** -- execution (`WORKING` / `IDLE` / `UNKNOWN` / `DEAD`),
+  attention (`none` / `approval_required` / `input_required` / `error`),
+  and result (`none` / `ready` / `read`) stay separate. Each agent
+  adapter detects its own bottom widget. A Codex command menu
+  (`1. Yes` / `3. No`, including "Would you like to run the following
+  command?") sends `1` or `3` only. The live trust screen's footer is
+  `enter continue` / `esc quit`, so those named keys are sent instead of
+  the digit `1`, which did not move that widget. Claude's numbered
+  "Do you want to proceed?" menu sends `1` or `3`. Claude's folder
+  picker, OpenCode, Cursor, Grok, and unknown agents show
+  "승인은 실제 Pane에서 처리하세요" and send nothing. Phone cards sort
+  approval, then input, then a new result.
 * **Pane control** -- Enter stays in Tower and opens a live view of that
   pane. `P` prompt, `E` identity, `Y` result, `G` focus, and `X` close
   (confirm first; Tower's own pane is refused) all go through one action

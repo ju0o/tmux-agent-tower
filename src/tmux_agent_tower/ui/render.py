@@ -11,6 +11,8 @@ from __future__ import annotations
 import unicodedata
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from ..detection.attention import card_rank
+
 from ..detection.project import is_low_confidence_name
 
 
@@ -220,17 +222,13 @@ def format_duration(seconds: float) -> str:
 
 
 def sort_by_attention(rows: List[Dict]) -> List[Dict]:
-    """Attention View ordering: WAITING > UNKNOWN > DEAD > WORKING > IDLE.
+    """Attention view and the phone list share ``card_rank``.
 
-    A stable sort, so rows with the same status keep their existing
-    relative order rather than jumping around unpredictably between
-    refreshes. This is only ever applied to a *separate* presentation
-    (see ui/tower.py's attention-mode toggle) -- the default list's own
-    order must never change on its own, or the selected row would visibly
-    jump around during ordinary use.
+    A stable sort, so equal ranks keep their existing order. The default
+    list does not use this.
     """
 
-    return sorted(rows, key=lambda r: ATTENTION_PRIORITY.get(r.get("status"), 99))
+    return sorted(rows, key=card_rank)
 
 
 def row_line_count(row: Dict, narrow: bool) -> int:

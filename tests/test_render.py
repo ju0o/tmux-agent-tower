@@ -324,7 +324,7 @@ def test_sort_by_attention_priority_order():
         {"key": "unknown", "status": "UNKNOWN"},
     ]
     sorted_rows = render.sort_by_attention(rows)
-    assert [r["key"] for r in sorted_rows] == ["waiting", "unknown", "dead", "working", "idle"]
+    assert [r["key"] for r in sorted_rows] == ["waiting", "working", "idle", "unknown", "dead"]
 
 
 def test_sort_by_attention_is_stable_within_same_status():

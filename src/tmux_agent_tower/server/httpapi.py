@@ -50,6 +50,7 @@ from ..control.actions import (
     focus_pane,
     get_pane_screen,
     get_result,
+    respond_attention,
     send_prompt,
     send_prompt_to_pane,
 )
@@ -97,6 +98,10 @@ def build_status_payload(tower: Tower) -> dict:
                 "auto_agent": row.get("auto_agent"),
                 "pane_title": row.get("pane_title"),
                 "status": row.get("status"),
+                "attention": row.get("attention") or "none",
+                "attention_prompt": row.get("attention_prompt") or "",
+                "approval_known": bool(row.get("approval_known")),
+                "reject_known": bool(row.get("reject_known")),
                 "result_state": row.get("result_state") or "none",
                 "duration_seconds": round(row.get("duration_seconds") or 0.0, 1),
                 "activity": row.get("activity_text"),
@@ -379,6 +384,9 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
         if route and route[1] == "focus":
             self._post_focus(route[0])
             return
+        if route and route[1] == "attention":
+            self._post_attention(route[0])
+            return
 
         self._send_json(404, {"ok": False, "error": "not_found"})
 
@@ -399,6 +407,26 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
             self._send_json(404 if reason == "not_found" else 409, {"ok": False, "error": reason}, no_store=True)
             return
         self._send_json(200, {"ok": True, "pane_id": pane_key}, no_store=True)
+
+    def _post_attention(self, pane_key: str) -> None:
+        """Explicit approve/reject. Not a shell command and not a prompt."""
+
+        if not self._require_auth():
+            return
+        body = self._read_json_body() or {}
+        action = body.get("action")
+        if action not in ("approve", "reject"):
+            self._send_json(400, {"ok": False, "error": "bad_request"})
+            return
+        if not self.server.source_session_alive():  # type: ignore[attr-defined]
+            self._send_json(409, source_session_missing_payload(self.server.session), no_store=True)  # type: ignore[attr-defined]
+            return
+        ok, reason = respond_attention(self._tower(), pane_key, action)
+        if not ok:
+            code = 404 if reason == "not_found" else 409
+            self._send_json(code, {"ok": False, "error": reason}, no_store=True)
+            return
+        self._send_json(200, {"ok": True, "action": action}, no_store=True)
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003
         # Silence BaseHTTPRequestHandler's default stderr access log --

@@ -5,8 +5,8 @@ Design constraints (see docs/STATUS_ENGINE.md for the full rationale):
 * STATUS and VISIT are completely independent. Whether a human has looked
   at a pane yet must never change what status is reported for it. This
   engine has no notion of "seen"/"new" at all.
-* States: WORKING, WAITING, IDLE, UNKNOWN, DEAD. There is no "CHECKING"
-  state — an unvisited-but-actively-working pane must report WORKING.
+* Execution states: WORKING, IDLE, UNKNOWN, DEAD. Attention (approval,
+  input, error) and result are separate axes and are not returned here.
 * A wrong WORKING or wrong IDLE is worse than an honest UNKNOWN.
 * Hysteresis: a WORKING verdict is "held" for a short window after the
   screen last changed, so a pane that pauses output for a second or two
@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence
 
-from ..adapters.base import AgentAdapter, PaneContext, looks_like_generic_waiting
+from ..adapters.base import AgentAdapter, PaneContext
 
 STATUS_WORKING = "WORKING"
 STATUS_WAITING = "WAITING"
@@ -143,20 +143,12 @@ class StatusEngine:
         if state.active_until > now:
             return STATUS_WORKING
 
-        # 4. Agent-specific WAITING evidence.
-        if opinion.status == STATUS_WAITING:
-            return STATUS_WAITING
-
-        # 5. Agent-specific IDLE evidence (adapter is confident it's idle-ready).
+        # 4. Agent-specific IDLE evidence (adapter is confident it's idle-ready).
+        #    A WAITING opinion is not an execution state; attention is separate.
         if opinion.status == STATUS_IDLE:
             return STATUS_IDLE
 
-        # 6. Generic waiting-prompt fallback for agents without a specific
-        #    adapter opinion.
-        if looks_like_generic_waiting(ctx.tail(20)):
-            return STATUS_WAITING
-
-        # 7. No adapter opinion, no change, no generic signal at all.
+        # 5. No adapter opinion and no recent output.
         blank = not ctx.lines or all(not line.strip() for line in ctx.lines)
 
         if first_observation or blank:
@@ -165,5 +157,5 @@ class StatusEngine:
             # "don't know" beats guessing IDLE or WORKING.
             return STATUS_UNKNOWN
 
-        # 8. Stable, non-blank, no waiting markers -> best-effort IDLE.
+        # 6. Stable and non-blank, with no adapter opinion -> best-effort IDLE.
         return STATUS_IDLE

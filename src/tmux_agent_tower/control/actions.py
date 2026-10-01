@@ -2,7 +2,8 @@
 
 View, prompt, identity, focus, result, and closing one pane all go
 through here. Neither UI grows its own tmux calls for those actions.
-Nothing here approves a tool, restarts a fleet, or runs a shell.
+Approval sends one key the adapter already named for the current widget.
+Nothing here restarts a fleet, runs a shell, or guesses Enter or y.
 """
 
 from __future__ import annotations
@@ -190,6 +191,10 @@ def send_prompt_to_pane(pane_id: str, text: str) -> bool:
         )
         if literal.returncode != 0:
             return False
+        # A full-screen composer can drop Enter if it arrives in the same
+        # tick as a literal paste. Dogfood: the text sat in the Codex box
+        # until a later Enter.
+        time.sleep(0.2)
         enter = subprocess.run(
             ["tmux", "send-keys", "-t", pane_id, "Enter"],
             capture_output=True,
@@ -249,6 +254,67 @@ def get_result(tower, pane_key: str) -> Tuple[bool, str, dict]:
         "fingerprint": snap.fingerprint,
         "generated_at": snap.generated_at,
     }
+
+
+_SAFE_ATTENTION_KEY = re.compile(r"^[0-9yn]$")
+_SAFE_NAMED_KEYS = frozenset({"Enter", "Escape"})
+
+
+def _attention_now(pane_id: str):
+    """Fresh title, command, and screen for one pane. None if it is gone."""
+
+    from ..adapters import resolve_adapter
+    from ..adapters.base import PaneContext
+
+    raw = tmux_capture.run_tmux(
+        ["list-panes", "-t", pane_id, "-F", "#{pane_title}\x1f#{pane_current_command}"]
+    )
+    if "\x1f" not in raw:
+        return None
+    title, command = raw.split("\x1f", 1)
+    lines = tmux_capture.capture_pane(pane_id, lines=40)
+    ctx = PaneContext(title=title, command=command, lines=tuple(lines))
+    adapter = resolve_adapter(command, title, "")
+    return adapter, ctx
+
+
+def send_attention_key(pane_id: str, key: str) -> bool:
+    """Send one documented approval key. Not a prompt and not Enter."""
+
+    if key not in _SAFE_NAMED_KEYS and not _SAFE_ATTENTION_KEY.match(key or ""):
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "send-keys", "-t", pane_id, key],
+            capture_output=True,
+            timeout=SEND_TIMEOUT,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def respond_attention(tower, pane_key: str, action: str) -> Tuple[bool, str]:
+    """Approve or reject only when the adapter names the key on a fresh screen."""
+
+    if action not in ("approve", "reject"):
+        return False, "bad_request"
+    ok, reason, pane_id = find_prompt_target(tower, pane_key, None, None)
+    if not ok or not pane_id:
+        return False, reason or "not_found"
+    fresh = _attention_now(pane_id)
+    if fresh is None:
+        return False, "stale"
+    adapter, ctx = fresh
+    if adapter.detect_attention(ctx) != "approval_required":
+        return False, "not_approval"
+    key = adapter.approve(ctx) if action == "approve" else adapter.reject(ctx)
+    if not key:
+        return False, "approval_unknown"
+    if not send_attention_key(pane_id, key):
+        return False, "send_failed"
+    return True, ""
 
 
 def close_warning(status: str) -> str:

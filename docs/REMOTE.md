@@ -85,6 +85,18 @@ token file is deleted.
   and opening the live pane does not mark it read. **결과 보기** or
   **결과 복사** does. Copy uses `navigator.clipboard` and falls back to
   a selectable block. A later turn's new body becomes `ready` again.
+* Attention is a third field, not a status. The list carries `attention`
+  (`none`, `approval_required`, `input_required`, `error`) and a short
+  `attention_prompt`. Cards sort approval, then input, then a new result.
+  **승인** / **거절** call `POST /api/panes/<key>/attention` and send one
+  key only when that agent's adapter names it: `1` or `3` for a numbered
+  Yes/No menu, or `Enter` / `Escape` when the Codex trust footer says
+  `enter continue` / `esc quit`. Otherwise the phone says to approve in
+  the real pane and sends nothing. `y` and `p` are never sent. Answering
+  a question reuses the existing prompt send, after showing the question
+  and agent. A finished turn that merely contains a question stays
+  `attention=none`. There is no `error` detector until a real error
+  widget has been captured.
 * Show where a pane sits: session, window index and name, pane id, pane
   index. A separate button, **PC를 이 Pane으로 이동**, asks the PC's
   tmux client to `select-window` and `select-pane` that local pane.

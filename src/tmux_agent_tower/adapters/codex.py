@@ -25,7 +25,6 @@ from .base import (
     PaneContext,
     ResultCandidate,
     BRAILLE_SPINNER_CHARS,
-    looks_like_generic_waiting,
     prose_body,
     result_fingerprint,
     title_has_spinner,
@@ -50,6 +49,19 @@ _NOT_AN_ACTIVITY_RE = re.compile(r"^(working\s*\(|finished\b)", re.IGNORECASE)
 # still running the same box instead reads "tab to queue message", which is
 # deliberately NOT treated as an idle signal.
 _IDLE_HINT_RE = re.compile(r"ask codex to do anything|for agents.*for shortcuts", re.IGNORECASE)
+_ALLOW_RE = re.compile(r"allow this command to run\?", re.IGNORECASE)
+_WOULD_RUN_RE = re.compile(r"would you like to run the following command\?", re.IGNORECASE)
+_YES_PROCEED_RE = re.compile(r"1\.\s+yes,\s+proceed\b", re.IGNORECASE)
+_TRUST_RE = re.compile(r"trust this folder\?", re.IGNORECASE)
+_OPTION_YES_RE = re.compile(r"^\s*[›>]?\s*1\.\s+yes\b", re.IGNORECASE | re.MULTILINE)
+_OPTION_TRUST_RE = re.compile(r"^\s*[›>]?\s*1\.\s+trust\b", re.IGNORECASE | re.MULTILINE)
+_OPTION_NO_RE = re.compile(r"^\s*[›>]?\s*3\.\s+no\b", re.IGNORECASE | re.MULTILINE)
+_USER_LINE_RE = re.compile(r"^\s*[›>]\s+\S")
+_WORKED_FOR_RE = re.compile(r"\bworked for\b", re.IGNORECASE)
+# Live trust widget (Codex CLI 0.159): the digit does not select the row.
+# The footer is the key binding: "enter continue · esc quit".
+_ENTER_CONTINUE_RE = re.compile(r"enter continue", re.IGNORECASE)
+_ESC_QUIT_RE = re.compile(r"esc quit", re.IGNORECASE)
 
 
 class CodexAdapter(AgentAdapter):
@@ -63,13 +75,84 @@ class CodexAdapter(AgentAdapter):
         if _WORKING_RE.search(tail) or title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS):
             return AdapterResult("WORKING", "working-line-or-spinner")
 
-        if looks_like_generic_waiting(tail):
-            return AdapterResult("WAITING", "approval-prompt")
-
         if _IDLE_HINT_RE.search(tail):
             return AdapterResult("IDLE", "queue-message-hint")
 
         return AdapterResult(None)
+
+    def _widget(self, ctx: PaneContext) -> str:
+        """The current bottom widget, not older scrollback above it.
+
+        Eighteen lines covers a command preview between the question and
+        the numbered choices. Idle and working chrome in that window still
+        suppress a menu that has already scrolled away.
+        """
+
+        return "\n".join(ctx.lines[-18:])
+
+    def detect_attention(self, ctx: PaneContext) -> str:
+        widget = self._widget(ctx)
+        if _WORKING_RE.search(widget) or title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS):
+            return "none"
+        if _IDLE_HINT_RE.search(widget) or _WORKED_FOR_RE.search(widget):
+            return "none"
+        command_menu = _OPTION_YES_RE.search(widget) and (
+            _ALLOW_RE.search(widget) or _WOULD_RUN_RE.search(widget) or _YES_PROCEED_RE.search(widget)
+        )
+        if command_menu or (_TRUST_RE.search(widget) and _OPTION_TRUST_RE.search(widget)):
+            return "approval_required"
+        last = ""
+        for line in reversed(widget.split("\n")):
+            if line.strip():
+                last = line.strip()
+                break
+        if last.endswith("?") and not _USER_LINE_RE.match(last):
+            return "input_required"
+        return "none"
+
+    def extract_attention_prompt(self, ctx: PaneContext) -> str:
+        from ..detection.attention import clamp_prompt
+
+        if self.detect_attention(ctx) == "none":
+            return ""
+        widget = self._widget(ctx)
+        if _TRUST_RE.search(widget):
+            return clamp_prompt("Trust this folder?")
+        if _WOULD_RUN_RE.search(widget):
+            return clamp_prompt("Would you like to run the following command?")
+        if _ALLOW_RE.search(widget) or _YES_PROCEED_RE.search(widget):
+            return clamp_prompt("Allow this command to run?")
+        for line in reversed(widget.split("\n")):
+            stripped = line.strip()
+            if stripped.endswith("?"):
+                return clamp_prompt(stripped)
+        return ""
+
+    def approve(self, ctx: PaneContext) -> Optional[str]:
+        if self.detect_attention(ctx) != "approval_required":
+            return None
+        widget = self._widget(ctx)
+        if _OPTION_YES_RE.search(widget) and (
+            _ALLOW_RE.search(widget) or _WOULD_RUN_RE.search(widget) or _YES_PROCEED_RE.search(widget)
+        ):
+            return "1"
+        # Trust: only the footer binding. A bare "1" was sent at this widget
+        # and the menu did not move.
+        if _TRUST_RE.search(widget) and _ENTER_CONTINUE_RE.search(widget):
+            return "Enter"
+        return None
+
+    def reject(self, ctx: PaneContext) -> Optional[str]:
+        if self.detect_attention(ctx) != "approval_required":
+            return None
+        widget = self._widget(ctx)
+        if _OPTION_NO_RE.search(widget) and (
+            _ALLOW_RE.search(widget) or _WOULD_RUN_RE.search(widget) or _YES_PROCEED_RE.search(widget)
+        ):
+            return "3"
+        if _TRUST_RE.search(widget) and _ESC_QUIT_RE.search(widget):
+            return "Escape"
+        return None
 
     def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:
         # Bullets are only trustworthy as "current activity" while there is

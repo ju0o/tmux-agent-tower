@@ -24,7 +24,6 @@ from .base import (
     PaneContext,
     ResultCandidate,
     CLAUDE_SPINNER_CHARS,
-    looks_like_generic_waiting,
     prose_body,
     result_fingerprint,
     title_has_spinner,
@@ -44,6 +43,15 @@ _BULLET_RE = re.compile(r"^\s*•\s*(.+?)\s*$")
 # the prompt to be the very last non-blank line -- just present near the
 # bottom of the visible tail.
 _EMPTY_PROMPT_RE = re.compile(r"^\s*[❯>]\s*$", re.MULTILINE)
+_PROCEED_RE = re.compile(r"do you want to proceed\?", re.IGNORECASE)
+# Folder trust picker. The highlighted default observed live is "No, exit".
+# There is no numbered key on that screen, so approve() stays None.
+_TRUST_Q_RE = re.compile(r"is this a project you created or one you trust\?", re.IGNORECASE)
+_TRUST_YES_RE = re.compile(r"yes,\s+i trust this folder", re.IGNORECASE)
+_OPTION_YES_RE = re.compile(r"^\s*1\.\s+yes\b", re.IGNORECASE | re.MULTILINE)
+_OPTION_NO_RE = re.compile(r"^\s*3\.\s+no\b", re.IGNORECASE | re.MULTILINE)
+_COOKED_RE = re.compile(r"\bcooked for\b", re.IGNORECASE)
+_USER_LINE_RE = re.compile(r"^\s*[❯>]\s+\S")
 
 
 class ClaudeAdapter(AgentAdapter):
@@ -57,13 +65,62 @@ class ClaudeAdapter(AgentAdapter):
         if _ACTIVE_VERB_RE.search(tail) or title_has_spinner(ctx.title, CLAUDE_SPINNER_CHARS):
             return AdapterResult("WORKING", "active-verb-or-spinner")
 
-        if looks_like_generic_waiting(tail):
-            return AdapterResult("WAITING", "approval-prompt")
-
         if _EMPTY_PROMPT_RE.search(tail):
             return AdapterResult("IDLE", "empty-prompt")
 
         return AdapterResult(None)
+
+    def _widget(self, ctx: PaneContext) -> str:
+        return "\n".join(ctx.lines[-12:])
+
+    def detect_attention(self, ctx: PaneContext) -> str:
+        widget = self._widget(ctx)
+        if _ACTIVE_VERB_RE.search(widget) or title_has_spinner(ctx.title, CLAUDE_SPINNER_CHARS):
+            return "none"
+        if _COOKED_RE.search(widget):
+            return "none"
+        if _PROCEED_RE.search(widget) and _OPTION_YES_RE.search(widget):
+            return "approval_required"
+        if _TRUST_Q_RE.search(widget) and _TRUST_YES_RE.search(widget):
+            return "approval_required"
+        last = ""
+        for line in reversed(widget.split("\n")):
+            if line.strip() and not _EMPTY_PROMPT_RE.match(line):
+                last = line.strip()
+                break
+        if last.endswith("?") and not _USER_LINE_RE.match(last) and _EMPTY_PROMPT_RE.search(widget):
+            return "input_required"
+        return "none"
+
+    def extract_attention_prompt(self, ctx: PaneContext) -> str:
+        from ..detection.attention import clamp_prompt
+
+        if self.detect_attention(ctx) == "none":
+            return ""
+        widget = self._widget(ctx)
+        if _TRUST_Q_RE.search(widget):
+            return clamp_prompt("Is this a project you created or one you trust?")
+        if _PROCEED_RE.search(widget):
+            return clamp_prompt("Do you want to proceed?")
+        for line in reversed(widget.split("\n")):
+            stripped = line.strip()
+            if stripped.endswith("?"):
+                return clamp_prompt(stripped)
+        return ""
+
+    def approve(self, ctx: PaneContext) -> Optional[str]:
+        if self.detect_attention(ctx) != "approval_required":
+            return None
+        if _OPTION_YES_RE.search(self._widget(ctx)):
+            return "1"
+        return None
+
+    def reject(self, ctx: PaneContext) -> Optional[str]:
+        if self.detect_attention(ctx) != "approval_required":
+            return None
+        if _OPTION_NO_RE.search(self._widget(ctx)):
+            return "3"
+        return None
 
     def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:
         # Full capture, not ctx.tail(20): a short reply can leave enough

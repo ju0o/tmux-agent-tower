@@ -18,7 +18,6 @@ from .base import (
     AdapterResult,
     PaneContext,
     ResultCandidate,
-    looks_like_generic_waiting,
     prose_body,
     result_fingerprint,
 )
@@ -38,13 +37,31 @@ class CursorAdapter(AgentAdapter):
     def classify(self, ctx: PaneContext) -> AdapterResult:
         tail = ctx.tail(20)
 
-        if looks_like_generic_waiting(tail):
-            return AdapterResult("WAITING", "approval-prompt")
-
         if _FOLLOWUP_RE.search(tail):
             return AdapterResult("IDLE", "add-a-follow-up")
 
         return AdapterResult(None)
+
+    def _widget(self, ctx: PaneContext) -> str:
+        return "\n".join(ctx.lines[-8:])
+
+    def detect_attention(self, ctx: PaneContext) -> str:
+        widget = self._widget(ctx)
+        if re.search(r"ctrl\+c to stop", widget, re.IGNORECASE) or _FOLLOWUP_RE.search(widget):
+            return "none"
+        if re.search(r"run this command\?|allow\?", widget, re.IGNORECASE) and re.search(r"\(y/n\)", widget, re.IGNORECASE):
+            return "approval_required"
+        return "none"
+
+    def extract_attention_prompt(self, ctx: PaneContext) -> str:
+        from ..detection.attention import clamp_prompt
+
+        if self.detect_attention(ctx) == "none":
+            return ""
+        for line in reversed(self._widget(ctx).split("\n")):
+            if "?" in line and "(y/n)" not in line.lower():
+                return clamp_prompt(line.strip())
+        return ""
 
     def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
         # "Add a follow-up" also sits on screen while a turn is still
