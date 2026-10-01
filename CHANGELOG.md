@@ -26,8 +26,9 @@ bumped until this merges.
   layer shared with the phone. `G` is the only move.
 * **tmux navigator** -- `V` groups local panes by session and window.
   Windows are dim divider lines, not rows: the cursor only lands on
-  panes and Enter always opens exactly one pane id. Stale ids refresh
-  instead of moving. The phone
+  panes and Enter always opens exactly one pane id. The phone list does
+  the same: a window is a non-clickable "창 N: name" label, and only a
+  pane card opens detail. Stale ids refresh instead of moving. The phone
   detail shows the same location and moves the PC only from
   **PC를 이 Pane으로 이동** (`POST /api/panes/<key>/focus`), never from
   a card tap, and never onto an SSH host.

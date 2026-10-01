@@ -251,6 +251,15 @@ def test_capture_pane_drops_trailing_blank_rows(monkeypatch):
     assert capture.capture_pane("%1") == ["a", "b"]
 
 
+def test_phone_windows_are_labels_and_only_pane_cards_open():
+    html = webui.PAGE_HTML
+    render = html.split("function render(")[1].split("function pollList")[0]
+    label = render.split('label.className = "window-label"')[1].split("items.forEach")[0]
+    assert "addEventListener" not in label
+    assert "openDetail(p.key)" in render
+    assert "창 " in render
+
+
 def test_pairing_is_not_kicked_back_by_an_unauthenticated_status_poll():
     html = webui.PAGE_HTML
     poll = html.split("function pollList()")[1].split("function fillDetailMeta")[0]

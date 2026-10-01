@@ -57,6 +57,10 @@ PAGE_HTML = """<!doctype html>
   #source-gone .sub { font-size: 13px; color: var(--dim); }
   h1 { font-size: 15px; letter-spacing: .04em; color: var(--dim); margin: 4px 4px 12px; text-transform: uppercase; }
   .host { font-size: 12px; color: var(--dim); margin: 16px 4px 6px; }
+  .window-label {
+    font-size: 12px; color: var(--dim); margin: 8px 4px 4px; padding: 2px 0;
+    border-bottom: 1px dashed var(--line); cursor: default;
+  }
   .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 10px;
     padding: 10px 12px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 3px;
@@ -366,20 +370,30 @@ PAGE_HTML = """<!doctype html>
       h.textContent = host;
       list.appendChild(h);
 
-      byHost[host].sort(function (a, b) {
-        function rank(p) {
-          if (p.attention === "approval_required") return 0;
-          if (p.attention === "input_required" || p.status === "WAITING") return 1;
-          if (p.result_state === "ready") return 2;
-          if (p.attention === "error") return 3;
-          if (p.status === "WORKING") return 4;
-          if (p.status === "IDLE") return 5;
-          if (p.status === "UNKNOWN") return 6;
-          return 7;
-        }
-        return rank(a) - rank(b);
-      });
+      // Windows are group labels, same as the PC navigator. They are not
+      // cards and have no click handler, so a tap cannot open whichever
+      // pane happens to be active in that window.
+      var groups = [];
+      var byWindow = {};
       byHost[host].forEach(function (p) {
+        var gkey = "";
+        if (!p.offline && p.window_index != null && p.window_index !== "") {
+          gkey = (p.session || "") + ":" + p.window_index;
+        }
+        if (!byWindow[gkey]) { byWindow[gkey] = []; groups.push(gkey); }
+        byWindow[gkey].push(p);
+      });
+
+      groups.forEach(function (gkey) {
+        var items = byWindow[gkey];
+        if (gkey) {
+          var sample = items[0];
+          var label = document.createElement("div");
+          label.className = "window-label";
+          label.textContent = "창 " + sample.window_index + (sample.window_name ? ": " + sample.window_name : "");
+          list.appendChild(label);
+        }
+        items.forEach(function (p) {
         if (p.offline) {
           var off = document.createElement("div");
           off.className = "offline";
@@ -436,6 +450,7 @@ PAGE_HTML = """<!doctype html>
           card.appendChild(question);
         }
         list.appendChild(card);
+        });
       });
     });
 
