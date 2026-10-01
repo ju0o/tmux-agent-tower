@@ -111,7 +111,11 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool, follow: bool
     seconds = row.get("duration_seconds") or 0
     if seconds and tower.config.get("show_status_duration"):
         duration = " · " + render.format_duration(seconds)
-    badges = "   ".join(f"{mark} {t(name)}" for mark, name in render.detail_badges(row))
+    # Execution is already on the line above. Repeating it here crowded
+    # the control view with the same mark twice.
+    execution = (symbol, key)
+    extra = [badge for badge in render.detail_badges(row) if badge != execution]
+    badges = "   ".join(f"{mark} {t(name)}" for mark, name in extra)
     safe_add(stdscr, 1, 2, f'{row.get("agent") or "-"}   {symbol} {t(key)}{duration}')
     safe_add(stdscr, 2, 2, badges)
     safe_add(stdscr, 3, 2, f'{t("detail.activity")}: {row.get("activity_text") or "-"}', curses.A_DIM)

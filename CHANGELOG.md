@@ -19,6 +19,7 @@ bumped until this merges.
   jump to the latest line, change font size, wrap, and go fullscreen.
   Esc leaves the control view without the default one-second pause, and
   a narrow terminal shows a shorter hint so the line is not cut off.
+  The control view shows the execution mark once.
   Pin is not in this slice.
 * **Attention** -- execution (`WORKING` / `IDLE` / `UNKNOWN` / `DEAD`),
   attention (`none` / `approval_required` / `input_required` / `error`),
