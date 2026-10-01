@@ -28,7 +28,7 @@ NEW ! web-app                                        Codex          WAITING
 ── ASUS ────────────────────────────────────────────────────────────────────
   ● billing-service                                  Claude         WORKING
 
-↑↓ Move  Enter Open  E Edit  N Add  W Workspace  M Remote  / Search  A Attention  R  Q
+↑↓ Move  Enter Open  E Edit  N Add  W Workspace  M Remote  C Settings  / Search  A Attention  R  Q
 ```
 
 ## What it is (and isn't)
@@ -211,20 +211,21 @@ missing, that one project's pane still opens as a plain shell with a
 
 ### Optional: `Ctrl+b w` shortcut
 
-Binding `Ctrl+b w` to jump straight to the active Tower is convenient, but
-it **replaces tmux's built-in `choose-tree` window picker** on that key.
-The installer does not do this automatically. If you want it, add this to
-your `~/.tmux.conf` yourself:
+`Ctrl+b w` stays tmux's window list until you opt in. Tower never
+rewrites `~/.tmux.conf` on install. Inside Tower, `C` → **tmux shortcut**
+→ **Use smart Ctrl+b w** (or `tower keys install`) adds one marked block:
 
-```tmux
-unbind-key w
-bind-key w run-shell -b "tower --focus"
-```
+* Tower is running in this session → `Ctrl+b w` jumps to that pane
+  (`tower --focus`, pane id, not a window name).
+* Tower is not running, or the registration is stale → the `w` command
+  recorded at install time. On a stock tmux that is the window list
+  (`choose-tree`). A custom `w` binding you already had is kept instead
+  of being replaced with the default.
 
-Note the `--focus`, not bare `tower` -- this binding should only ever
-*navigate* to your already-running Tower, never launch a new curses TUI
-from a backgrounded key press (which wouldn't have anywhere sensible to
-attach to).
+Quitting Tower does not unbind the key. The same binding checks again
+the next time you press it. `tower keys restore` removes only that block
+and puts the recorded `w` command back. `tower --focus` still only
+navigates; it never starts a new TUI.
 
 ### `tower --doctor`
 

@@ -62,20 +62,34 @@ token file is deleted.
   same status engine. Nothing is re-implemented; `server/httpapi.py`
   drives a real, headless `ui.tower.Tower` instance directly.
 * Let you pick one pane and send it a prompt you typed, via
-  `tmux send-keys` -- the **only** write action Tower has, gated behind:
-  explicit pane selection, explicit typed text, explicit send tap, a
-  paired token, and a live re-check that the pane you're about to send
-  to still exists, isn't dead, and still matches the project/agent you
+  `tmux send-keys`. A card opens the detail screen; it does not send.
+  The send button is a separate tap, and it re-checks that the pane
+  still exists, isn't dead, and still matches the project/agent you
   last saw (stale/wrong-pane rejection -- a pane_id can be reused after a
   tmux server restart, same caveat as the `E` edit menu's overrides).
+* Open a pane detail from a card: project, agent, status, duration,
+  current activity, pane name, host, and a **LIVE PANE** box. The box is
+  plain text from `tmux capture-pane` of the visible recent screen
+  (`GET /api/panes/<key>/screen`), not a terminal emulator and not the
+  scrollback history. The phone polls about once a second, backs off
+  toward two seconds when a round trip is slow, and pauses while the
+  page is hidden. There is no WebSocket.
+* Edit project, agent, or pane title from that same detail screen, or
+  reset them to auto-detection. Those writes go through the same
+  `OverrideStore` the TUI uses. The TUI reloads the file when it
+  changes, so the next refresh shows the phone's values. A local pane
+  title is also pushed with `tmux select-pane -T`.
 
 ## What it explicitly does not do
 
-* No terminal emulation, no scrollback streaming, no raw captured
-  terminal content over the API at all -- `/api/status` only ever
-  returns the same small set of display fields the TUI shows.
-* No remote-host (SSH multi-host) prompt sending yet -- `/api/prompt`
-  rejects a `remote: true` pane with `"remote_unsupported"`. Read-only
+* No terminal emulator and no scrollback stream. `/api/status` still
+  returns only the small display fields the TUI shows. Recent screen
+  text exists only on `GET /api/panes/<key>/screen`, and only for a
+  local pane in the bound session.
+* No remote-host (SSH) live screen and no remote prompt. A key that
+  contains `:` is `remote_unsupported`. The phone says, in plain text,
+  that an SSH host pane shows title and status only. It does not invent
+  a screen. `/api/prompt` rejects `remote: true` the same way. Read-only
   status for remote hosts works the same as it does in the TUI.
 * No generic exec endpoint, no filesystem API, no credentials API. The
   one write action is narrowly "type this text into this already-open,
@@ -258,11 +272,10 @@ keeps working across starts.
   else at `https://<machine>.<tailnet>.ts.net/`, Tower refuses (see
   above) instead of picking another port. A `--https-port` option is a
   reasonable follow-up.
-* **Prompt sending from the phone has not yet been verified over
-  LTE/5G.** Everything up to and including paired `/api/status` was
-  verified end-to-end over the tailnet HTTPS URL from the PC side; the
-  final phone-on-cellular acceptance is a manual step (see the checklist
-  in the branch's latest report).
+* **Phone acceptance of LIVE PANE, identity edit, and prompt send is
+  still a manual step.** The PC can exercise the same API; a real phone
+  on the tailnet is the acceptance that has to be done by the person
+  holding it.
 
 * **No QR code image.** Generating one correctly needs either a new
   dependency or a from-scratch encoder -- both felt like more risk than

@@ -11,7 +11,7 @@ bumped until this merges.
 * **`tower serve`** -- pairing-gated read API (`/api/status`) + mobile
   web UI, localhost-only by default. `--lan` binds all interfaces for
   same-Wi-Fi use (plain HTTP; documented as trusted-LAN-only).
-* **One-pane prompt send** (`/api/prompt`) -- the only write action:
+* **One-pane prompt send** (`/api/prompt`) -- explicit pane, typed text, and an explicit tap:
   explicit pane, explicit typed text, explicit tap, paired token, and a
   live stale/wrong-pane re-check before `tmux send-keys -l`. No exec, no
   filesystem, no raw transcript, no interrupt/kill/approve.
@@ -37,7 +37,27 @@ bumped until this merges.
   direct `http://<tailscale-ip>:4312` correctly unreachable, mapping
   cleaned up on stop. Phone-on-LTE acceptance is the remaining manual
   step.
-* Tests: 225 (v0.2.2) -> 353.
+* **Mobile pane detail + LIVE PANE** -- a card opens a detail screen
+  (it does not send). The screen is recent plain text from
+  `tmux capture-pane` (`GET /api/panes/<key>/screen`): bearer required,
+  local panes in the bound session only, ANSI stripped, last 60 lines /
+  400 chars / 16KB, `Cache-Control: no-store`, not written to disk or
+  logs. The phone polls about once a second (up to two if a round trip
+  is slow) and pauses while the tab is hidden. SSH/remote keys are
+  `remote_unsupported` and the page says live view is not available
+  there. Project, agent, and title edits use the same `OverrideStore`
+  as the TUI, which reloads the file on change; a local title is also
+  `select-pane -T`. Reset clears the override.
+* **Smart `Ctrl+b w` (opt-in)** -- `C` → tmux shortcut, or
+  `tower keys install`, writes one marked block in `~/.tmux.conf`
+  (backup once, no full-file rewrite). The binding stays put: `tower
+  --has-active` exits 0 only for a live registered pane id, and the
+  key then runs `tower --focus`; otherwise it runs the `w` command
+  recorded at install time (a Tower-owned binding is not recorded;
+  the fallback is queried from a tmux server with an empty config).
+  `tower keys restore` removes only that block. Tower start/stop does
+  not rebind the key. The public installer still does not opt in.
+* Tests: 225 (v0.2.2) -> 353, then 421 passed after live pane and smart `Ctrl+b w`.
 * **In-TUI remote control (`M`)**: `tower` then `M` starts, inspects,
   and stops the phone remote. No shell command is shown. The header
   badge comes from a real health check plus the Tailscale Serve mapping,
