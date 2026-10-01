@@ -23,8 +23,11 @@ from .base import (
     AgentAdapter,
     AdapterResult,
     PaneContext,
+    ResultCandidate,
     BRAILLE_SPINNER_CHARS,
     looks_like_generic_waiting,
+    prose_body,
+    result_fingerprint,
     title_has_spinner,
 )
 
@@ -98,3 +101,28 @@ class CodexAdapter(AgentAdapter):
                 return Activity(text=text, confidence="high", source="agent-output")
 
         return Activity(text=bullets[-1], confidence="medium", source="agent-output")
+
+    def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        # A finished turn shows "Worked for ..." and the idle prompt.
+        # "Finished" alone, or the same words inside a user prompt, is
+        # not that evidence. A Working line means this screen is not final.
+        lines = list(ctx.lines)
+        full = "\n".join(lines)
+        if _WORKING_RE.search(full) or title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS):
+            return None
+        if not _IDLE_HINT_RE.search(ctx.tail(15)):
+            return None
+        worked = [i for i, line in enumerate(lines) if re.search(r"worked for", line, re.IGNORECASE)]
+        if not worked:
+            return None
+        end = worked[-1]
+        start = 0
+        for i in range(end - 1, -1, -1):
+            stripped = lines[i].strip()
+            if stripped.startswith("›") and "ask codex" not in stripped.lower():
+                start = i + 1
+                break
+        text = prose_body(lines[start:end])
+        if text is None:
+            return None
+        return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

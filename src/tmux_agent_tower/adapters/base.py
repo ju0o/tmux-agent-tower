@@ -10,6 +10,7 @@ single wrong regex cannot silently corrupt every other agent's status.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
@@ -80,6 +81,57 @@ _NO_OPINION = AdapterResult(status=None)
 
 
 @dataclass(frozen=True)
+class ResultCandidate:
+    """A final answer body. Idle time is not evidence: adapters return
+    this only when their own completion UI is on screen and a prose
+    body remains after chrome is removed. ``fingerprint`` identifies
+    the text so the same answer is not announced again.
+    """
+
+    text: str
+    fingerprint: str
+    confidence: str = "high"
+
+
+_CHROME_LINE = re.compile(
+    r"^(?:"
+    r"worked for\b|cooked for\b|esc to interrupt\b|ctrl\+c to stop\b|"
+    r"ctrl\+p commands\b|ask codex\b|add a follow-up\b|tab to queue\b|"
+    r"send a message\b|auto balance\b|"
+    r"[•∙]\s*(?:finished|explored|called|working|read)\b|"
+    r"finished\b|empty\s+[—-]|^\s*[→~]"
+    r")",
+    re.IGNORECASE,
+)
+_ONLY_COMPLETION_WORD = re.compile(
+    r"^(?:finished|done|complete|completed|작업끝)[.!]?\s*$",
+    re.IGNORECASE,
+)
+_BOX_ONLY = re.compile(r"^[\s─┃▀▁▂▃▄▅▆▇█░▒▓·•│╭╮╯╰▶═\-_=]+$")
+
+
+def result_fingerprint(text: str) -> str:
+    return hashlib.sha256(text.strip().encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def prose_body(lines: Sequence[str]) -> Optional[str]:
+    """Drop tool logs, status chrome, and a body that is only the word
+    "Done"/"Finished". Returns None when nothing answer-shaped remains.
+    """
+
+    kept = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or _BOX_ONLY.match(stripped) or _CHROME_LINE.match(stripped):
+            continue
+        kept.append(stripped)
+    text = "\n".join(kept).strip()
+    if len(text) < 8 or _ONLY_COMPLETION_WORD.match(text):
+        return None
+    return text
+
+
+@dataclass(frozen=True)
 class Activity:
     """A best-effort, one-line description of what an agent looks like
     it's doing right now, extracted purely from terminal output patterns
@@ -137,6 +189,14 @@ class AgentAdapter:
         fabricates a plausible-sounding guess. The default (this base
         implementation) never has an opinion; only agents with a verified,
         real-capture-based pattern override it.
+        """
+
+        return None
+
+    def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        """Final answer body, or None. Silence is not a result. The
+        default has no final-response concept (shells and unknown
+        commands stay None).
         """
 
         return None

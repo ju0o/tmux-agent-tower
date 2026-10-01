@@ -24,7 +24,16 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from .base import Activity, AgentAdapter, AdapterResult, PaneContext, looks_like_generic_waiting
+from .base import (
+    Activity,
+    AgentAdapter,
+    AdapterResult,
+    PaneContext,
+    ResultCandidate,
+    looks_like_generic_waiting,
+    prose_body,
+    result_fingerprint,
+)
 
 _WORKING_RE = re.compile(r"\besc interrupt\b", re.IGNORECASE)
 _IDLE_HINT_RE = re.compile(r"ctrl\+p commands", re.IGNORECASE)
@@ -79,3 +88,21 @@ class OpenCodeAdapter(AgentAdapter):
                     return Activity(text=m.group(1), confidence="medium", source="agent-output")
 
         return None
+
+    def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        lines = list(ctx.lines)
+        full = "\n".join(lines)
+        if _WORKING_RE.search(full):
+            return None
+        if not _IDLE_HINT_RE.search(ctx.tail(8)):
+            return None
+        marks = [
+            i for i, line in enumerate(lines)
+            if "▣" in line and re.search(r"\d+(?:\.\d+)?s\b", line)
+        ]
+        if not marks:
+            return None
+        text = prose_body(lines[: marks[-1]])
+        if text is None:
+            return None
+        return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..adapters import resolve_adapter
 from ..adapters.base import PaneContext
+from ..detection.result import ResultTracker
 from ..detection.status import StatusEngine, STATUS_DEAD
 from .. import i18n
 from ..i18n import t
@@ -88,7 +89,7 @@ def load_remote_hosts() -> List[Dict[str, str]]:
 
 
 class Tower:
-    def __init__(self, session: str, own_pane_id: str = ""):
+    def __init__(self, session: str, own_pane_id: str = "", status_engine: Optional[StatusEngine] = None, results: Optional[ResultTracker] = None):
         self.session = session
         self.own_pane_id = own_pane_id
         self.local_host = local_host_label()
@@ -96,7 +97,10 @@ class Tower:
 
         self.visits = VisitStore(STATE_DIR)
         self.overrides = OverrideStore(STATE_DIR / "overrides.json")
-        self.status_engine = StatusEngine()
+        # The TUI owns one engine for its lifetime. Remote passes the
+        # server's engine in so hysteresis survives across HTTP polls.
+        self.status_engine = status_engine or StatusEngine()
+        self.results = results
 
         # Loaded once per Tower run, not re-read every refresh -- matches
         # remote_hosts above. A user editing config.toml mid-session picks
@@ -139,6 +143,17 @@ class Tower:
 
         return activity_text, duration_seconds
 
+    def _result_state(self, key: str, status: str, adapter, ctx: PaneContext, dead: bool) -> str:
+        """Uses the capture already taken for status. No second
+        ``capture-pane``. Remote rows never call this: their captures
+        are title-only and must not be invented into a result.
+        """
+
+        if self.results is None:
+            return "none"
+        candidate = None if dead else adapter.extract_result(ctx)
+        return self.results.observe(key, status, candidate).state
+
     def _local_rows(self) -> List[Dict]:
         panes = discovery.list_panes(self.session, self.own_pane_id, CAPTURE_LINES)
         out = []
@@ -162,6 +177,7 @@ class Tower:
             agent = custom_agent or adapter.name
             title_line = render.title_secondary_line(project, effective_title, _raw_hostname())
             activity_text, duration_seconds = self._activity_and_duration(key, adapter, ctx, status, pane["dead"])
+            result_state = self._result_state(key, status, adapter, ctx, pane["dead"])
 
             self.notifier.observe(key, status, project)
 
@@ -178,6 +194,7 @@ class Tower:
                     "pane_title": effective_title,
                     "path": pane["path"],
                     "status": status,
+                    "result_state": result_state,
                     "visit": visit,
                     "key": key,
                     "session": pane["session"],
@@ -280,6 +297,7 @@ class Tower:
                         "pane_title": effective_title,
                         "path": pane["path"],
                         "status": status,
+                        "result_state": "none",
                         "visit": visit,
                         "key": composite_key,
                         "remote": True,

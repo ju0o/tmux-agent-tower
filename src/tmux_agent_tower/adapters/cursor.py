@@ -13,7 +13,15 @@ from __future__ import annotations
 
 import re
 
-from .base import AgentAdapter, AdapterResult, PaneContext, looks_like_generic_waiting
+from .base import (
+    AgentAdapter,
+    AdapterResult,
+    PaneContext,
+    ResultCandidate,
+    looks_like_generic_waiting,
+    prose_body,
+    result_fingerprint,
+)
 
 _FOLLOWUP_RE = re.compile(r"add a follow-up", re.IGNORECASE)
 
@@ -37,3 +45,18 @@ class CursorAdapter(AgentAdapter):
             return AdapterResult("IDLE", "add-a-follow-up")
 
         return AdapterResult(None)
+
+    def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        # "Add a follow-up" also sits on screen while a turn is still
+        # running ("ctrl+c to stop"). That is not a final answer.
+        lines = list(ctx.lines)
+        full = "\n".join(lines)
+        if re.search(r"ctrl\+c to stop", full, re.IGNORECASE):
+            return None
+        if not _FOLLOWUP_RE.search(ctx.tail(20)):
+            return None
+        end = max(i for i, line in enumerate(lines) if _FOLLOWUP_RE.search(line))
+        text = prose_body(lines[:end])
+        if text is None:
+            return None
+        return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

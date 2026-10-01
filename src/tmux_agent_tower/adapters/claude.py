@@ -22,8 +22,11 @@ from .base import (
     AgentAdapter,
     AdapterResult,
     PaneContext,
+    ResultCandidate,
     CLAUDE_SPINNER_CHARS,
     looks_like_generic_waiting,
+    prose_body,
+    result_fingerprint,
     title_has_spinner,
 )
 
@@ -80,3 +83,18 @@ class ClaudeAdapter(AgentAdapter):
             return Activity(text=bullets[-1], confidence="low", source="agent-output")
 
         return None
+
+    def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        lines = list(ctx.lines)
+        full = "\n".join(lines)
+        if _ACTIVE_VERB_RE.search(full) or title_has_spinner(ctx.title, CLAUDE_SPINNER_CHARS):
+            return None
+        if not _EMPTY_PROMPT_RE.search(ctx.tail(20)):
+            return None
+        cooked = [i for i, line in enumerate(lines) if re.search(r"\bCooked for\b", line)]
+        if not cooked:
+            return None
+        text = prose_body(lines[: cooked[-1]])
+        if text is None:
+            return None
+        return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

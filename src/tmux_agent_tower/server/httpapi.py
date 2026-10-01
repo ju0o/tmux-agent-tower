@@ -38,6 +38,8 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
 from .. import __version__
+from ..detection.result import ResultTracker
+from ..detection.status import StatusEngine
 from ..state.overrides import FIELDS as OVERRIDE_FIELDS
 from ..tmux import capture as tmux_capture
 from ..ui.tower import Tower
@@ -224,6 +226,7 @@ def build_status_payload(tower: Tower) -> dict:
                 "auto_agent": row.get("auto_agent"),
                 "pane_title": row.get("pane_title"),
                 "status": row.get("status"),
+                "result_state": row.get("result_state") or "none",
                 "duration_seconds": round(row.get("duration_seconds") or 0.0, 1),
                 "activity": row.get("activity_text"),
                 "visit": row.get("visit"),
@@ -418,6 +421,9 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
         if route and route[1] == "screen":
             self._get_screen(route[0])
             return
+        if route and route[1] == "result":
+            self._get_result(route[0])
+            return
 
         self._send_json(404, {"ok": False, "error": "not_found"})
 
@@ -438,6 +444,53 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
             return
         raw = tmux_capture.capture_pane(pane_id, lines=MAX_SCREEN_LINES)
         self._send_json(200, build_screen_payload(pane_key, raw), no_store=True)
+
+    def _get_result(self, pane_key: str) -> None:
+        """Extracted final answer only. Does not mark it read -- opening
+        the live pane, or this GET by itself, is not "the user looked at
+        the result". Text stays in the process; ``no-store``.
+        """
+
+        if not self._require_auth():
+            return
+        if not self.server.source_session_alive():  # type: ignore[attr-defined]
+            self._send_json(409, source_session_missing_payload(self.server.session), no_store=True)  # type: ignore[attr-defined]
+            return
+        tower = self._tower()
+        tower.load()
+        row = find_row(tower, pane_key)
+        if row is None:
+            self._send_json(404, {"ok": False, "error": "not_found"}, no_store=True)
+            return
+        if row.get("remote"):
+            self._send_json(409, {"ok": False, "error": "remote_unsupported"}, no_store=True)
+            return
+        snap = self.server.results.snapshot(pane_key)  # type: ignore[attr-defined]
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "state": snap.state,
+                "text": snap.text if snap.state in ("ready", "read") else "",
+                "fingerprint": snap.fingerprint,
+                "generated_at": snap.generated_at,
+            },
+            no_store=True,
+        )
+
+    def _post_result_read(self, pane_key: str) -> None:
+        if not self._require_auth():
+            return
+        body = self._read_json_body()
+        fingerprint = (body or {}).get("fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            self._send_json(400, {"ok": False, "error": "bad_request"})
+            return
+        ok = self.server.results.mark_read(pane_key, fingerprint)  # type: ignore[attr-defined]
+        if not ok:
+            self._send_json(409, {"ok": False, "error": "stale_result"})
+            return
+        self._send_json(200, {"ok": True, "state": "read"})
 
     def _post_identity(self, pane_key: str) -> None:
         if not self._require_auth():
@@ -526,6 +579,9 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
         if route and route[1] == "identity":
             self._post_identity(route[0])
             return
+        if route and route[1] == "result":
+            self._post_result_read(route[0])
+            return
 
         self._send_json(404, {"ok": False, "error": "not_found"})
 
@@ -547,6 +603,10 @@ class _Server(ThreadingHTTPServer):
         self.token_store = auth.TokenStore(token_path)
         self.pairing = auth.PairingSession(self.token_store)
         self._tower_lock = threading.Lock()
+        # Shared across requests so status hysteresis and result
+        # ready/read survive the next poll. Result text is memory only.
+        self.status_engine = StatusEngine()
+        self.results = ResultTracker()
 
     @property
     def session(self) -> str:
@@ -566,7 +626,12 @@ class _Server(ThreadingHTTPServer):
         # (attention_mode, filter_text, selection) between concurrent
         # requests from possibly multiple paired devices.
         with self._tower_lock:
-            return Tower(self._session, self._own_pane_id)
+            return Tower(
+                self._session,
+                self._own_pane_id,
+                status_engine=self.status_engine,
+                results=self.results,
+            )
 
 
 def default_token_path():

@@ -102,6 +102,12 @@ PAGE_HTML = """<!doctype html>
     white-space: pre; color: #d9dde6; min-width: 100%; width: max-content;
   }
   #screen.stale { opacity: .55; }
+  #result-box { display: none; margin: 8px 0 12px; }
+  #result-box.open { display: block; }
+  #result-text { white-space: pre-wrap; word-break: break-word; user-select: text; -webkit-user-select: text; background: #12141a; border: 1px solid #2a3142; border-radius: 8px; padding: 10px; min-height: 0; max-height: 28vh; overflow: auto; }
+  .result-flag { color: #8fd18f; font-weight: 650; margin-top: 4px; }
+  .result-flag.read { color: #8b93a7; font-weight: 500; }
+  .card.waiting { border-color: #c9a227; }
   .send-box { margin-top: 10px; }
   .send-box .target { font-size: 12px; color: var(--dim); margin-bottom: 6px; }
   .send-box .target b { color: var(--fg); }
@@ -179,6 +185,16 @@ PAGE_HTML = """<!doctype html>
     <div class="kv"><span class="k">현재 작업</span><span class="v wrap" id="d-activity"></span></div>
     <div class="kv"><span class="k">Pane 이름</span><span class="v" id="d-title"></span></div>
     <div class="kv"><span class="k">Host</span><span class="v" id="d-host"></span></div>
+    <div class="kv" id="result-row"><span class="k">결과</span><span class="v" id="d-result">-</span></div>
+  </div>
+
+  <div id="result-box">
+    <pre id="result-text"></pre>
+    <div class="actions">
+      <button id="result-view" type="button">결과 보기</button>
+      <button id="result-copy" type="button">결과 복사</button>
+    </div>
+    <div class="hint" id="result-msg"></div>
   </div>
 
   <div class="live-label"><span>LIVE PANE</span><span id="live-meta"></span></div>
@@ -230,6 +246,8 @@ PAGE_HTML = """<!doctype html>
   var sourceGone = $("source-gone"), sourceGoneName = $("source-gone-name");
   var detail = $("detail"), screenEl = $("screen"), screenWrap = $("screen-wrap"), liveMeta = $("live-meta");
   var promptText = $("prompt-text"), sendBtn = $("send"), toast = $("toast");
+  var resultBox = $("result-box"), resultText = $("result-text"), resultMsg = $("result-msg");
+  var resultFingerprint = "";
   var editBox = $("edit");
 
   var panes = {};        // key -> last status row
@@ -331,6 +349,16 @@ PAGE_HTML = """<!doctype html>
       h.textContent = host;
       list.appendChild(h);
 
+      byHost[host].sort(function (a, b) {
+        function rank(p) {
+          if (p.status === "WAITING") return 0;
+          if (p.result_state === "ready") return 1;
+          if (p.status === "WORKING") return 2;
+          if (p.status === "IDLE") return 3;
+          return 4;
+        }
+        return rank(a) - rank(b);
+      });
       byHost[host].forEach(function (p) {
         if (p.offline) {
           var off = document.createElement("div");
@@ -341,7 +369,7 @@ PAGE_HTML = """<!doctype html>
         }
 
         var card = document.createElement("div");
-        card.className = "card" + (p.status === "WAITING" ? " attention" : "");
+        card.className = "card" + (p.status === "WAITING" ? " attention waiting" : "");
         card.addEventListener("click", function () { openDetail(p.key); });
 
         var row1 = document.createElement("div");
@@ -368,6 +396,12 @@ PAGE_HTML = """<!doctype html>
           act.className = "activity";
           act.textContent = p.activity;
           card.appendChild(act);
+        }
+        if (p.result_state === "ready") {
+          var flag = document.createElement("div");
+          flag.className = "result-flag";
+          flag.textContent = "✓ 새 Result";
+          card.appendChild(flag);
         }
         list.appendChild(card);
       });
@@ -413,6 +447,11 @@ PAGE_HTML = """<!doctype html>
     $("d-activity").textContent = p.activity || "-";
     $("d-title").textContent = p.pane_title || "-";
     $("d-host").textContent = p.host || "-";
+    var resultLabel = $("d-result");
+    if (p.result_state === "ready") resultLabel.textContent = "✓ 새 Result";
+    else if (p.result_state === "read") resultLabel.textContent = "확인한 Result";
+    else resultLabel.textContent = "-";
+    resultBox.classList.toggle("open", p.result_state === "ready" || p.result_state === "read");
     // The target is always visible right above the textarea.
     $("send-target").textContent = (p.project || "(이름 없음)") + " / " + (p.agent || "-");
   }
@@ -427,6 +466,9 @@ PAGE_HTML = """<!doctype html>
     lastScreenText = null;
     liveMeta.textContent = "";
     promptText.value = "";
+    resultText.textContent = "";
+    resultMsg.textContent = "";
+    resultFingerprint = "";
     editBox.classList.remove("open");
     main.classList.add("hidden");
     detail.classList.add("open");
@@ -505,6 +547,57 @@ PAGE_HTML = """<!doctype html>
   }
 
   // -- prompt send: only from the detail view, after seeing the pane --
+
+  function markResultRead() {
+    if (!current || !resultFingerprint) return;
+    api(paneUrl(current, "result"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fingerprint: resultFingerprint })
+    }).then(function () { pollList(); });
+  }
+
+  function loadResult() {
+    if (!current) return Promise.resolve(null);
+    return api(paneUrl(current, "result")).then(function (res) {
+      if (!res.body || !res.body.ok) {
+        resultMsg.textContent = "Result를 가져오지 못했습니다.";
+        return null;
+      }
+      resultFingerprint = res.body.fingerprint || "";
+      resultText.textContent = res.body.text || "";
+      return res.body.text || "";
+    });
+  }
+
+  $("result-view").addEventListener("click", function () {
+    loadResult().then(function (text) {
+      if (text) {
+        resultMsg.textContent = "";
+        markResultRead();
+      }
+    });
+  });
+
+  $("result-copy").addEventListener("click", function () {
+    loadResult().then(function (text) {
+      if (!text) {
+        resultMsg.textContent = "복사할 Result가 없습니다.";
+        return;
+      }
+      var done = function () {
+        resultMsg.textContent = "Result를 복사했습니다.";
+        markResultRead();
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(function () {
+          resultMsg.textContent = "자동 복사에 실패했습니다. 아래 글을 길게 눌러 선택하세요.";
+        });
+      } else {
+        resultMsg.textContent = "자동 복사에 실패했습니다. 아래 글을 길게 눌러 선택하세요.";
+      }
+    });
+  });
 
   sendBtn.addEventListener("click", function () {
     if (!current || sending) return;
