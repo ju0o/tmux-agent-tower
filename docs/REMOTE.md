@@ -74,6 +74,17 @@ token file is deleted.
   scrollback history. The phone polls about once a second, backs off
   toward two seconds when a round trip is slow, and pauses while the
   page is hidden. There is no WebSocket.
+* Show a separate result flag. IDLE is not a result. `result_state` is
+  `none`, `ready`, or `read`. `ready` means an adapter found a new final
+  answer body (Codex, Claude Code, OpenCode, Cursor). Quiet time, the
+  word "Done"/"Finished", tool logs, and scrollback from an older turn
+  do not count. Shell and Grok stay `none` until there is real
+  final-answer evidence. SSH panes are `remote_unsupported` on
+  `GET /api/panes/<key>/result`. The list payload carries only
+  `result_state`, never the text. The text is memory-only, `no-store`,
+  and opening the live pane does not mark it read. **결과 보기** or
+  **결과 복사** does. Copy uses `navigator.clipboard` and falls back to
+  a selectable block. A later turn's new body becomes `ready` again.
 * Edit project, agent, or pane title from that same detail screen, or
   reset them to auto-detection. Those writes go through the same
   `OverrideStore` the TUI uses. The TUI reloads the file when it

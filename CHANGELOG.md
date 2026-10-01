@@ -48,6 +48,14 @@ bumped until this merges.
   there. Project, agent, and title edits use the same `OverrideStore`
   as the TUI, which reloads the file on change; a local title is also
   `select-pane -T`. Reset clears the override.
+* **Phone result awareness** -- status and result stay separate.
+  Codex, Claude Code, OpenCode, and Cursor can mark `ready` only from
+  their own completion UI plus a prose body. Idle time and the words
+  "Done"/"Finished" are not enough. `GET /api/panes/<key>/result`
+  returns that body in memory (`no-store`); the card shows `✓ 새 Result`
+  and the phone copies just that text. Shell and Grok do not invent a
+  result. The status engine used by Remote is shared across polls so
+  WORKING does not flap every request.
 * **Smart `Ctrl+b w` (opt-in)** -- `C` → tmux shortcut, or
   `tower keys install`, writes one marked block in `~/.tmux.conf`
   (backup once, no full-file rewrite). The binding stays put: `tower
@@ -57,7 +65,7 @@ bumped until this merges.
   the fallback is queried from a tmux server with an empty config).
   `tower keys restore` removes only that block. Tower start/stop does
   not rebind the key. The public installer still does not opt in.
-* Tests: 225 (v0.2.2) -> 353, then 421 passed after live pane and smart `Ctrl+b w`.
+* Tests: 225 (v0.2.2) -> 353, then 421 after live pane and smart `Ctrl+b w`, then 435 after result awareness.
 * **In-TUI remote control (`M`)**: `tower` then `M` starts, inspects,
   and stops the phone remote. No shell command is shown. The header
   badge comes from a real health check plus the Tailscale Serve mapping,
