@@ -37,9 +37,23 @@ class OverrideStore:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._cache: Optional[Dict[str, Dict[str, str]]] = None
+        self._loaded_stamp: Optional[tuple] = None
+
+    def _stamp(self) -> Optional[tuple]:
+        try:
+            st = self.path.stat()
+        except FileNotFoundError:
+            return None
+        except Exception:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def _load(self) -> Dict[str, Dict[str, str]]:
-        if self._cache is not None:
+        # Another writer (Tower Remote's identity edits from the phone)
+        # shares this file. Re-read when it changed on disk so the TUI
+        # picks the edit up on its next refresh instead of at restart.
+        stamp = self._stamp()
+        if self._cache is not None and stamp == self._loaded_stamp:
             return self._cache
 
         try:
@@ -68,6 +82,7 @@ class OverrideStore:
                         migrated[str(key)] = {k: str(v) for k, v in entry.items()}
 
         self._cache = migrated
+        self._loaded_stamp = stamp
         return self._cache
 
     def _save(self) -> None:
@@ -75,6 +90,7 @@ class OverrideStore:
             self.path.write_text(json.dumps(self._cache, indent=2, sort_keys=True), encoding="utf-8")
         except Exception:
             pass
+        self._loaded_stamp = self._stamp()
 
     def _get_field(self, key: str, field: str) -> Optional[str]:
         return self._load().get(key, {}).get(field)
