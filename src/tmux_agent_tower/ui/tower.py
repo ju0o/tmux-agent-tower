@@ -28,7 +28,7 @@ from ..state.visits import VisitStore
 from ..tmux import capture as tmux_capture
 from ..tmux import discovery
 from ..tmux import registration
-from ..tmux.navigation import open_pane
+from ..tmux.navigation import focus_window, open_pane
 from . import render
 from .launcher_wizard import run_launcher
 from .widgets import is_backspace, is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
@@ -88,6 +88,58 @@ def load_remote_hosts() -> List[Dict[str, str]]:
     return hosts
 
 
+def navigator_rows(panes: List[Dict]) -> List[Dict]:
+    """Local panes grouped under a selectable window row.
+
+    Remote rows stay at the end. They are visible, and Enter does not
+    move the PC to them. Grouping follows session + window index, so a
+    renamed window is a label change, not a different target.
+    """
+
+    local = [row for row in panes if not row.get("remote") and row.get("pane_id")]
+    remote = [row for row in panes if row.get("remote") or not row.get("pane_id")]
+    order: List[Tuple] = []
+    buckets: Dict[Tuple, List[Dict]] = {}
+    for row in local:
+        key = (
+            str(row.get("session") or ""),
+            str(row.get("window_index") if row.get("window_index") is not None else ""),
+            str(row.get("window_name") or ""),
+        )
+        buckets.setdefault(key, []).append(row)
+        if key not in order:
+            order.append(key)
+
+    out: List[Dict] = []
+    for key in order:
+        session, index, name = key
+        sample = buckets[key][0]
+        out.append(
+            {
+                "kind": "window",
+                "key": f"win:{session}:{index}",
+                "session": session,
+                "window_index": index,
+                "window_name": name,
+                "host": sample.get("host", ""),
+                "project": t("nav.window").format(index=index, name=name),
+                "agent": "",
+                "status": "",
+                "remote": False,
+                "pane_id": "",
+            }
+        )
+        for row in buckets[key]:
+            item = dict(row)
+            item["kind"] = "pane"
+            out.append(item)
+    for row in remote:
+        item = dict(row)
+        item["kind"] = "pane"
+        out.append(item)
+    return out
+
+
 class Tower:
     def __init__(self, session: str, own_pane_id: str = "", status_engine: Optional[StatusEngine] = None, results: Optional[ResultTracker] = None):
         self.session = session
@@ -116,6 +168,8 @@ class Tower:
         self.visible_rows: List[Dict] = []   # rows after the search filter is applied
         self.visual: List[Dict] = []         # visible_rows incl. host headers, for drawing
         self.attention_mode = False          # a separate, re-sorted presentation -- see toggle_attention()
+        self.navigator_mode = False          # tmux window/pane tree -- see toggle_navigator()
+        self.notice = ""
         self.selected = 0                    # index into visible_rows
         self.last_refresh = 0.0
         self.filter_text = ""
@@ -199,7 +253,11 @@ class Tower:
                     "key": key,
                     "session": pane["session"],
                     "window_index": pane["window_index"],
+                    "window_name": pane.get("window_name") or "",
+                    "pane_index": pane.get("pane_index"),
+                    "pane_active": bool(pane.get("pane_active")),
                     "pane_id": pane["pane_id"],
+                    "kind": "pane",
                     "remote": False,
                 }
             )
@@ -300,6 +358,12 @@ class Tower:
                         "result_state": "none",
                         "visit": visit,
                         "key": composite_key,
+                        "session": pane.get("session"),
+                        "window_index": pane.get("window_index"),
+                        "window_name": pane.get("window_name") or "",
+                        "pane_index": pane.get("pane_index"),
+                        "pane_id": pane.get("pane_id"),
+                        "kind": "pane",
                         "remote": True,
                         "offline": False,
                     }
@@ -334,6 +398,9 @@ class Tower:
             # the default list silently reordering itself on a refresh.
             self.visible_rows = render.sort_by_attention(self.visible_rows)
 
+        if self.navigator_mode:
+            self.visible_rows = navigator_rows(self.visible_rows)
+
         if not self.visible_rows:
             self.selected = 0
             self.visual = []
@@ -359,6 +426,23 @@ class Tower:
         self.set_filter("")
 
     def _build_visual(self) -> None:
+        if self.navigator_mode:
+            visual = []
+            seen = []
+            for idx, row in enumerate(self.visible_rows):
+                if row.get("kind") == "window":
+                    label = f'Session {row.get("session")}'
+                elif row.get("remote"):
+                    label = row.get("host") or ""
+                else:
+                    label = ""
+                if label and label not in seen:
+                    seen.append(label)
+                    visual.append({"type": "header", "host": label})
+                visual.append({"type": "data", "row": row, "row_index": idx})
+            self.visual = visual
+            return
+
         if self.attention_mode:
             # Flat, priority-sorted, deliberately NOT grouped by host --
             # the point is "what needs me right now," not "what's on
@@ -384,6 +468,16 @@ class Tower:
 
     def toggle_attention(self) -> None:
         self.attention_mode = not self.attention_mode
+        if self.attention_mode:
+            self.navigator_mode = False
+        self._apply_filter()
+
+    def toggle_navigator(self) -> None:
+        """V: tmux session/window/pane tree. The project list stays the default."""
+
+        self.navigator_mode = not self.navigator_mode
+        if self.navigator_mode:
+            self.attention_mode = False
         self._apply_filter()
 
     # -- actions --------------------------------------------------------
@@ -398,14 +492,30 @@ class Tower:
             return
         self.selected = (self.selected + 1) % len(self.visible_rows)
 
-    def open_selected(self) -> None:
+    def open_selected(self) -> bool:
+        """Enter. A window row jumps to that window's active pane. A pane
+        row jumps by pane id. A missing target refreshes and does not move.
+        """
+
         if not self.visible_rows:
-            return
+            return False
         row = self.visible_rows[self.selected]
-        if row.get("remote") or row.get("offline"):
-            return
+        if row.get("kind") == "window":
+            ok = focus_window(str(row.get("session") or ""), str(row.get("window_index") or ""))
+            if not ok:
+                self.notice = "stale"
+                self.load()
+            return ok
+        if row.get("remote") or row.get("offline") or not row.get("pane_id"):
+            return False
+        ok = open_pane(str(row.get("session") or self.session), str(row.get("window_index") or ""), row["pane_id"])
+        if not ok:
+            self.notice = "stale"
+            self.load()
+            return False
         self.visits.mark_seen(self.session, row["pane_id"])
-        open_pane(row["session"], row["window_index"], row["pane_id"])
+        self.notice = ""
+        return True
 
     def edit_selected(self, stdscr) -> None:
         """The "E" menu: edit this pane's *display* identity only.
@@ -548,6 +658,13 @@ def _duration_text(tower: Tower, row: Dict) -> str:
 
 
 def _build_detail_fields(tower: Tower, row: Dict) -> List[Tuple[str, str]]:
+    if row.get("kind") == "window":
+        return [
+            (t("detail.session"), row.get("session") or ""),
+            (t("detail.window"), f'{row.get("window_index")}: {row.get("window_name") or ""}'),
+            (t("detail.nav_target"), t("detail.nav_window_hint")),
+        ]
+
     status = row["status"]
     status_text = f'{STATUS_SYMBOL.get(status, "?")} {t("status." + status)}'
     duration = _duration_text(tower, row)
@@ -563,8 +680,26 @@ def _build_detail_fields(tower: Tower, row: Dict) -> List[Tuple[str, str]]:
         (t("detail.status"), status_text),
         (t("detail.host"), row.get("host")),
     ]
+    fields.extend(_location_fields(row))
     if row.get("pane_id"):
         fields.append((t("detail.pane_id"), row["pane_id"]))
+    return fields
+
+
+def _location_fields(row: Dict) -> List[Tuple[str, str]]:
+    """Where this pane sits in tmux, from the row's own metadata."""
+
+    fields: List[Tuple[str, str]] = []
+    if row.get("session"):
+        fields.append((t("detail.session"), str(row["session"])))
+    if row.get("window_index") is not None and row.get("window_name") is not None and "window_index" in row:
+        fields.append((t("detail.window"), f'{row.get("window_index")}: {row.get("window_name")}'))
+    if "pane_index" in row and row.get("pane_index") is not None:
+        fields.append((t("detail.pane_index"), str(row["pane_index"])))
+    if "pane_active" in row:
+        fields.append(
+            (t("detail.active"), t("detail.active_yes") if row.get("pane_active") else t("detail.active_no"))
+        )
     return fields
 
 
@@ -586,6 +721,8 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
         row = item["row"]
         row_index = item["row_index"]
         physical.append({"kind": "primary", "row": row, "row_index": row_index})
+        if row.get("kind") == "window":
+            continue
 
         if narrow:
             physical.append({"kind": "agent_status", "row": row, "row_index": row_index})
@@ -642,6 +779,7 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             t("hint.settings"),
         ]
         hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
+        hint_keys.append(t("hint.navigator"))
         hint_keys.append(t("hint.attention"))
         hint_keys += [t("hint.refresh"), t("hint.quit")]
         safe_add(stdscr, 1, 2, "   ".join(hint_keys), curses.A_DIM)
@@ -702,6 +840,11 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
         if is_selected:
             safe_add(stdscr, y, 0, " " * max(1, width - 1), base_attr)
 
+        if p["kind"] == "primary" and row.get("kind") == "window":
+            marker = ">" if is_selected else " "
+            safe_add(stdscr, y, 0, f"{marker} {row.get('project') or ''}", base_attr if is_selected else curses.A_BOLD)
+            continue
+
         if p["kind"] == "primary":
             marker = ">" if is_selected else " "
             new_flag = t("marker.new") if row.get("visit") == "NEW" else ""
@@ -745,7 +888,8 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
         for i, line in enumerate(detail_lines):
             safe_add(stdscr, divider_y + 2 + i, 2, line)
 
-    safe_add(stdscr, bottom_hint_y, 2, f'{t("footer.return_hint")}   {t("footer.best_effort")}', curses.A_DIM)
+    footer = t("nav.stale") if tower.notice else f'{t("footer.return_hint")}   {t("footer.best_effort")}'
+    safe_add(stdscr, bottom_hint_y, 2, footer, curses.A_DIM)
 
     stdscr.noutrefresh()
     curses.doupdate()
@@ -889,6 +1033,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
 
         if is_enter(key):
             tower.open_selected()
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if matches_letter(key, "e"):
@@ -905,6 +1050,11 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
 
         if matches_letter(key, "a"):
             tower.toggle_attention()
+            draw(stdscr, tower, remote_state=remote_state)
+            continue
+
+        if matches_letter(key, "v"):
+            tower.toggle_navigator()
             draw(stdscr, tower, remote_state=remote_state)
             continue
 

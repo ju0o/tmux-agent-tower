@@ -42,6 +42,7 @@ from ..detection.result import ResultTracker
 from ..detection.status import StatusEngine
 from ..state.overrides import FIELDS as OVERRIDE_FIELDS
 from ..tmux import capture as tmux_capture
+from ..tmux.navigation import focus_local_pane
 from ..ui.tower import Tower
 from . import auth
 from .webui import PAGE_HTML
@@ -232,6 +233,12 @@ def build_status_payload(tower: Tower) -> dict:
                 "visit": row.get("visit"),
                 "remote": bool(row.get("remote")),
                 "offline": False,
+                "session": row.get("session"),
+                "window_index": row.get("window_index"),
+                "window_name": row.get("window_name"),
+                "pane_id": row.get("pane_id"),
+                "pane_index": row.get("pane_index"),
+                "active": bool(row.get("pane_active")),
             }
         )
 
@@ -582,8 +589,33 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
         if route and route[1] == "result":
             self._post_result_read(route[0])
             return
+        if route and route[1] == "focus":
+            self._post_focus(route[0])
+            return
 
         self._send_json(404, {"ok": False, "error": "not_found"})
+
+    def _post_focus(self, pane_key: str) -> None:
+        """Move the attached tmux client to this pane. Not a prompt and
+        not a keystroke: ``select-window`` + ``select-pane`` only, and
+        only inside the session this remote was bound to.
+        """
+
+        if not self._require_auth():
+            return
+        if not self.server.source_session_alive():  # type: ignore[attr-defined]
+            self._send_json(409, source_session_missing_payload(self.server.session), no_store=True)  # type: ignore[attr-defined]
+            return
+        server = self.server
+        ok, reason, pane_id = find_screen_target(server.session, pane_key, server._own_pane_id)  # type: ignore[attr-defined]
+        if not ok or not pane_id:
+            self._send_json(404 if reason == "not_found" else 409, {"ok": False, "error": reason}, no_store=True)
+            return
+        moved = focus_local_pane(server.session, pane_id)  # type: ignore[attr-defined]
+        if not moved:
+            self._send_json(409, {"ok": False, "error": "stale"}, no_store=True)
+            return
+        self._send_json(200, {"ok": True, "pane_id": pane_id}, no_store=True)
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: A003
         # Silence BaseHTTPRequestHandler's default stderr access log --

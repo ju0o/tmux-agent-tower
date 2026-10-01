@@ -85,6 +85,13 @@ token file is deleted.
   and opening the live pane does not mark it read. **결과 보기** or
   **결과 복사** does. Copy uses `navigator.clipboard` and falls back to
   a selectable block. A later turn's new body becomes `ready` again.
+* Show where a pane sits: session, window index and name, pane id, pane
+  index. A separate button, **PC를 이 Pane으로 이동**, asks the PC's
+  tmux client to `select-window` and `select-pane` that local pane.
+  Opening the card does not move the PC. The request is not a prompt
+  and not a keystroke. It is refused without a paired token, for a
+  stale or unknown pane, and for any SSH/remote host. Only the tmux
+  session this remote was bound to can be focused.
 * Edit project, agent, or pane title from that same detail screen, or
   reset them to auto-detection. Those writes go through the same
   `OverrideStore` the TUI uses. The TUI reloads the file when it
@@ -102,10 +109,10 @@ token file is deleted.
   that an SSH host pane shows title and status only. It does not invent
   a screen. `/api/prompt` rejects `remote: true` the same way. Read-only
   status for remote hosts works the same as it does in the TUI.
-* No generic exec endpoint, no filesystem API, no credentials API. The
-  one write action is narrowly "type this text into this already-open,
-  already-selected pane" -- never "run this command," never "open this
-  path."
+* No generic exec endpoint, no filesystem API, no credentials API.
+  Prompt send types text into one already-open pane. Focus only changes
+  which local pane the PC is looking at. Neither runs a command or
+  opens a path.
 * No auto-approval, no killing/restarting/interrupting an agent, no
   batched/automatic prompts to multiple panes, no cloud relay, no account
   system. See the permanent P5 boundary in `docs/ROADMAP.md`.

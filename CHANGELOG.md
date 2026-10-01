@@ -8,6 +8,12 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **tmux navigator** -- `V` groups local panes by session and window.
+  Enter selects that pane id (`select-window` + `select-pane`), or a
+  window's active pane. Stale ids refresh instead of moving. The phone
+  detail shows the same location and moves the PC only from
+  **PC를 이 Pane으로 이동** (`POST /api/panes/<key>/focus`), never from
+  a card tap, and never onto an SSH host.
 * **`tower serve`** -- pairing-gated read API (`/api/status`) + mobile
   web UI, localhost-only by default. `--lan` binds all interfaces for
   same-Wi-Fi use (plain HTTP; documented as trusted-LAN-only).

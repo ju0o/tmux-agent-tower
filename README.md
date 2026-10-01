@@ -227,6 +227,13 @@ the next time you press it. `tower keys restore` removes only that block
 and puts the recorded `w` command back. `tower --focus` still only
 navigates; it never starts a new TUI.
 
+While Tower is open, `V` switches the list to a tmux location tree
+(session, window, pane id). The project/agent list stays the default.
+Enter on a pane runs `select-window` and `select-pane` for that pane id.
+Enter on a window goes to that window's active pane. A pane that has
+already disappeared is not selected; the list refreshes instead. The
+detail panel shows Session, Window, pane id, and pane index.
+
 ### `tower --doctor`
 
 Runs a quick environment check (tmux/Python/curses availability, whether

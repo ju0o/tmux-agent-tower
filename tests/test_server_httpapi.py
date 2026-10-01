@@ -13,7 +13,7 @@ SESSION = "remote-test-session"
 
 def _pane_line(pane_id="%1", title="my-title", command="bash", path="/home/example/project", dead="0"):
     fs = discovery.FIELD_SEP
-    return fs.join([SESSION, "0", "win", "0", pane_id, title, command, path, "123", dead])
+    return fs.join([SESSION, "0", "win", "0", pane_id, title, command, path, "123", dead, "1"])
 
 
 @pytest.fixture

@@ -27,6 +27,7 @@ _PANE_FORMAT = FIELD_SEP.join(
         "#{pane_current_path}",
         "#{pane_pid}",
         "#{pane_dead}",
+        "#{pane_active}",
     ]
 )
 
@@ -75,6 +76,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
             current_path,
             pane_pid,
             dead,
+            pane_active,
         ) = parts
 
         if exclude_pane_id and pane_id == exclude_pane_id:
@@ -97,6 +99,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
                 "git_project": git_project_name(current_path),
                 "path_basename": Path(current_path).name or current_path if current_path else "",
                 "dead": dead == "1",
+                "pane_active": pane_active == "1",
                 "lines": lines,
             }
         )

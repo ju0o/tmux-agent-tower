@@ -122,7 +122,8 @@ PAGE_HTML = """<!doctype html>
   }
   #send { background: var(--working); color: #041018; }
   #send:disabled { opacity: .6; }
-  #edit-toggle, #edit-cancel { background: var(--line); color: var(--fg); }
+  #edit-toggle, #edit-cancel, #focus-pc { background: var(--line); color: var(--fg); }
+  #focus-pc { width: 100%; margin-top: 8px; }
   #edit-save { background: var(--working); color: #041018; }
   #edit-reset { background: transparent; color: var(--waiting); border: 1px solid var(--waiting) !important; }
   #edit { display: none; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 10px; }
@@ -185,6 +186,8 @@ PAGE_HTML = """<!doctype html>
     <div class="kv"><span class="k">현재 작업</span><span class="v wrap" id="d-activity"></span></div>
     <div class="kv"><span class="k">Pane 이름</span><span class="v" id="d-title"></span></div>
     <div class="kv"><span class="k">Host</span><span class="v" id="d-host"></span></div>
+    <div class="kv"><span class="k">위치</span><span class="v wrap" id="d-location"></span></div>
+    <div class="actions"><button id="focus-pc" type="button">PC를 이 Pane으로 이동</button></div>
     <div class="kv" id="result-row"><span class="k">결과</span><span class="v" id="d-result">-</span></div>
   </div>
 
@@ -447,6 +450,13 @@ PAGE_HTML = """<!doctype html>
     $("d-activity").textContent = p.activity || "-";
     $("d-title").textContent = p.pane_title || "-";
     $("d-host").textContent = p.host || "-";
+    var where = "Session " + (p.session || "-");
+    if (p.window_index != null && p.window_index !== "") {
+      where += "\\nWindow " + p.window_index + ": " + (p.window_name || "");
+    }
+    if (p.pane_id) where += "\\nPane " + p.pane_id + (p.pane_index != null && p.pane_index !== "" ? " · index " + p.pane_index : "");
+    $("d-location").textContent = where;
+    $("focus-pc").style.display = p.remote ? "none" : "block";
     var resultLabel = $("d-result");
     if (p.result_state === "ready") resultLabel.textContent = "✓ 새 Result";
     else if (p.result_state === "read") resultLabel.textContent = "확인한 Result";
@@ -490,6 +500,23 @@ PAGE_HTML = """<!doctype html>
   }
 
   $("back").addEventListener("click", closeDetail);
+
+  $("focus-pc").addEventListener("click", function () {
+    if (!current || sending) return;
+    var p = panes[current];
+    if (!p || p.remote) return;
+    var key = current;
+    api(paneUrl(key, "focus"), { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(function (res) {
+      if (current !== key) return;
+      if (res.status === 200 && res.body && res.body.ok) {
+        showToast("PC 화면을 이 pane으로 옮겼습니다.");
+        return;
+      }
+      showToast((res.body && res.body.error) || "이동하지 못했습니다.");
+    }).catch(function () {
+      showToast("이동하지 못했습니다.");
+    });
+  });
 
   function scheduleScreen() {
     if (screenTimer) clearTimeout(screenTimer);

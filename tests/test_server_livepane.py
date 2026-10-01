@@ -24,7 +24,7 @@ MARKER = "SECRET-SCREEN-MARKER-7f3a"
 
 def _pane_line(pane_id="%1", title="my-title", command="bash", path="/home/example/project", dead="0"):
     fs = discovery.FIELD_SEP
-    return fs.join([SESSION, "0", "win", "0", pane_id, title, command, path, "123", dead])
+    return fs.join([SESSION, "0", "win", "0", pane_id, title, command, path, "123", dead, "1"])
 
 
 @pytest.fixture
@@ -320,6 +320,59 @@ def test_mobile_page_pauses_polling_in_background_and_adapts():
     assert str(webui.SCREEN_POLL_MIN_MS) in html and str(webui.SCREEN_POLL_MAX_MS) in html
     assert webui.SCREEN_POLL_MIN_MS >= 500 and webui.SCREEN_POLL_MAX_MS <= 2000
     assert "SCREEN_POLL_SLOW_MS" in html
+
+
+def test_status_exposes_tmux_location(env):
+    status, body, _ = _get(env["srv"], "/api/status", env["token"])
+    assert status == 200
+    pane = body["panes"][0]
+    assert pane["session"] == SESSION
+    assert pane["window_index"] == "0"
+    assert pane["window_name"] == "win"
+    assert pane["pane_id"] == "%1"
+    assert pane["pane_index"] == "0"
+    assert pane["active"] is True
+
+
+def test_focus_requires_auth_and_only_moves_the_bound_pane(env):
+    status, body = _post(env["srv"], "/api/panes/%251/focus", {})
+    assert status == 401
+
+    before = len(env["calls"])
+    status, body = _post(env["srv"], "/api/panes/%251/focus", {}, env["token"])
+    assert status == 200
+    assert body["pane_id"] == "%1"
+    moved = env["calls"][before:]
+    assert ["select-window", "-t", "%1"] in moved
+    assert ["select-pane", "-t", "%1"] in moved
+    assert not any(call and call[0] == "send-keys" for call in moved)
+
+
+def test_focus_rejects_stale_remote_and_foreign_panes(env):
+    status, body = _post(env["srv"], _screen_path("asus:%0").replace("/screen", "/focus"), {}, env["token"])
+    assert status == 409
+    assert body["error"] == "remote_unsupported"
+    assert body["error"] == "remote_unsupported"
+
+    status, body = _post(env["srv"], "/api/panes/%25999/focus", {}, env["token"])
+    assert status == 404
+    assert body["error"] == "not_found"
+
+    env["alive"].discard("%1")
+    before = len(env["calls"])
+    status, body = _post(env["srv"], "/api/panes/%251/focus", {}, env["token"])
+    assert status == 409
+    assert body["error"] == "stale"
+    assert not any(call and call[0] in ("select-pane", "send-keys") for call in env["calls"][before:])
+
+
+def test_focus_button_is_not_the_card_click():
+    html = webui.PAGE_HTML
+    assert "PC를 이 Pane으로 이동" in html
+    assert '"focus"' in html
+    card = html.split('card.addEventListener("click"')[1].split("});")[0]
+    assert "focus" not in card
+    assert "openDetail" in card
 
 
 def test_mobile_page_keeps_horizontal_scroll_inside_the_pane_box():
