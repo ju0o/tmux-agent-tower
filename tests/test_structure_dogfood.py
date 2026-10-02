@@ -12,6 +12,7 @@ import pytest
 from tmux_agent_tower.state.bindings import ProjectBindingStore
 from tmux_agent_tower.state.overrides import OverrideStore
 from tmux_agent_tower.tmux import structure
+from workspace_fixture import make_three_level_git_workspace
 
 
 def _tmux(*args):
@@ -137,8 +138,9 @@ def test_tree_choice_builds_and_rearranges_a_workspace(tmp_path):
     from tmux_agent_tower.launcher.spawn import SpawnTarget, _finish_new_pane, spawn_into_window
     from tmux_agent_tower.launcher.treeview import FolderTree
 
-    repo = "/home/user/Projects/Experiments/tmux-agent-tower-remote"
-    root_path = "/home/user/Projects"
+    root_path, group, repo_path = make_three_level_git_workspace(tmp_path)
+    repo = str(repo_path)
+    root = str(root_path)
     session = f"tower-struct-{os.getpid()}"
     user = _tmux("list-windows", "-t", "0", "-F", "#{window_id}")
     user_before = user.stdout.split() if user.returncode == 0 else None
@@ -156,18 +158,18 @@ def test_tree_choice_builds_and_rearranges_a_workspace(tmp_path):
         assert structure.current_window_id(session) == tower_window
 
         # 2. Tree, three opens, then the repo itself.
-        tree = FolderTree("MAINPC", ProjectEntry("Projects", root_path, False))
+        tree = FolderTree("MAINPC", ProjectEntry(root_path.name, root, False))
 
         def _open(path: str) -> None:
             page = list_local_children(path, include_heavy=True)
             assert page.ok
             tree.apply_children(path, page.children)
 
-        _open(root_path)
-        _select_named(tree, "Experiments")
+        _open(root)
+        _select_named(tree, "group")
         assert tree.expand_action() == "fetch"
         _open(tree.selected_node().path)
-        _select_named(tree, "tmux-agent-tower-remote")
+        _select_named(tree, "sample-repo")
         assert tree.expand_action() == "fetch"
         _open(tree.selected_node().path)
         chosen = tree.as_entry()
@@ -186,7 +188,7 @@ def test_tree_choice_builds_and_rearranges_a_workspace(tmp_path):
         assert bindings.usable(work.pane_id, session, pid)["project_path"] == repo
 
         # 4-6. Second project in the same window, left/right.
-        second = SpawnTarget("/home/user/Projects/Experiments", "Experiments", "Shell")
+        second = SpawnTarget(str(group), group.name, "Shell")
         added = spawn_into_window(
             session, work.window_id, second, agents, bindings, overrides, direction="horizontal",
         )
@@ -216,7 +218,7 @@ def test_tree_choice_builds_and_rearranges_a_workspace(tmp_path):
         moved = structure.move_pane(session, side, dest.window_id)
         assert moved.ok and moved.pane_id == side
         assert structure.pane_window_id(side) == dest.window_id
-        assert bindings.usable(side, session, _tmux("display-message", "-p", "-t", side, "#{pane_pid}").stdout.strip())["project_name"] == "Experiments"
+        assert bindings.usable(side, session, _tmux("display-message", "-p", "-t", side, "#{pane_pid}").stdout.strip())["project_name"] == group.name
 
         # 10. Break a pane that still has a sibling. The pane id stays.
         broken = structure.break_pane(session, work.pane_id, name="split-off")

@@ -22,6 +22,7 @@ from tmux_agent_tower.launcher.treeview import (
 )
 from tmux_agent_tower.state.bindings import ProjectBindingStore
 from tmux_agent_tower.ui.workspace_browser import WorkspacePick, launch_workspaces
+from remote_fixtures import REMOTE_CODE, REMOTE_GROUP, REMOTE_HOME, REMOTE_PROJECTS
 from test_launcher_spawn import FakeTmux
 
 
@@ -166,7 +167,7 @@ def TreeNode_from(name, path, is_git):
 def test_hosts_keep_separate_trees_and_ssh_expand_is_cached():
     book = TreeBook()
     local = FolderTree("MAINPC", ProjectEntry("f", "/mnt/f", False))
-    remote = FolderTree("asus", ProjectEntry("skkse12", "/home/skkse12", False))
+    remote = FolderTree("asus", ProjectEntry("agent-host", REMOTE_HOME, False))
     book.remember("MAINPC", local)
     book.remember("asus", remote)
     local.root.expanded = True
@@ -180,25 +181,25 @@ def test_hosts_keep_separate_trees_and_ssh_expand_is_cached():
         assert script_is_read_only(script)
         assert "maxdepth 1" in script
         assert "tmux" not in script
-        if "/home/skkse12/projects" in script:
+        if REMOTE_PROJECTS in script:
             stdout = "\n".join([
                 "__STATUS__ ok",
-                "__PATH__ /home/skkse12/projects",
+                f"__PATH__ {REMOTE_PROJECTS}",
                 "__GIT__ 0",
-                "JuAgentEconomy\t/home/skkse12/projects/JuAgentEconomy\t0",
+                f"sample-group\t{REMOTE_GROUP}\t0",
             ])
         else:
             stdout = "\n".join([
                 "__STATUS__ ok",
-                "__PATH__ /home/skkse12",
+                f"__PATH__ {REMOTE_HOME}",
                 "__GIT__ 0",
-                "projects\t/home/skkse12/projects\t0",
+                f"projects\t{REMOTE_PROJECTS}\t0",
             ])
         return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout)
 
     cache = book.cache_for("asus")
-    home = list_remote_children("asus", "/home/skkse12", cache=cache, runner=runner, include_heavy=True)
-    remote.apply_children("/home/skkse12", home.children)
+    home = list_remote_children("asus", REMOTE_HOME, cache=cache, runner=runner, include_heavy=True)
+    remote.apply_children(REMOTE_HOME, home.children)
     child = remote.root.children[0]
     remote.selected = 1
     assert remote.expand_action() == "fetch"
@@ -208,8 +209,8 @@ def test_hosts_keep_separate_trees_and_ssh_expand_is_cached():
     assert remote.collapse_action() == "collapsed"
     assert remote.expand_action() == "cached"
     assert len(calls) == 2
-    assert "JuAgentEconomy" in [row.node.name for row in remote.visible_rows()]
-    assert book.cache_for("MAINPC").get("asus", "/home/skkse12", "heavy") is None
+    assert "sample-group" in [row.node.name for row in remote.visible_rows()]
+    assert book.cache_for("MAINPC").get("asus", REMOTE_HOME, "heavy") is None
 
 
 def test_create_uses_the_selected_tree_directory(tmp_path, monkeypatch):
@@ -252,13 +253,13 @@ def test_remote_create_is_not_part_of_expand(monkeypatch, tmp_path):
         "spawn_remote",
         lambda host, window_name, targets, agents_cfg, layout="tiled", timeout=8.0: spawned.append(host) or [SpawnResult(targets[0], True, "시작됨")],
     )
-    script = remote_list_script("/home/skkse12", include_heavy=True)
+    script = remote_list_script(REMOTE_HOME, include_heavy=True)
     assert script_is_read_only(script)
     assert "node_modules" not in script.split("case", 1)[-1] or ".git|.venv" in script
     launch_workspaces(
         session="0",
         state_dir=tmp_path,
-        picks=[WorkspacePick("asus", "ASUS", True, ProjectEntry("code", "/home/skkse12/projects/JuAgentEconomy/code", False))],
+        picks=[WorkspacePick("asus", "ASUS", True, ProjectEntry("code", REMOTE_CODE, False))],
         agent="Shell",
         placement="new",
         layout_choice="auto",

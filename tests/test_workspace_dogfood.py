@@ -27,6 +27,7 @@ from tmux_agent_tower.launcher.spawn import SpawnTarget
 from tmux_agent_tower.launcher.treeview import FolderTree
 from tmux_agent_tower.state.bindings import ProjectBindingStore
 from tmux_agent_tower.ui.workspace_browser import WorkspacePick, launch_workspaces
+from workspace_fixture import make_three_level_git_workspace
 
 
 def _tmux(*args):
@@ -41,22 +42,20 @@ def _session_windows(session: str) -> str:
     return _tmux("list-windows", "-t", session, "-F", "#{window_id}").stdout
 
 
-REPO = Path("/home/user/Projects/Experiments/tmux-agent-tower-remote")
-
-
 @pytest.mark.skipif(not _have_tmux(), reason="tmux is not installed")
 def test_local_tree_and_direct_path_create_in_an_isolated_session(tmp_path):
-    assert REPO.is_dir()
-    parent = list_local_children(str(REPO.parent))
-    match = [child for child in parent.children if child.path == str(REPO.resolve())]
-    assert match and match[0].is_git and match[0].name == REPO.name
+    _tree_root, group, repo = make_three_level_git_workspace(tmp_path)
+    parent = list_local_children(str(group))
+    match = [child for child in parent.children if child.path == str(repo)]
+    assert match and match[0].is_git and match[0].name == repo.name
 
     plain = tmp_path / "not-in-the-discovery-list"
     plain.mkdir()
     direct = validate_local_path(str(plain))
     assert direct.ok and direct.entry.is_git is False
-    assert find_git_projects([str(REPO.parent)])
-    assert all(entry.path != direct.entry.path for entry in find_git_projects([str(REPO.parent)]))
+    discovered = find_git_projects([str(group)])
+    assert discovered
+    assert all(entry.path != direct.entry.path for entry in discovered)
 
     user_before = _session_windows("0")
     session = f"tower-browser-{os.getpid()}"
@@ -80,15 +79,15 @@ def test_local_tree_and_direct_path_create_in_an_isolated_session(tmp_path):
         ).stdout
         repo_rows = [
             line for line in windows.splitlines()
-            if str(REPO.resolve()) in line and not line.startswith(tower_window + "\t")
+            if str(repo) in line and not line.startswith(tower_window + "\t")
         ]
         assert repo_rows
         pane_id = repo_rows[0].split("\t")[1]
         pid = _tmux("display-message", "-p", "-t", pane_id, "#{pane_pid}").stdout.strip()
         bound = ProjectBindingStore(tmp_path / "state" / "project-bindings.json").usable(pane_id, session, pid)
-        assert bound["project_path"] == str(REPO.resolve())
+        assert bound["project_path"] == str(repo)
         assert bound["agent"] == "Shell"
-        assert bound["project_name"] == REPO.name
+        assert bound["project_name"] == repo.name
 
         direct_result = launch_workspaces(
             session=session,
@@ -208,17 +207,18 @@ def _select(tree: FolderTree, name: str):
 
 @pytest.mark.skipif(not _have_tmux(), reason="tmux is not installed")
 def test_local_tree_three_levels_then_new_window(tmp_path):
-    projects = Path("/home/user/Projects")
-    tree = FolderTree("MAINPC", ProjectEntry(projects.name, str(projects.resolve()), False))
+    tree_root, _group, _repo = make_three_level_git_workspace(tmp_path)
+    tree = FolderTree("MAINPC", ProjectEntry(tree_root.name, str(tree_root), False))
     _expand(tree, tree.root.path)
-    _select(tree, "Experiments")
+    _select(tree, "group")
     _expand(tree, tree.selected_node().path)
-    _select(tree, "tmux-agent-tower-remote")
+    _select(tree, "sample-repo")
     _expand(tree, tree.selected_node().path)
     assert len(tree.loaded_paths()) >= 3
     chosen = tree.as_entry()
-    assert chosen.is_git and chosen.name == "tmux-agent-tower-remote"
-    assert "Experiments" in [row.node.name for row in tree.visible_rows()]
+    assert chosen.is_git and chosen.name == "sample-repo"
+    assert chosen.path == str(_repo)
+    assert "group" in [row.node.name for row in tree.visible_rows()]
 
     user_before = _session_windows("0")
     session = f"tower-tree-{os.getpid()}"
@@ -252,22 +252,50 @@ def test_local_tree_three_levels_then_new_window(tmp_path):
     assert _session_windows("0") == user_before
 
 
-@pytest.mark.skipif(not _asus_up(), reason="ASUS SSH is not reachable")
+def _asus_tree_path() -> str:
+    """Remote project leaf for the live ASUS tree dogfood.
+
+    ``TOWER_ASUS_TREE`` is an absolute directory on the ASUS host. The test
+    opens its great-grandparent, then the next two folders, then selects
+    this leaf. Example shape: ``/<root>/<middle>/<folder>/<project>``.
+    Unset means this dogfood is not configured. Public tests do not use it.
+    """
+
+    return os.environ.get("TOWER_ASUS_TREE", "").strip()
+
+
+def _asus_tree_ready() -> bool:
+    path = _asus_tree_path()
+    # ``/``, root, middle, folder, and the project leaf.
+    if len(Path(path).parts) < 5:
+        return False
+    return _asus_up()
+
+
+@pytest.mark.skipif(
+    not _asus_tree_ready(),
+    reason="ASUS SSH is down or TOWER_ASUS_TREE is unset",
+)
 def test_asus_tree_reaches_code_and_adds_one_window():
+    leaf = Path(_asus_tree_path())
+    folder = leaf.parent
+    middle = folder.parent
+    root = middle.parent
     before = _asus('tmux list-windows -a -F "#{window_id}" 2>/dev/null || true').stdout
-    home = validate_remote_path("asus", "/home/skkse12", timeout=8)
+    home = validate_remote_path("asus", str(root), timeout=8)
     assert home.ok
     tree = FolderTree("asus", home.entry)
     _expand(tree, tree.root.path, remote=True)
-    projects = _select(tree, "projects")
+    projects = _select(tree, middle.name)
     _expand(tree, projects.path, remote=True)
-    economy = _select(tree, "JuAgentEconomy")
-    _expand(tree, economy.path, remote=True)
-    code = _select(tree, "code")
+    opened = _select(tree, folder.name)
+    _expand(tree, opened.path, remote=True)
+    code = _select(tree, leaf.name)
     assert len(tree.loaded_paths()) >= 3
-    assert [row.node.name for row in tree.visible_rows() if row.depth < 3] == [] or "projects" in [
-        row.node.name for row in tree.visible_rows()
-    ]
+    visible = [row.node.name for row in tree.visible_rows()]
+    assert middle.name in visible
+    assert folder.name in visible
+    assert leaf.name in visible
     during = _asus('tmux list-windows -a -F "#{window_id}" 2>/dev/null || true').stdout
     assert during == before
     assert script_is_read_only(remote_list_script(code.path, include_heavy=True))

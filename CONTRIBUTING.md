@@ -13,6 +13,15 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
+Workspace dogfood builds a temporary three-level git tree under the test
+tmp directory. It does not read a home directory or a fixed Projects
+folder. Remote browser tests use synthetic paths under
+`/remote/agent-host` and do not open SSH.
+
+The live ASUS tree dogfood is separate. It runs only when SSH host
+`asus` answers and `TOWER_ASUS_TREE` is an absolute remote directory
+shaped like `/<root>/<middle>/<folder>/<project>`. Unset means skip.
+
 ## Adding or improving an agent adapter
 
 Adapters live in `src/tmux_agent_tower/adapters/`. Each one is small and
