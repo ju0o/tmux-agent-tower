@@ -71,7 +71,7 @@ def test_install_is_idempotent_and_preserves_the_rest_of_the_file(tmp_path):
     assert applied[0][-1] == "choose-tree -Zw"
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["fallback"] == "choose-tree -Zw"
-    assert saved["source"] == "saved"
+    assert saved["source"] == "tmux-default"
 
 
 def test_install_refuses_to_guess_when_no_default_is_known(tmp_path):
@@ -155,6 +155,9 @@ def test_has_active_exit_codes(monkeypatch):
         def pane_exists(self, pane_id):
             return pane_id in self.alive
 
+        def pane_is_live_in_session(self, pane_id, session):
+            return pane_id in self.alive and session == "sess"
+
     fake = Fake()
     monkeypatch.setattr(main.tmux_capture, "current_session", fake.current_session)
     monkeypatch.setattr(registration, "capture", fake)
@@ -200,3 +203,104 @@ def test_settings_menu_offers_install_or_restore():
     assert "창 목록" in off or "window list" in off
     assert ko.STRINGS["hint.settings"].startswith("C ")
     assert en.STRINGS["hint.settings"].startswith("C ")
+
+
+def test_on_branch_focuses_and_off_branch_is_the_recorded_command():
+    custom = "run-shell -b '$HOME/bin/mine'"
+    args = keybind.binding_args(custom, tower_cmd="/opt/tower")
+    assert args[:4] == ["bind-key", "-T", "prefix", "w"]
+    assert args[4] == "if-shell"
+    assert args[5] == "/opt/tower --has-active"
+    assert args[6] == 'run-shell -b "/opt/tower --focus"'
+    assert args[7] == custom
+    assert "window_name" not in " ".join(args)
+    assert "choose-tree" not in " ".join(args)
+
+
+def test_configured_w_beats_a_saved_empty_server_default():
+    live = 'bind-key -T prefix w if-shell "tower --has-active" "run-shell -b \\"tower --focus\\"" "choose-tree -Zw"'
+    configured = "bind-key -T prefix w run-shell -b '$HOME/bin/tmux-control-open'"
+    command, source = keybind.choose_fallback(
+        live,
+        "choose-tree -Zw",
+        saved="choose-tree -Zw",
+        saved_source="tmux-default",
+        config_line=configured,
+    )
+    assert (command, source) == ("run-shell -b '$HOME/bin/tmux-control-open'", "config")
+
+
+def test_bare_command_is_not_treated_as_a_list_keys_line():
+    assert keybind.parse_w_command("display-menu mine") == ""
+    assert keybind.parse_w_command("bind-key -T prefix w display-menu mine") == "display-menu mine"
+
+
+def test_install_for_user_keeps_the_live_custom_binding(monkeypatch, tmp_path):
+    conf = tmp_path / ".tmux.conf"
+    state = tmp_path / "smart-w.json"
+    conf.write_text("set -g mouse on\n", encoding="utf-8")
+    monkeypatch.setattr(keybind, "config_path", lambda: conf)
+    monkeypatch.setattr(keybind, "state_path", lambda: state)
+    monkeypatch.setattr(keybind, "query_tmux_default_w", lambda: "choose-tree -Zw")
+    monkeypatch.setattr(keybind, "query_w_line", lambda _argv: "bind-key -T prefix w display-menu mine")
+    monkeypatch.setattr(keybind, "query_configured_w", lambda _path: "")
+    applied = []
+    monkeypatch.setattr(keybind.capture, "run_tmux", lambda args, capture=True, timeout=3.0: applied.append(list(args)) or "")
+
+    assert keybind.install_for_user() == "display-menu mine"
+    assert "display-menu mine" in conf.read_text(encoding="utf-8")
+    assert "choose-tree" not in conf.read_text(encoding="utf-8")
+    assert applied[-1][-1] == "display-menu mine"
+
+
+def test_configured_server_keeps_a_sourced_binding_and_ignores_the_tower_block(tmp_path):
+    conf = tmp_path / "tmux.conf"
+    conf.write_text(
+        "bind-key -T prefix w display-message kept\n" + keybind.render_block("choose-tree -Zw"),
+        encoding="utf-8",
+    )
+    assert keybind.parse_w_command(keybind.query_configured_w(conf)) == "display-message kept"
+
+
+def test_tower_exit_makes_has_active_fail_and_restart_points_at_the_new_pane(monkeypatch):
+    class Fake:
+        def __init__(self):
+            self.options = {}
+            self.alive = {"%6", "%40"}
+
+        def current_session(self):
+            return "0"
+
+        def get_session_option(self, session, name):
+            return self.options.get((session, name), "")
+
+        def set_session_option(self, session, name, value):
+            self.options[(session, name)] = value
+
+        def unset_session_option(self, session, name):
+            self.options.pop((session, name), None)
+
+        def pane_is_live_in_session(self, pane_id, session):
+            return pane_id in self.alive and session == "0"
+
+    fake = Fake()
+    monkeypatch.setattr(main.tmux_capture, "current_session", fake.current_session)
+    monkeypatch.setattr(registration, "capture", fake)
+
+    registration.register("0", "%6")
+    assert main.has_active_tower() == 0
+    registration.unregister_if_self("0", "%6")
+    assert main.has_active_tower() == 1
+
+    registration.register("0", "%40")
+    assert registration.resolve_active_pane("0") == "%40"
+    assert main.has_active_tower() == 0
+
+
+def test_render_block_quotes_a_fallback_that_contains_quotes():
+    custom = """run-shell -b "$HOME/bin/tmux-control-open '#{session_name}'" """
+    text = keybind.render_block(custom.strip(), "/opt/tower")
+    assert text.count(keybind.BEGIN) == 1
+    assert "tmux-control-open" in text
+    assert "choose-tree" not in text
+    assert "/opt/tower --has-active" in text

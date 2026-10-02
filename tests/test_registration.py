@@ -22,6 +22,12 @@ class FakeTmuxOptions:
     def pane_exists(self, pane_id):
         return pane_id in self.alive_panes
 
+    def pane_is_live_in_session(self, pane_id, session):
+        if pane_id not in self.alive_panes or pane_id in getattr(self, "dead_panes", set()):
+            return False
+        owner = getattr(self, "pane_sessions", {}).get(pane_id)
+        return owner is None or owner == session
+
     def run_tmux(self, args, capture=True):
         if args[0] in ("select-window", "select-pane"):
             self.focused.append(tuple(args))
@@ -93,6 +99,26 @@ def test_a_window_named_control_that_isnt_registered_is_never_focused(monkeypatc
 
     registration.register("sess", "%2")
     assert registration.resolve_active_pane("sess") == "%2"
+
+
+def test_pane_in_another_session_is_cleared_and_not_used(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    fake.pane_sessions = {"%14": "other"}
+    monkeypatch.setattr(registration, "capture", fake)
+
+    registration.register("sess", "%14")
+    assert registration.resolve_active_pane("sess") is None
+    assert fake.get_session_option("sess", registration.PANE_OPTION) == ""
+
+
+def test_dead_registered_pane_is_cleared(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    fake.dead_panes = {"%14"}
+    monkeypatch.setattr(registration, "capture", fake)
+
+    registration.register("sess", "%14")
+    assert registration.resolve_active_pane("sess") is None
+    assert fake.get_session_option("sess", registration.PANE_OPTION) == ""
 
 
 def test_focus_pane_selects_window_then_pane(monkeypatch):

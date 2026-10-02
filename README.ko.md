@@ -202,19 +202,20 @@ claude = "claude-beta"   # 에이전트 실행에 쓸 명령어를 직접 지정
 
 ### 선택사항: `Ctrl+b w` 단축키
 
-`Ctrl+b w`를 활성 관제탑으로 바로 가는 단축키로 쓰면 편하지만, 이건 tmux
-기본 `choose-tree` 창 선택 기능을 그 키에서 **덮어씁니다**. 설치
-스크립트는 이걸 자동으로 하지 않습니다. 원하면 `~/.tmux.conf`에 직접
-추가하세요:
+공개 설치는 이 키를 바꾸지 않습니다. Tower 안에서 `C` → tmux 단축키,
+또는 `tower keys install`이 `~/.tmux.conf`의 표시된 블록만 추가합니다.
+파일 전체를 다시 쓰지 않고, 처음 바꾸기 전에 백업을 남깁니다.
 
-```tmux
-unbind-key w
-bind-key w run-shell -b "tower --focus"
-```
+바인딩은 하나이고, Tower를 켜거나 꺼도 다시 묶지 않습니다. 키를 누르는
+순간에 나뉩니다.
 
-`tower`가 아니라 `--focus`라는 점에 주의하세요 -- 이 바인딩은 이미
-실행 중인 Tower로 *이동*만 해야지, 백그라운드 키 입력에서 새 curses
-TUI를 띄우면 안 됩니다(어디에도 제대로 붙을 곳이 없습니다).
+* 이 세션에 등록된 Tower pane이 살아 있으면 그 pane으로 이동합니다
+  (`tower --focus`, pane id. 창 이름으로 찾지 않습니다).
+* 없거나 등록이 오래되었으면, 설치 시점에 기록한 사용자의 `w` 명령을
+  실행합니다. `source-file` 안의 기존 바인딩도 유지합니다. 빈 설정의
+  tmux가 실제로 보고할 때만 `choose-tree`를 씁니다.
+
+`tower keys restore`는 그 블록만 지우고 기록해 둔 `w`를 되돌립니다.
 
 ### `tower --doctor`
 

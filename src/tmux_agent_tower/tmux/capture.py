@@ -85,6 +85,24 @@ def pane_exists(pane_id: str) -> bool:
     return pane_id in output.split("\n")
 
 
+def pane_is_live_in_session(pane_id: str, session: str) -> bool:
+    """True only when ``pane_id`` is a living pane of ``session``.
+
+    ``list-panes -s`` is limited to that session, so a pane that merely
+    exists somewhere else on the server does not count. ``#{pane_dead}``
+    drops a pane whose process has already exited.
+    """
+
+    if not pane_id or not session:
+        return False
+    output = run_tmux(["list-panes", "-s", "-t", session, "-F", "#{pane_id}\t#{pane_dead}"])
+    for line in output.split("\n"):
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0] == pane_id:
+            return parts[1] != "1"
+    return False
+
+
 def session_exists(session: str) -> bool:
     """Exact-name check. ``tmux has-session -t NAME`` also accepts prefix
     and glob matches, so a deleted ``scratch`` would still "exist" while

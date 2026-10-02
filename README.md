@@ -224,10 +224,10 @@ rewrites `~/.tmux.conf` on install. Inside Tower, `C` → **tmux shortcut**
 
 * Tower is running in this session → `Ctrl+b w` jumps to that pane
   (`tower --focus`, pane id, not a window name).
-* Tower is not running, or the registration is stale → the `w` command
-  recorded at install time. On a stock tmux that is the window list
-  (`choose-tree`). A custom `w` binding you already had is kept instead
-  of being replaced with the default.
+* Tower is not running, or the registration is stale → the user's `w`
+  command. A custom binding, including one that lives in a `source-file`,
+  is kept. `choose-tree` is used only when a tmux server with an empty
+  config actually reports that command. It is not assumed.
 
 Quitting Tower does not unbind the key. The same binding checks again
 the next time you press it. `tower keys restore` removes only that block

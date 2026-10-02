@@ -49,7 +49,10 @@ def resolve_active_pane(session: str) -> Optional[str]:
     if not pane_id:
         return None
 
-    if not capture.pane_exists(pane_id):
+    # Alive, and in this session. A pane id from another session, or a
+    # dead pane that has not been destroyed yet, is stale. Never search
+    # for Tower by window name.
+    if not capture.pane_is_live_in_session(pane_id, session):
         capture.unset_session_option(session, PANE_OPTION)
         capture.unset_session_option(session, WINDOW_OPTION)
         return None

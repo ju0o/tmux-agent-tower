@@ -3,15 +3,17 @@
 The binding itself never changes when Tower starts or exits. One tmux
 command checks the session registration at key-press time:
 
-* a live registered Tower pane -> ``tower --focus``
-* anything else -> the ``w`` command recorded at install time
+* a live registered Tower pane in this session -> ``tower --focus``
+* anything else -> the user's ``w`` command
 
 Public installs do not write this on their own. ``tower keys install``
-(or the in-TUI settings screen) is the only opt-in. That command records
-the current ``w`` binding first. A binding Tower itself already owns is
-not treated as the user's command; the fallback is then the ``w``
-command from a tmux server started with an empty config, queried on
-this machine, never a guessed string.
+(or the in-TUI settings screen) is the only opt-in. That command reads
+``list-keys -T prefix`` first. A binding Tower itself already owns is
+not the user's command. The next place to look is the user's config
+with the Tower block removed (so a ``source-file`` that binds ``w`` is
+kept). Only when that still has no ``w`` command do we query a tmux
+server started with an empty config. The default is never a guessed
+string.
 
 ``~/.tmux.conf`` is not rewritten. Only the marked block is inserted,
 replaced, or removed, and the file is copied aside before the first
@@ -26,8 +28,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from . import capture
 
@@ -53,35 +56,55 @@ def state_path() -> Path:
     return Path.home() / ".config" / "tmux-agent-tower" / STATE_NAME
 
 
-def parse_w_command(list_keys_line: str) -> str:
-    """The command half of one ``list-keys -T prefix w`` line.
+def parse_w_command(list_keys_output: str) -> str:
+    """The command half of a ``list-keys -T prefix w`` result.
 
     ``bind-key -T prefix w choose-tree -Zw`` -> ``choose-tree -Zw``.
-    Empty when the line is not a prefix ``w`` binding.
+    Empty when no line is a prefix ``w`` binding. A bare command such as
+    ``choose-tree -Zw`` is not a list-keys line and is not accepted.
     """
 
-    text = (list_keys_line or "").strip()
-    marker = " w "
-    if "prefix" not in text or marker not in text:
-        return ""
-    return text.split(marker, 1)[1].strip()
+    for line in (list_keys_output or "").splitlines():
+        text = line.strip()
+        marker = " w "
+        if "prefix" not in text or marker not in text:
+            continue
+        return text.split(marker, 1)[1].strip()
+    return ""
 
 
 def is_tower_owned(command: str) -> bool:
     return any(marker in (command or "") for marker in _OWNED_MARKERS)
 
 
-def choose_fallback(list_keys_line: str, tmux_default: str, saved: str = "") -> tuple[str, str]:
-    """``(command, source)``. A saved command always wins so a second
-    install cannot overwrite the user's original with our own binding.
+def choose_fallback(
+    list_keys_line: str,
+    tmux_default: str,
+    saved: str = "",
+    saved_source: str = "",
+    config_line: str = "",
+) -> Tuple[str, str]:
+    """``(command, source)`` for the ``w`` action used when Tower is absent.
+
+    A live user binding wins. When the live key is one Tower installed,
+    the command from the user's config (Tower block removed) wins over a
+    previously saved empty-server default. A saved user command is the
+    safety net when that config cannot be read. The empty-server command
+    is last, and only if it was actually queried.
     """
 
-    if saved.strip():
+    live = parse_w_command(list_keys_line)
+    if live and not is_tower_owned(live):
+        return live, "current"
+
+    configured = parse_w_command(config_line)
+    if configured and not is_tower_owned(configured):
+        return configured, "config"
+
+    if saved.strip() and not is_tower_owned(saved) and saved_source != "tmux-default":
         return saved.strip(), "saved"
-    current = parse_w_command(list_keys_line)
-    if current and not is_tower_owned(current):
-        return current, "current"
-    if not tmux_default.strip():
+
+    if not tmux_default.strip() or is_tower_owned(tmux_default):
         return "", "missing"
     return tmux_default.strip(), "tmux-default"
 
@@ -146,15 +169,28 @@ def block_installed(text: str) -> bool:
     return BEGIN in (text or "") and END in (text or "")
 
 
-def load_saved_fallback(path: Path) -> str:
+def load_saved_record(path: Path) -> Tuple[str, str]:
+    """``(fallback command, source)``. Missing source is ``saved`` so an
+    older state file still protects a command the user already recorded.
+    """
+
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return ""
+        return "", ""
     if not isinstance(data, dict):
-        return ""
+        return "", ""
     fallback = data.get("fallback")
-    return fallback.strip() if isinstance(fallback, str) else ""
+    command = fallback.strip() if isinstance(fallback, str) else ""
+    source = data.get("source")
+    if not isinstance(source, str) or not source.strip():
+        source = "saved" if command else ""
+    return command, source.strip()
+
+
+def load_saved_fallback(path: Path) -> str:
+    command, _source = load_saved_record(path)
+    return command
 
 
 def binding_args(fallback: str, tower_cmd: str = "tower") -> list[str]:
@@ -188,6 +224,7 @@ def install_smart_w(
     tmux_default: str,
     apply: Optional[Callable[[list[str]], None]] = None,
     tower_cmd: str = "tower",
+    config_line: str = "",
 ) -> str:
     """Write the managed block and return the fallback command.
 
@@ -195,8 +232,10 @@ def install_smart_w(
     touch the files in that case.
     """
 
-    saved = load_saved_fallback(state_file)
-    fallback, source = choose_fallback(list_keys_line, tmux_default, saved)
+    saved, saved_source = load_saved_record(state_file)
+    fallback, source = choose_fallback(
+        list_keys_line, tmux_default, saved, saved_source, config_line
+    )
     if not fallback:
         raise RuntimeError("no fallback")
 
@@ -238,7 +277,11 @@ def restore_smart_w(
     return fallback
 
 
-def query_w_command(argv_prefix: list[str]) -> str:
+def query_w_line(argv_prefix: list[str]) -> str:
+    """Raw ``list-keys -T prefix w`` output. Callers parse it themselves
+    so a command is not stripped and then rejected as "not a list-keys line".
+    """
+
     try:
         proc = subprocess.run(
             [*argv_prefix, "list-keys", "-T", "prefix", "w"],
@@ -246,7 +289,39 @@ def query_w_command(argv_prefix: list[str]) -> str:
         )
     except Exception:
         return ""
-    return parse_w_command(proc.stdout)
+    return proc.stdout or ""
+
+
+def query_w_command(argv_prefix: list[str]) -> str:
+    return parse_w_command(query_w_line(argv_prefix))
+
+
+def query_configured_w(conf_path: Path) -> str:
+    """``w`` as the user's config would bind it without the Tower block.
+
+    Uses a private tmux socket so the running server is not touched.
+    A ``source-file`` in that config still applies, which is how a custom
+    ``w`` survives when the live key is already Tower's.
+    """
+
+    try:
+        text = conf_path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    stripped = strip_managed(text)
+    handle = tempfile.NamedTemporaryFile("w", prefix="tower-w-", suffix=".conf", delete=False, encoding="utf-8")
+    tmp = Path(handle.name)
+    try:
+        handle.write(stripped)
+        handle.close()
+        sock = f"tower-config-w-{os.getpid()}"
+        base = ["tmux", "-f", str(tmp), "-L", sock]
+        try:
+            return query_w_line(base)
+        finally:
+            subprocess.run([*base, "kill-server"], capture_output=True, timeout=5, check=False)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def query_tmux_default_w() -> str:
@@ -271,14 +346,16 @@ def query_tmux_default_w() -> str:
 
 def install_for_user() -> str:
     default = query_tmux_default_w()
-    current = query_w_command(["tmux"])
+    live = query_w_line(["tmux"])
+    configured = query_configured_w(config_path())
     fallback = install_smart_w(
         config_path(),
         state_path(),
-        list_keys_line=current,
+        list_keys_line=live,
         tmux_default=default,
         apply=lambda args: capture.run_tmux(args, capture=False),
         tower_cmd=tower_invocation(),
+        config_line=configured,
     )
     return fallback
 
