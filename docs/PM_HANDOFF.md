@@ -5,6 +5,7 @@
 - HEAD: tip of this branch. Result recovery is `a764010`. SSH clipboard is `20d427a`.
 - Worktree: clean
 - Tests: 640 passed, 1 skipped, 0 failed
+- Channel rule: `.cursor/rules/github-handoff.mdc` (`29af6ee`)
 
 ## Last Task
 - Y on an ASUS SSH session into MAINPC, then WSL, then `tmux attach`, said there was no result. After recovery, the copy still did not reach the laptop clipboard.
@@ -18,7 +19,7 @@
 ## Changed
 - Result recovery: `control/actions.py`, Codex/Claude/Cursor/OpenCode extractors, ssh screen adapter, `ui/tower.py`
 - Clipboard destination: `clipboard.py`, `ui/control_view.py`, `i18n/ko.py`, `i18n/en.py`
-- Commits: `a764010`, `20d427a`
+- Commits: `a764010`, `20d427a`, `29af6ee`
 
 ## Verified
 - automated: 640 passed, 1 skipped, 0 failed. The skip is the ASUS workspace dogfood (`TOWER_ASUS_TREE` unset).
