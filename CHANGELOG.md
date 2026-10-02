@@ -19,6 +19,9 @@ bumped until this merges.
   that need attention and `A` again restores the same tree. `V` returns
   to the tree. Search keeps the matching pane's host and window.
 * **Result copy** -- `Y` in Pane Control copies the extracted final
+  body only. A Codex tool row (`Added`, a numbered diff, "Show
+  details") and a user prompt whose marker scrolled away are not part
+  of that body. A fenced code block in the answer stays.
   body to the system clipboard. The live transcript is not copied.
   WSL uses `clip.exe` with UTF-16 on stdin. If that tool is missing,
   the text goes to a tmux buffer and the result stays unread. `S`

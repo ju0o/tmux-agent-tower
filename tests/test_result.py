@@ -30,6 +30,32 @@ def test_codex_idle_extracts_the_answer_not_the_finished_bullet():
     assert "Finished" not in result.text
 
 
+def test_codex_result_drops_the_tool_diff_and_keeps_a_code_block():
+    screen = [
+        "이해가 안됨. HTML로 보여줘",
+        "",
+        "• 요청하신 대로 작전판으로 정리하겠습니다.",
+        "• Added plan.html (+3 -0)",
+        "1 +<!doctype html>",
+        "2 +<html>",
+        "+ Show details",
+        "정리한 시각적 작전판입니다.",
+        "```python",
+        "print('tower')",
+        "```",
+        "Worked for 2m 22s",
+        "› Ask Codex to do anything",
+    ]
+    result = CodexAdapter().extract_result(PaneContext(title="", command="codex", lines=tuple(screen)))
+    assert result is not None
+    assert "Added" not in result.text
+    assert "<!doctype" not in result.text
+    assert "Show details" not in result.text
+    assert "이해가 안됨" not in result.text
+    assert "작전판으로 정리" in result.text
+    assert "print('tower')" in result.text
+
+
 def test_codex_working_is_not_a_result():
     assert CodexAdapter().extract_result(ctx("codex-working.txt", title="⠙ working")) is None
 

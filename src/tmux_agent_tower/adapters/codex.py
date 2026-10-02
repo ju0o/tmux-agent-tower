@@ -26,6 +26,7 @@ from .base import (
     ResultCandidate,
     BRAILLE_SPINNER_CHARS,
     prompt_head,
+    drop_scrolled_user_prompt,
     prose_body,
     result_fingerprint,
     title_has_spinner,
@@ -222,7 +223,7 @@ class CodexAdapter(AgentAdapter):
             if stripped.startswith("›") and "ask codex" not in stripped.lower():
                 start = i + 1
                 break
-        text = prose_body(lines[start:end])
+        text = prose_body(drop_scrolled_user_prompt(lines[start:end]))
         if text is None:
             return None
         return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

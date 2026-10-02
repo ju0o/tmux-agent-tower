@@ -108,10 +108,49 @@ _ONLY_COMPLETION_WORD = re.compile(
     re.IGNORECASE,
 )
 _BOX_ONLY = re.compile(r"^[\s─┃▀▁▂▃▄▅▆▇█░▒▓·•│╭╮╯╰▶═\-_=]+$")
+# A tool row is not the answer: "• Added file (+3 -0)", a numbered diff
+# gutter ("1 +<html>"), or the collapsed "Show details" control.
+_TOOL_LINE = re.compile(
+    r"^(?:"
+    r"[•∙]\s*(?:added|edited|ran|read|explored|called|updated|deleted|"
+    r"created|wrote|opened|searched|applied|removed|patched|listed)\b"
+    r"|\d+\s+[+-]"
+    r"|\+\s+show details\b"
+    r"|-\s+show details\b"
+    r"|show details"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def result_fingerprint(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def drop_scrolled_user_prompt(lines: Sequence[str]) -> list:
+    """Drop a user prompt whose ``›`` marker has scrolled off screen.
+
+    That tail sits above the first answer bullet and is split from it by
+    a blank line. A code fence in the head is part of the answer.
+    """
+
+    first = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not (stripped.startswith("•") or stripped.startswith("∙")):
+            continue
+        if _TOOL_LINE.match(stripped) or _CHROME_LINE.match(stripped):
+            continue
+        first = index
+        break
+    if first is None:
+        return list(lines)
+    head = lines[:first]
+    if any("```" in line for line in head):
+        return list(lines)
+    if not any(not line.strip() for line in head):
+        return list(lines)
+    return list(lines[first:])
 
 
 def prose_body(lines: Sequence[str]) -> Optional[str]:
@@ -123,6 +162,8 @@ def prose_body(lines: Sequence[str]) -> Optional[str]:
     for line in lines:
         stripped = line.strip()
         if not stripped or _BOX_ONLY.match(stripped) or _CHROME_LINE.match(stripped):
+            continue
+        if _TOOL_LINE.match(stripped):
             continue
         kept.append(stripped)
     text = "\n".join(kept).strip()
