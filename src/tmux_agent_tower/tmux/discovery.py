@@ -12,6 +12,7 @@ from typing import Dict, List
 from . import capture
 from ..detection import process as process_detection
 from ..detection.identity import agent_process_cwd, evidence_cmdline
+from ..detection.sshdest import find_ssh_client
 from ..detection.project import discover_project, git_project_name
 
 FIELD_SEP = "\x1f"
@@ -88,6 +89,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
 
         lines = capture.capture_pane(pane_id, lines=capture_lines) if dead != "1" else []
         agent_cwd = "" if dead == "1" else (agent_process_cwd(pane_pid, cmdline_map, ppid_map) or "")
+        ssh_target, ssh_stale = ("", False) if dead == "1" else find_ssh_client(pane_pid, cmdline_map, ppid_map)
 
         rows.append(
             {
@@ -102,6 +104,8 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
                 "command": command,
                 "cmdline": evidence_cmdline(pane_pid, command, cmdline_map, ppid_map),
                 "agent_cwd": agent_cwd,
+                "ssh_target": ssh_target,
+                "ssh_stale": ssh_stale,
                 "process_git": git_project_name(agent_cwd) if agent_cwd else None,
                 "path": current_path,
                 "auto_project": discover_project(current_path),

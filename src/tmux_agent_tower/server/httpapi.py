@@ -92,6 +92,13 @@ def build_status_payload(tower: Tower) -> dict:
             {
                 "key": row["key"],
                 "host": row["host"],
+                "observer_host": row.get("observer_host") or "",
+                "tmux_host": row.get("tmux_host") or row.get("host"),
+                "execution_host": row.get("execution_host") or row.get("host"),
+                "transport": row.get("transport") or "",
+                "transport_target": row.get("transport_target") or "",
+                "place_label": row.get("place_label") or "",
+                "topology_source": row.get("topology_source") or "",
                 "project": row.get("project"),
                 "agent": row.get("agent"),
                 "auto_project": row.get("auto_project"),

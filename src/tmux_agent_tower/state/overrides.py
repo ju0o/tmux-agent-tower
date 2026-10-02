@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
-FIELDS = ("project", "agent", "title")
+FIELDS = ("project", "agent", "title", "execution_host")
 _KEPT = FIELDS + ("session", "pane_pid")
 
 
@@ -138,6 +138,12 @@ class OverrideStore:
 
     def set_title(self, key: str, value: str, session: str, pane_pid: str) -> None:
         self._set_field(key, "title", value, session, pane_pid)
+
+    def get_execution_host(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        return self._get_field(key, "execution_host", session, pane_pid)
+
+    def set_execution_host(self, key: str, value: str, session: str, pane_pid: str) -> None:
+        self._set_field(key, "execution_host", value, session, pane_pid)
 
     def drop_if_stale(self, key: str, session: str, pane_pid: str) -> bool:
         """Drop a record that does not belong to this pane. True if removed.

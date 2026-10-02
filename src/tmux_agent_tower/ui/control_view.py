@@ -129,24 +129,24 @@ def _draw(stdscr, tower, row: dict, notice: str, show_result: bool, follow: bool
     safe_add(stdscr, 1, 2, f'{row.get("agent") or "-"}   {symbol} {t(key)}{duration}')
     safe_add(stdscr, 2, 2, badges)
     safe_add(stdscr, 3, 2, f'{t("detail.activity")}: {row.get("activity_text") or "-"}', curses.A_DIM)
-    where = (
-        f'{t("detail.session")} {row.get("session") or "-"}   '
-        f'{t("detail.window")} {row.get("window_index")}: {row.get("window_name") or ""}   '
-        f'{t("detail.pane_id")} {row.get("pane_id") or row.get("key") or "-"}'
-    )
-    safe_add(stdscr, 4, 2, where, curses.A_DIM)
+    from .tower import location_lines
+
+    y = 4
+    for line in location_lines(row):
+        safe_add(stdscr, y, 2, line, curses.A_DIM)
+        y += 1
     sense = render.format_identity_sense(
         row.get("agent_source"),
         row.get("project_source"),
         row.get("auto_agent_source"),
         row.get("auto_project_source"),
     )
-    safe_add(stdscr, 5, 2, f'{t("detail.sense")}: {sense}', curses.A_DIM)
+    safe_add(stdscr, y, 2, f'{t("detail.sense")}: {sense}', curses.A_DIM)
 
-    live_label_y = 6
+    live_label_y = y + 1
     if row.get("attention_prompt"):
-        safe_add(stdscr, 6, 2, row.get("attention_prompt") or "", curses.A_BOLD)
-        live_label_y = 7
+        safe_add(stdscr, live_label_y, 2, row.get("attention_prompt") or "", curses.A_BOLD)
+        live_label_y += 1
 
     live_top = live_label_y + 1
     footer_y = height - 1

@@ -16,6 +16,8 @@ from typing import Dict, List, Optional, Tuple
 
 from ..adapters import resolve_adapter
 from ..detection.identity import identify_agent, prefer_override
+from ..detection.topology import agent_through_ssh, classify_transport, peer_topology
+from ..hostreg import HostRegistry, openssh_hostname
 from ..adapters.base import PaneContext
 from ..detection.result import ResultTracker
 from ..detection.status import StatusEngine, STATUS_DEAD
@@ -91,15 +93,59 @@ def load_remote_hosts() -> List[Dict[str, str]]:
     return hosts
 
 
+def location_lines(row: Dict) -> List[str]:
+    """Execution host, the tmux object that receives input, and the link."""
+
+    execution = row.get("execution_host") or row.get("host") or "-"
+    tmux_host = row.get("tmux_host") or execution
+    session = row.get("session") or "-"
+    window = row.get("window_index")
+    window_text = "-" if window is None else str(window)
+    pane = row.get("pane_id") or row.get("key") or "-"
+    lines = [
+        f'{t("detail.execution_host")}  {execution}',
+        f'{t("detail.tmux_place")}  {tmux_host} → Session {session} → Window {window_text} → Pane {pane}',
+    ]
+    if row.get("transport") == "ssh":
+        target = row.get("transport_target") or execution
+        lines.append(f'{t("detail.transport")}  SSH → {target}')
+    elif row.get("remote"):
+        lines.append(t("detail.peer_readonly"))
+    else:
+        lines.append(f'{t("detail.transport")}  {t("detail.transport_local")}')
+    return lines
+
+
+def _place_label(topology: Dict, pane: Dict) -> str:
+    """Where an SSH client pane sits, without pretending it is that host's tmux."""
+
+    if topology.get("transport") != "ssh":
+        return ""
+    index = pane.get("window_index")
+    return t("nav.via_tmux").format(
+        tmux_host=topology.get("tmux_host") or "",
+        index="" if index is None else index,
+        pane=pane.get("pane_id") or "",
+    )
+
+
 def _window_group(row: Dict) -> Tuple:
-    """Identity of the window a pane belongs to. Names are not part of it."""
+    """Identity of the window a pane belongs to. Names are not part of it.
+
+    An SSH client pane is not a member of that window's local group.
+    It is shown under the execution host, still controlled by this
+    tmux pane id. A peer tmux snapshot uses its own server identity.
+    """
 
     host = str(row.get("host") or "")
     session = str(row.get("session") or "")
     window_id = str(row.get("window_id") or "")
     index = str(row.get("window_index") if row.get("window_index") is not None else "")
+    pane_id = str(row.get("pane_id") or "")
+    if row.get("transport") == "ssh" and not row.get("remote"):
+        return ("ssh", str(row.get("tmux_host") or ""), session, pane_id)
     if row.get("remote"):
-        return ("remote", host, session, window_id or index or "?")
+        return ("remote", str(row.get("tmux_host") or host), session, window_id or index or "?")
     if window_id:
         return ("local", window_id)
     return ("local", session, index)
@@ -160,11 +206,23 @@ def navigator_rows(panes: List[Dict], collapsed: Optional[set] = None) -> List[D
         name = str(sample.get("window_name") or "")
         window_id = str(sample.get("window_id") or "")
         remote = bool(sample.get("remote"))
+        via_ssh = sample.get("transport") == "ssh" and not remote
         if remote:
-            row_key = f'{sample.get("host") or ""}:{window_id or index}'
+            row_key = f'{sample.get("tmux_host") or sample.get("host") or ""}:{window_id or index}'
+        elif via_ssh:
+            row_key = f'via:{sample.get("tmux_host") or ""}:{sample.get("pane_id") or ""}'
         else:
             row_key = window_id or f"win:{session}:{index}"
-        label = t("nav.window_row").format(index=index, name=name)
+        if via_ssh:
+            label = t("nav.via_tmux").format(
+                tmux_host=sample.get("tmux_host") or "",
+                index=index,
+                pane=sample.get("pane_id") or "",
+            )
+        elif remote:
+            label = t("nav.peer_tmux").format(index=index, name=name)
+        else:
+            label = t("nav.window_row").format(index=index, name=name)
         group = f"win:{sample.get('host') or ''}:{session}:{window_id or index}"
         summary = render.window_summary(members)
         hidden = row_key in closed
@@ -232,6 +290,7 @@ class Tower:
         self.own_pane_id = own_pane_id
         self.local_host = local_host_label()
         self.remote_hosts = load_remote_hosts()
+        self._host_registry = HostRegistry(self.local_host, _raw_hostname(), self.remote_hosts)
 
         self.visits = VisitStore(STATE_DIR)
         self.overrides = OverrideStore(STATE_DIR / "overrides.json")
@@ -306,6 +365,10 @@ class Tower:
         record = self.bindings.usable(key, session or "", pane_pid or "")
         if not record:
             return None
+        if str(record.get("transport") or "") == "ssh":
+            # The path is on the far side. A local directory with the same
+            # text is not that project.
+            return (record.get("project_name") or "").strip() or None
         git_name = git_project_name(record.get("project_path") or "")
         return git_name or (record.get("project_name") or "").strip() or None
 
@@ -361,6 +424,11 @@ class Tower:
             "auto_agent_source": auto_agent_source,
         }
 
+    def _resolve_ssh(self, token: str) -> str:
+        """OpenSSH's local reading of an alias. Cached on the registry."""
+
+        return openssh_hostname(token)
+
     def _local_rows(self) -> List[Dict]:
         panes = discovery.list_panes(self.session, self.own_pane_id, CAPTURE_LINES)
         out = []
@@ -375,22 +443,44 @@ class Tower:
             visit = self.visits.visit_label(self.session, pane["pane_id"])
 
             key = pane["pane_id"]
+            session_name = pane.get("session") or ""
+            pane_pid = pane.get("pane_pid") or ""
+            bound = self.bindings.usable(key, session_name, pane_pid) or {}
+            topology = classify_transport(
+                tmux_host=self.local_host,
+                registry=self._host_registry,
+                ssh_target=pane.get("ssh_target") or "",
+                ssh_stale=bool(pane.get("ssh_stale")),
+                resolver=self._resolve_ssh,
+                binding=bound,
+                override_host=self.overrides.get_execution_host(key, session_name, pane_pid) or "",
+            )
+            via_ssh = topology["transport"] == "ssh"
             effective_title = pane["title"]  # local title edits are pushed to real tmux -- see edit_selected
             identity = self._identity(
                 key,
                 pane["command"],
-                effective_title,
+                "" if via_ssh else effective_title,
                 pane.get("cmdline") or "",
                 pane.get("lines") or (),
-                pane.get("git_project"),
-                pane.get("path_basename"),
+                None if via_ssh else pane.get("git_project"),
+                None if via_ssh else pane.get("path_basename"),
                 _raw_hostname(),
                 no_name,
-                binding_name=self._binding_name(key, pane.get("session"), pane.get("pane_pid")),
-                process_git=pane.get("process_git"),
-                session=pane.get("session") or "",
-                pane_pid=pane.get("pane_pid") or "",
+                binding_name=self._binding_name(key, session_name, pane_pid),
+                process_git=None if via_ssh else pane.get("process_git"),
+                session=session_name,
+                pane_pid=pane_pid,
             )
+            if via_ssh:
+                agent_name, agent_source = agent_through_ssh(
+                    identity["agent"],
+                    identity["agent_source"],
+                    effective_title,
+                    pane.get("lines") or (),
+                )
+                identity["agent"] = agent_name
+                identity["agent_source"] = agent_source
             project = identity["project"]
             agent = identity["agent"]
             auto_project = identity["auto_project"]
@@ -405,7 +495,14 @@ class Tower:
 
             out.append(
                 {
-                    "host": self.local_host,
+                    "host": topology["execution_host"],
+                    "observer_host": topology["observer_host"],
+                    "tmux_host": topology["tmux_host"],
+                    "execution_host": topology["execution_host"],
+                    "transport": topology["transport"],
+                    "transport_target": topology["transport_target"],
+                    "topology_source": topology["topology_source"],
+                    "place_label": _place_label(topology, pane),
                     "project": project,
                     "auto_project": auto_project,
                     "project_source": identity["project_source"],
@@ -427,7 +524,7 @@ class Tower:
                     "result_state": result_state,
                     "visit": visit,
                     "key": key,
-                    "session": pane["session"],
+                    "session": session_name,
                     "window_id": pane.get("window_id") or "",
                     "window_index": pane["window_index"],
                     "window_name": pane.get("window_name") or "",
@@ -532,10 +629,21 @@ class Tower:
                 )
 
                 self.notifier.observe(composite_key, status, project)
+                topo = peer_topology(self.local_host, name)
 
                 out.append(
                     {
-                        "host": name,
+                        "host": topo["execution_host"],
+                        "observer_host": topo["observer_host"],
+                        "tmux_host": topo["tmux_host"],
+                        "execution_host": topo["execution_host"],
+                        "transport": topo["transport"],
+                        "transport_target": topo["transport_target"],
+                        "topology_source": topo["topology_source"],
+                        "place_label": t("nav.peer_tmux").format(
+                            index=pane.get("window_index") if pane.get("window_index") is not None else "",
+                            name=pane.get("window_name") or "",
+                        ),
                         "project": project,
                         "auto_project": auto_project,
                         "project_source": identity["project_source"],
@@ -747,6 +855,7 @@ class Tower:
             return
 
         menu_items = [
+            ("execution", t("menu.execution_host")),
             ("project", t("menu.project_name")),
             ("agent", t("menu.agent_name")),
             ("title", t("menu.pane_title")),
@@ -770,7 +879,13 @@ class Tower:
                 lines.append(f'{t("edit.auto_label")}: {auto}')
             return lines
 
-        if pick.selected_key == "project":
+        if pick.selected_key == "execution":
+            context = _context(self.overrides.get_execution_host(key, session, pane_pid), row.get("execution_host"))
+            name = prompt_text(stdscr, t("prompt.execution_host"), context_lines=context)
+            if name:
+                update_identity(self, key, {"execution_host": name})
+
+        elif pick.selected_key == "project":
             context = _context(self.overrides.get_project(key, session, pane_pid), row.get("auto_project"))
             name = prompt_text(stdscr, t("prompt.rename"), context_lines=context)
             if name:
@@ -902,8 +1017,21 @@ def _build_detail_fields(tower: Tower, row: Dict) -> List[Tuple[str, str]]:
         (t("detail.result"), result_text),
         (t("detail.activity"), row.get("activity_text") if tower.config.get("show_activity") else None),
         (t("detail.pane_title"), row.get("pane_title")),
-        (t("detail.path"), row.get("path")),
-        (t("detail.host"), row.get("host")),
+        (t("detail.path"), None if row.get("transport") == "ssh" else row.get("path")),
+        (t("detail.execution_host"), row.get("execution_host") or row.get("host")),
+        (t("detail.tmux_place"), " → ".join(
+            part for part in (
+                str(row.get("tmux_host") or ""),
+                f'Session {row.get("session") or "-"}',
+                f'Window {row.get("window_index")}',
+                f'Pane {row.get("pane_id") or "-"}',
+            ) if part
+        )),
+        (t("detail.transport"), (
+            f'SSH → {row.get("transport_target") or row.get("execution_host") or ""}'
+            if row.get("transport") == "ssh"
+            else (t("detail.peer_readonly") if row.get("remote") else t("detail.transport_local"))
+        )),
     ]
     fields.extend(_location_fields(row))
     if row.get("window_id"):

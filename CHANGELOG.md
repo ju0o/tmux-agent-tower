@@ -8,6 +8,13 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **Host topology** -- each pane keeps the machine Tower is running on,
+  the tmux server that owns the pane, and the machine where the work
+  runs. An `ssh` client in a local pane is grouped under the destination
+  and labeled `via` that tmux host. Prompt and focus still target the
+  local pane id. A configured peer's own tmux stays read-only and is
+  not merged with that SSH client. Linking an execution host is an
+  edit on the pane, checked against session and process id.
 * **Stale override** -- a saved project/agent/title is used only when the
   session and pane process id still match. A reused pane id does not keep
   the previous label, including one the launcher just replaced. A label

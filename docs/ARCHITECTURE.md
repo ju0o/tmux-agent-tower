@@ -53,6 +53,28 @@ fire-and-forget), never anything that reaches into a monitored pane.
 Nothing in this path sends input to a monitored pane or touches any
 process other than `tmux` itself, `ps` (read-only process listing), and
 `ssh` (for the optional remote prototype, also read-only on the far end).
+`ssh -G` may also run locally to read an alias from the user's SSH
+config. It does not open a connection, and the resolved name stays in
+memory.
+
+## Host topology
+
+A pane has three hosts, not one label:
+
+* `observer_host` — the OS where this Tower process is running. An SSH
+  login that attached to this machine does not change it.
+* `tmux_host` — the machine whose tmux server owns the session, window,
+  and pane id. Prompt, focus, rename, and close use this plus
+  `window_id` / `pane_id`. They do not follow the execution host.
+* `execution_host` — where the shell or agent is actually working.
+  A local pane whose process tree contains an `ssh` client is grouped
+  here. The tree label says `via <tmux host>`.
+
+Configured peer hosts (`remote-hosts.txt`) stay a read-only snapshot of
+that peer's own tmux. Those rows are not the same object as an SSH
+client pane on this machine, even when the pane ids look alike. To
+control the peer's tmux, attach there and run Tower on that machine.
+This pass does not add remote write.
 
 ## Why a local `tower --collect-json`-on-the-remote-host design was *not*
 chosen for P3

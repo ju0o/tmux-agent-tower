@@ -440,10 +440,12 @@ PAGE_HTML = """<!doctype html>
       var byWindow = {};
       byHost[host].forEach(function (p) {
         var gkey = "";
-        if (!p.offline && p.window_id) {
-          gkey = (p.session || "") + ":" + p.window_id;
+        if (p.transport === "ssh") {
+          gkey = "ssh:" + (p.tmux_host || "") + ":" + (p.pane_id || p.key);
+        } else if (!p.offline && p.window_id) {
+          gkey = (p.tmux_host || "") + ":" + (p.session || "") + ":" + p.window_id;
         } else if (!p.offline && p.window_index != null && p.window_index !== "") {
-          gkey = (p.session || "") + ":" + p.window_index;
+          gkey = (p.tmux_host || "") + ":" + (p.session || "") + ":" + p.window_index;
         }
         if (!byWindow[gkey]) { byWindow[gkey] = []; groups.push(gkey); }
         byWindow[gkey].push(p);
@@ -455,7 +457,7 @@ PAGE_HTML = """<!doctype html>
           var sample = items[0];
           var label = document.createElement("div");
           label.className = "window-label";
-          label.textContent = "창 " + (sample.window_id ? sample.window_id + " " : "") + sample.window_index + (sample.window_name ? ": " + sample.window_name : "");
+          label.textContent = sample.place_label || ("창 " + (sample.window_id ? sample.window_id + " " : "") + sample.window_index + (sample.window_name ? ": " + sample.window_name : ""));
           list.appendChild(label);
         }
         items.forEach(function (p) {
@@ -555,17 +557,20 @@ PAGE_HTML = """<!doctype html>
     $("d-status").textContent = executionState(p) + " · " + formatDuration(p.duration_seconds);
     $("d-activity").textContent = p.activity || "-";
     $("d-title").textContent = p.pane_title || "-";
-    $("d-host").textContent = p.host || "-";
+    $("d-host").textContent = p.execution_host || p.host || "-";
     var mark = attentionMark(p);
     $("d-attention").textContent = mark || "-";
     $("d-question").textContent = p.attention_prompt || "-";
     $("approve").style.display = p.approval_known ? "block" : "none";
     $("reject").style.display = p.reject_known ? "block" : "none";
-    var where = "Session " + (p.session || "-");
+    var where = "실행 " + (p.execution_host || p.host || "-");
+    where += "\\n터미널 " + (p.tmux_host || p.host || "-") + " → Session " + (p.session || "-");
     if (p.window_index != null && p.window_index !== "") {
       where += "\\nWindow " + (p.window_id ? p.window_id + " " : "") + p.window_index + ": " + (p.window_name || "");
     }
     if (p.pane_id) where += "\\nPane " + p.pane_id + (p.pane_index != null && p.pane_index !== "" ? " · index " + p.pane_index : "");
+    if (p.transport === "ssh") where += "\\nSSH → " + (p.transport_target || p.execution_host || "");
+    else if (p.remote) where += "\\n이 호스트의 tmux (읽기 전용)";
     $("d-location").textContent = where;
     var senseAgent = p.agent_source || "-";
     var senseProject = p.project_source || "-";

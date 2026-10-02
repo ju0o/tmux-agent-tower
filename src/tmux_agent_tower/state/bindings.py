@@ -47,7 +47,18 @@ class ProjectBindingStore:
                     continue
                 entry = {
                     field: str(value[field])
-                    for field in ("project_path", "project_name", "agent", "session", "pane_pid", "created_at")
+                    for field in (
+                        "project_path",
+                        "project_name",
+                        "agent",
+                        "session",
+                        "pane_pid",
+                        "created_at",
+                        "execution_host",
+                        "transport",
+                        "transport_target",
+                        "tmux_host",
+                    )
                     if field in value and isinstance(value[field], (str, int, float))
                 }
                 if entry.get("project_path") and entry.get("pane_pid") and entry.get("session"):
@@ -71,6 +82,10 @@ class ProjectBindingStore:
         project_path: str,
         project_name: str,
         agent: str,
+        execution_host: str = "",
+        transport: str = "",
+        transport_target: str = "",
+        tmux_host: str = "",
     ) -> None:
         """Remember which project this new pane was opened for.
 
@@ -81,7 +96,7 @@ class ProjectBindingStore:
         if not key or not session or not str(pane_pid).strip() or not project_path:
             return
         data = self._load()
-        data[str(key)] = {
+        entry = {
             "project_path": str(project_path),
             "project_name": str(project_name or ""),
             "agent": str(agent or ""),
@@ -89,6 +104,15 @@ class ProjectBindingStore:
             "pane_pid": str(pane_pid).strip(),
             "created_at": str(int(time.time())),
         }
+        if execution_host:
+            entry["execution_host"] = str(execution_host)
+        if transport:
+            entry["transport"] = str(transport)
+        if transport_target:
+            entry["transport_target"] = str(transport_target)
+        if tmux_host:
+            entry["tmux_host"] = str(tmux_host)
+        data[str(key)] = entry
         self._cache = data
         self._save()
 
@@ -108,6 +132,11 @@ class ProjectBindingStore:
         if not stored_pid or stored_pid != str(pane_pid or "").strip():
             return None
         path = record.get("project_path") or ""
+        remote_work = str(record.get("transport") or "") == "ssh"
+        if remote_work:
+            if not path and not (record.get("execution_host") or record.get("transport_target")):
+                return None
+            return record
         if not path or not Path(path).is_dir():
             return None
         return record

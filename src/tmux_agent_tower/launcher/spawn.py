@@ -98,6 +98,9 @@ def _finish_new_pane(
     if overrides is not None:
         overrides.drop_if_stale(pane_id, session, pane_pid)
     if bindings is not None:
+        from ..detection.sshdest import destination_of_command
+
+        ssh_target = destination_of_command(command or "")
         bindings.record(
             pane_id,
             session,
@@ -105,6 +108,8 @@ def _finish_new_pane(
             target.project_path,
             target.project_name,
             target.agent_label,
+            transport="ssh" if ssh_target else "",
+            transport_target=ssh_target,
         )
 
     if command:

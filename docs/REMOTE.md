@@ -302,6 +302,18 @@ service (`tower remote install-service`, WSL + Tailscale already up) is
 still a later slice. The MagicDNS URL stays stable, so a phone bookmark
 keeps working across starts.
 
+## Hosts and nested SSH
+
+The phone uses the same pane rows as the PC. A row's `host` is the
+execution host. `tmux_host`, `transport`, and `place_label` say where
+the tmux object is. An SSH client inside this machine's tmux is
+`transport: ssh` and can still receive a prompt, because the write
+goes to that local pane. A pane that only exists in a configured
+peer's tmux stays `remote: true` and is not writable from here.
+
+To drive the other machine's tmux, SSH there, attach, and run `tower`
+on that host. Tower does not gain a remote write API in this pass.
+
 ## Known gaps (v0 MVP)
 
 * **Submit verification is measured for Codex, Claude Code and OpenCode

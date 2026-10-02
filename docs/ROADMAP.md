@@ -86,6 +86,11 @@ and worktree, never directly on `main`, until it's been dogfooded enough
 to trust -- see the PM decision that started this branch for the full
 phased plan (main stabilization first, then this).
 
+Local panes that are SSH clients are grouped by where the work runs.
+The write target stays the tmux pane on the machine that owns the
+session. A configured peer tmux snapshot stays read-only. Controlling
+that peer means attaching there and running Tower on it.
+
 This is the first and, for now, only allowed sliver of P5 "Action Layer":
 sending a user-typed, user-selected, explicitly-sent prompt into one
 pane the user picked -- everything else P5 originally described
