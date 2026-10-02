@@ -15,11 +15,13 @@ bumped until this merges.
   PC share that check.
 * **tmux structure** -- local Tower can create a window or pane, move a
   pane, break it into a new window, change one window's layout, and
-  rename or close by `window_id` / `pane_id`. `V` selects windows;
-  Enter opens Window Control and does not focus the window. `+` is the
-  create menu. Space is the action menu. `N` and `W` stay. An empty
-  list offers those creates instead of a tmux command. The phone still
-  only shows the tree and the current location.
+  rename or close by `window_id` / `pane_id`. Left/right is `split-window
+  -h` and up/down is `-v`. `V` selects windows; Enter opens Window
+  Control and does not focus the window. `+` is the create menu. Space
+  is the action menu. Closing a window shows each pane's project, agent,
+  and state, and cancel is the default. `N` and `W` stay. An empty list
+  offers those creates instead of a tmux command. The phone still only
+  shows the tree and the current location.
 * **Workspace tree** -- folder browse expands and collapses in place.
   A folder is read only when it is opened, parents stay on screen, and
   Enter does not create anything. Space chooses that directory and then

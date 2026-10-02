@@ -14,23 +14,43 @@ from ..tmux import structure
 from .widgets import prompt_text, run_list_picker, show_message_screen
 
 
-def window_close_summary(window_name: str, window_id: str, panes: List[dict]) -> List[str]:
-    """What the close screen shows before the user confirms."""
+_STATUS_MARK = {
+    "WORKING": "●",
+    "IDLE": "○",
+    "WAITING": "!",
+    "UNKNOWN": "?",
+    "DEAD": "✕",
+}
 
+
+def window_close_summary(window_name: str, window_id: str, panes: List[dict]) -> List[str]:
+    """What the close screen shows before the user confirms.
+
+    Each pane is project, agent, and state. The pane id stays on the line
+    so the target is the id, not the name.
+    """
+
+    name = window_name or "-"
     lines = [
-        f"{window_name or '-'}  {window_id}",
+        t("struct.close_window_ask").format(name=name),
+        f"{name}  {window_id}",
         t("struct.window_panes").format(n=len(panes)),
     ]
     for pane in panes:
         attention = pane.get("attention") or "none"
-        extra = ""
+        status = pane.get("status") or ""
+        mark = _STATUS_MARK.get(status, "○")
+        state = t(f"status.{status}") if status else "-"
         if attention == "approval_required":
-            extra = "  " + t("state.approval")
+            mark = "!"
+            state = t("state.approval")
         elif attention == "input_required":
-            extra = "  " + t("state.input")
-        lines.append(
-            f"{pane.get('pane_id') or '-'}  {pane.get('agent') or '-'}  {pane.get('status') or '-'}{extra}"
-        )
+            state = f"{state}  {t('state.input')}"
+        project = pane.get("project") or "-"
+        agent = pane.get("agent") or "-"
+        lines.append(f"{mark} {project} / {agent}  {state}  {pane.get('pane_id') or '-'}".rstrip())
+    if panes:
+        lines.append(t("struct.close_window_effect").format(n=len(panes)))
     return lines
 
 

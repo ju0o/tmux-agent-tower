@@ -151,6 +151,8 @@ STRINGS = {
     "struct.manage_panes": "Pane 관리",
     "struct.close_window": "Window 닫기",
     "struct.close_window_title": "이 Window를 닫을까요?",
+    "struct.close_window_ask": "Window \"{name}\"를 닫을까요?",
+    "struct.close_window_effect": "Pane {n}개와 실행 중인 작업이 종료됩니다.",
     "struct.close_window_yes": "Window 닫기",
     "struct.window_panes": "Pane {n}개",
     "struct.act_control": "제어",

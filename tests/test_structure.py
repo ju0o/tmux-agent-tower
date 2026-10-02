@@ -285,14 +285,17 @@ def test_close_window_confirmation_blocks_tower_and_lists_panes():
         "agents",
         "@4",
         [
-            {"pane_id": "%8", "agent": "Cursor", "status": "WORKING", "attention": "approval_required"},
-            {"pane_id": "%9", "agent": "Shell", "status": "IDLE", "attention": "input_required"},
+            {"pane_id": "%8", "project": "JuPortal", "agent": "Codex", "status": "WORKING", "attention": "none"},
+            {"pane_id": "%9", "project": "JuRadar", "agent": "Claude", "status": "IDLE", "attention": "none"},
+            {"pane_id": "%10", "project": "Agent-Relay", "agent": "OpenCode", "status": "IDLE", "attention": "approval_required"},
         ],
     )
     text = "\n".join(lines)
     assert "@4" in text and "agents" in text
-    assert "%8" in text and "Cursor" in text and "WORKING" in text
-    assert "%9" in text
+    assert "● JuPortal / Codex" in text and "%8" in text
+    assert "○ JuRadar / Claude" in text
+    assert "! Agent-Relay / OpenCode" in text
+    assert "승인 필요" in text or "approval" in text.lower()
 
 
 def test_close_window_leaves_other_windows(monkeypatch):

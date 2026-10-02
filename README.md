@@ -242,7 +242,9 @@ navigates; it never starts a new TUI.
 While Tower is open, `V` switches the list to the tmux tree. A session
 is a divider. A window is a row: Enter opens Window Control (add a pane,
 rename, layout, manage panes, close) and does not move the client.
-Enter on a pane still opens Pane Control. The project/agent list stays
+Enter on a pane still opens Pane Control. Space opens the same actions
+without a shortcut. Closing a window lists each pane's project, agent,
+and state, and cancel is the default. The project/agent list stays
 the default.
 
 `+` opens the create menu: a new task (project, agent, and whether it

@@ -153,6 +153,8 @@ STRINGS = {
     "struct.manage_panes": "Manage panes",
     "struct.close_window": "Close window",
     "struct.close_window_title": "Close this window?",
+    "struct.close_window_ask": "Close window \"{name}\"?",
+    "struct.close_window_effect": "This closes {n} panes and any work running in them.",
     "struct.close_window_yes": "Close window",
     "struct.window_panes": "{n} panes",
     "struct.act_control": "Control",
