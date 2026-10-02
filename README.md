@@ -36,11 +36,11 @@ NEW ! web-app                                        Codex          WAITING
 * **Local-first**: no server, no account, no cloud backend. It reads your
   own tmux server (and, optionally, a second host over your own SSH
   connection) and shows it to you.
-* **Read-only by default**: it never sends keystrokes into a monitored
-  pane, never kills or restarts a process, and never touches your actual
-  agent CLIs or their credentials. It only reads tmux state and moves
-  *your own* cursor between panes when you press Enter -- the same thing
-  `Ctrl+b` + arrow keys would do.
+* **No background typing**: watching a pane does not type into it.
+  A prompt, an approval key, a rename, or a close runs only after you
+  choose it, and it targets the tmux pane id on the tmux host. It does
+  not follow the host name used to group the row, and it does not touch
+  agent credentials.
 * **Best-effort status**, not a guarantee. Status is inferred from
   terminal output patterns and process activity, not each agent's
   internal API (most don't expose one). New versions of an agent's CLI can
@@ -277,6 +277,23 @@ and `N` sends the documented no key. Any other agent shows that the
 approval has to be done in the real pane. Tower does not guess `y` or
 Enter.
 
+### Hosts
+
+The tree groups panes by where the work runs. Each pane still has three hosts:
+
+* **Observer host** — the machine where this Tower process is running.
+  An SSH login used to reach that machine does not change it.
+* **Tmux host** — the machine whose tmux server owns the session and
+  pane id. Prompt, focus, rename, and close use that pane.
+* **Execution host** — where the shell or agent is working. An `ssh`
+  client inside a local pane is grouped under the destination and
+  labeled `via` the tmux host. If the remote directory is not known,
+  the project stays unnamed.
+
+A configured peer's own tmux is a separate read-only snapshot. The same
+pane id on two servers is not one pane. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ### `tower --doctor`
 
 Runs a quick environment check (tmux/Python/curses availability, whether
@@ -403,10 +420,12 @@ whether you've opened that pane from the Tower before, shown as a small
 
 ## Roadmap
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md). Sending input to agents,
-interrupting/restarting them, or auto-approving prompts are explicitly
-**not** implemented and not planned without a separate, deliberate design
-pass -- this tool only ever reads and lets you navigate.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md). Automatic relay, killing or
+restarting an agent, and auto-approving prompts are not in this version.
+On this branch you can send one prompt you typed into the pane you
+selected, and you can create, move, and close local windows and panes
+after you confirm. The phone shows the same rows and can send that same
+prompt. It does not create or close windows.
 
 ## License
 
