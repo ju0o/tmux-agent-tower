@@ -2,18 +2,18 @@
 
 ## Current
 - Branch: `feat/tower-remote`
-- HEAD: branch tip. Recovery and clipboard are `a764010` and `20d427a`.
-- Worktree: clean after this handoff commit
+- HEAD: tip of this branch. Result recovery is `a764010`. SSH clipboard is `20d427a`.
+- Worktree: clean
 - Tests: 640 passed, 1 skipped, 0 failed
 
 ## Last Task
-- Y said there was no result, then the copy could not reach the laptop clipboard.
-- The attached Tower process is still the public `main` checkout. That binary has no result copy. On this branch the second cause is real: the 2s refresh reads about 30 lines, and a finished answer can sit above that.
-- Y and S, only when the in-memory tracker is empty, read at most 800 lines and 256KB. They keep the newest finished turn. A WORKING pane is not given an older answer. The refresh stays at 30 lines.
-- One proven SSH client gets OSC 52 and the notice "현재 터미널 클립보드". Otherwise the notice is "이 컴퓨터의 클립보드" (`clip.exe` on MAINPC). If that fails, the tmux buffer is used and the notice does not say the clipboard succeeded.
-- Isolated tmux dogfood: empty tracker, answer pushed above the 30-line window, recovery succeeded. No text was typed into existing agent panes.
-- MAINPC `clip.exe` round trip succeeded. It replaced the MAINPC Windows clipboard with a probe string.
-- ASUS paste was not verified. Two tmux clients were attached. Neither process tree showed `sshd` or `SSH_CONNECTION`, so OSC 52 was not sent.
+- Y on an ASUS SSH session into MAINPC, then WSL, then `tmux attach`, said there was no result. After recovery, the copy still did not reach the laptop clipboard.
+- Root cause: the live Tower process is still public `main`, which has no result copy. On this branch the second cause is the 2s refresh, which reads 30 lines. A finished answer can sit above that window, so Y reports that there is no result.
+- Y and S, only when the in-memory tracker is empty, read at most 800 lines and 256KB and keep the newest finished turn. A WORKING pane is not given an older answer. Polling stays at 30 lines.
+- Clipboard: one proven SSH client gets OSC 52 and the notice "현재 터미널 클립보드". Any other case uses this computer's clipboard (`clip.exe` on MAINPC) and the notice "이 컴퓨터의 클립보드". If that fails, the tmux buffer is used and the notice does not claim the clipboard succeeded.
+- Isolated tmux dogfood PASS: empty tracker, answer above the 30-line window, recovery succeeded. No text was typed into existing agent panes.
+- MAINPC local copy PASS: `clip.exe` round trip. It replaced the MAINPC Windows clipboard with a probe string.
+- SSH client / ASUS copy FAIL: two tmux clients were attached. Neither process tree showed `sshd` or `SSH_CONNECTION`, so OSC 52 was not sent. ASUS paste was not verified.
 
 ## Changed
 - Result recovery: `control/actions.py`, Codex/Claude/Cursor/OpenCode extractors, ssh screen adapter, `ui/tower.py`
@@ -28,9 +28,10 @@
 
 ## Remaining
 - The live MAINPC session still runs public `main`. Y there does not use this branch until that Tower is restarted from `feat/tower-remote`.
-- With two attached clients, or without SSH evidence on the client process, OSC 52 is withheld. The copy goes to the MAINPC clipboard.
+- OSC 52 is sent only for exactly one attached client with SSH evidence. Two clients, or no `sshd` / `SSH_CONNECTION` evidence, keep the MAINPC clipboard.
 - OSC 52 was confirmed on an isolated pty. It was not confirmed by pasting on the ASUS laptop.
 - If a capture has no user prompt and no earlier completion marker, recovery keeps the prose near the completion line, not the whole scrollback.
+- A payload over 48KB does not use OSC 52.
 
 ## Next PM Decision
 - Restart the live MAINPC Tower from `feat/tower-remote`, or leave the public `main` process attached.
