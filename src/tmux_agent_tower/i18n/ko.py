@@ -238,6 +238,8 @@ STRINGS = {
     "control.key_result": "Y 복사",
     "control.key_show": "S 보기",
     "control.copied": "✓ 결과를 클립보드에 복사했습니다.",
+    "control.copied_terminal": "✓ 현재 터미널 클립보드에 복사했습니다.",
+    "control.copied_host": "✓ 이 컴퓨터의 클립보드에 복사했습니다.",
     "control.copied_buffer": "클립보드 도구를 사용할 수 없습니다. tmux buffer에 복사했습니다.",
     "control.copy_failed": "클립보드에 복사하지 못했습니다.",
     "control.key_edit": "E 편집",

@@ -9,7 +9,7 @@ from __future__ import annotations
 import curses
 import time
 
-from ..clipboard import copy_text
+from ..clipboard import copy_text, terminal_clipboard_client
 from ..control.actions import (
     close_choices,
     close_notice_lines,
@@ -307,10 +307,13 @@ def _copy_result(tower, pane_key: str) -> str:
     text = payload.get("text") or ""
     if not text:
         return t("control.no_result")
-    outcome = copy_text(text)
+    outcome = copy_text(text, client=terminal_clipboard_client())
+    if outcome.tool == "terminal" and outcome.clipboard:
+        _mark_shown(tower, pane_key, payload)
+        return t("control.copied_terminal")
     if outcome.clipboard:
         _mark_shown(tower, pane_key, payload)
-        return t("control.copied")
+        return t("control.copied_host")
     if outcome.buffer:
         return t("control.copied_buffer")
     return t("control.copy_failed")

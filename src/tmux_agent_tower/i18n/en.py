@@ -241,6 +241,8 @@ STRINGS = {
     "control.key_result": "Y Copy",
     "control.key_show": "S View",
     "control.copied": "✓ Copied the result to the clipboard.",
+    "control.copied_terminal": "✓ Copied to this terminal's clipboard.",
+    "control.copied_host": "✓ Copied to this computer's clipboard.",
     "control.copied_buffer": "No clipboard tool is available. Copied to the tmux buffer.",
     "control.copy_failed": "Could not copy the result.",
     "control.key_edit": "E Edit",
