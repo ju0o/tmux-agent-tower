@@ -1,0 +1,42 @@
+---
+description: GitHub is the PM handoff channel for this branch
+alwaysApply: true
+---
+
+# GitHub handoff
+
+Do not ask the user to copy a result to the PM. GitHub is the channel. Repo: `ju0o/tmux-agent-tower`. Branch: `feat/tower-remote`.
+
+When a task is finished:
+
+1. `git status --short --branch`
+2. Run the tests
+3. Review the diff
+4. One logical commit for the change
+5. `git push origin feat/tower-remote`
+6. Replace `docs/PM_HANDOFF.md` with the current state only
+7. Commit that file and push again
+8. Confirm the worktree is clean
+
+`docs/PM_HANDOFF.md` keeps only:
+
+- Current: branch, HEAD, worktree, tests
+- Last Task: problem, root cause, fix, real dogfood
+- Changed: main files, commit SHAs
+- Verified: automated, local, SSH/remote, phone
+- Remaining: not done, not verified
+- Next PM Decision: the next call only
+
+Do not append old reports. Do not write tokens, IPs, MagicDNS names, personal URLs, private transcripts, passwords, or sensitive data. Host labels such as MAINPC and ASUS are fine. Record PASS or FAIL, not result text.
+
+After the push, reply with only:
+
+```
+GITHUB HANDOFF READY
+Branch: <branch>
+HEAD: <SHA>
+Tests: <N passed, N skipped, 0 failed>
+PM handoff: docs/PM_HANDOFF.md
+```
+
+Then stop.
