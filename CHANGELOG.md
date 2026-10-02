@@ -39,11 +39,11 @@ bumped until this merges.
   confirmed. An empty Tower opens this from "새 작업 시작".
 * **Smart `Ctrl+b w`** -- the one binding stays installed. At key-press
   time `tower --has-active` exits 0 only when the registered pane is
-  alive in this session; otherwise the key runs the user's `w` command.
-  A live Tower binding is not that command. The fallback is the `w`
-  binding from the user's config with the Tower block removed, and only
-  then the command from a tmux server started with an empty config.
-  Start and quit do not rebind the key.
+  alive in this session; otherwise the key opens tmux's window/pane
+  chooser, the command an empty config reports. A custom `w` command,
+  including one that opens a separate control window, is saved for
+  `tower keys restore` and is not the runtime fallback. Start and quit
+  do not rebind the key.
 * **Launcher isolation** -- `N` always opens a new window, and `W` splits
   and applies layout only inside the one window that launch created.
   The host label is not the window name. Later commands use the window

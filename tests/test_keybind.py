@@ -21,23 +21,19 @@ def test_parse_default_w_command():
     assert keybind.parse_w_command(line) == "choose-tree -Zw"
 
 
-def test_custom_w_is_kept_and_tower_owned_is_not():
+def test_absent_tower_uses_the_chooser_and_keeps_a_custom_command_for_restore():
     custom = "bind-key -T prefix w run-shell -b '$HOME/bin/mine'"
     owned = 'bind-key -T prefix w run-shell -b "tower --focus"'
-    assert keybind.choose_fallback(custom, "choose-tree -Zw") == (
-        "run-shell -b '$HOME/bin/mine'",
-        "current",
-    )
-    assert keybind.choose_fallback(owned, "choose-tree -Zw") == (
-        "choose-tree -Zw",
-        "tmux-default",
-    )
+    assert keybind.runtime_fallback("choose-tree -Zw") == "choose-tree -Zw"
+    assert keybind.runtime_fallback("") == ""
+    assert keybind.preserved_command(custom) == "run-shell -b '$HOME/bin/mine'"
+    assert keybind.preserved_command(owned) == ""
 
 
-def test_saved_fallback_is_not_replaced_by_our_own_binding():
-    saved = "choose-tree -Zw"
+def test_reinstall_does_not_treat_the_tower_binding_as_the_users_command():
     line = "bind-key -T prefix w if-shell 'tower --has-active' 'run-shell -b \"tower --focus\"' 'choose-tree -Zw'"
-    assert keybind.choose_fallback(line, "something-else", saved) == (saved, "saved")
+    assert keybind.runtime_fallback("choose-tree -Zw") == "choose-tree -Zw"
+    assert keybind.preserved_command(line, saved_restore="display-menu mine") == "display-menu mine"
 
 
 def test_install_is_idempotent_and_preserves_the_rest_of_the_file(tmp_path):
@@ -72,6 +68,7 @@ def test_install_is_idempotent_and_preserves_the_rest_of_the_file(tmp_path):
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["fallback"] == "choose-tree -Zw"
     assert saved["source"] == "tmux-default"
+    assert saved["restore"] == "choose-tree -Zw"
 
 
 def test_install_refuses_to_guess_when_no_default_is_known(tmp_path):
@@ -106,14 +103,18 @@ def test_restore_removes_only_the_tower_block(tmp_path):
     assert applied == [["bind-key", "-T", "prefix", "w", "choose-tree", "-Zw"]]
 
 
-def test_custom_fallback_round_trips_through_restore(tmp_path):
+def test_custom_command_is_restore_only(tmp_path):
     conf = tmp_path / ".tmux.conf"
     state = tmp_path / "smart-w.json"
     custom = "bind-key -T prefix w display-message kept"
     keybind.install_smart_w(
         conf, state, list_keys_line=custom, tmux_default="choose-tree -Zw",
     )
-    assert "display-message kept" in conf.read_text(encoding="utf-8")
+    text = conf.read_text(encoding="utf-8")
+    assert "choose-tree -Zw" in text
+    assert "display-message kept" not in text
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["restore"] == "display-message kept"
     applied = []
     keybind.restore_smart_w(conf, state, apply=applied.append)
     assert applied == [["bind-key", "-T", "prefix", "w", "display-message", "kept"]]
@@ -217,17 +218,11 @@ def test_on_branch_focuses_and_off_branch_is_the_recorded_command():
     assert "choose-tree" not in " ".join(args)
 
 
-def test_configured_w_beats_a_saved_empty_server_default():
+def test_control_window_command_is_not_the_runtime_fallback():
     live = 'bind-key -T prefix w if-shell "tower --has-active" "run-shell -b \\"tower --focus\\"" "choose-tree -Zw"'
     configured = "bind-key -T prefix w run-shell -b '$HOME/bin/tmux-control-open'"
-    command, source = keybind.choose_fallback(
-        live,
-        "choose-tree -Zw",
-        saved="choose-tree -Zw",
-        saved_source="tmux-default",
-        config_line=configured,
-    )
-    assert (command, source) == ("run-shell -b '$HOME/bin/tmux-control-open'", "config")
+    assert keybind.runtime_fallback("choose-tree -Zw") == "choose-tree -Zw"
+    assert keybind.preserved_command(live, configured) == "run-shell -b '$HOME/bin/tmux-control-open'"
 
 
 def test_bare_command_is_not_treated_as_a_list_keys_line():
@@ -247,10 +242,14 @@ def test_install_for_user_keeps_the_live_custom_binding(monkeypatch, tmp_path):
     applied = []
     monkeypatch.setattr(keybind.capture, "run_tmux", lambda args, capture=True, timeout=3.0: applied.append(list(args)) or "")
 
-    assert keybind.install_for_user() == "display-menu mine"
-    assert "display-menu mine" in conf.read_text(encoding="utf-8")
-    assert "choose-tree" not in conf.read_text(encoding="utf-8")
-    assert applied[-1][-1] == "display-menu mine"
+    assert keybind.install_for_user() == "choose-tree -Zw"
+    text = conf.read_text(encoding="utf-8")
+    assert "choose-tree -Zw" in text
+    assert "display-menu mine" not in text
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["fallback"] == "choose-tree -Zw"
+    assert saved["restore"] == "display-menu mine"
+    assert applied[-1][-1] == "choose-tree -Zw"
 
 
 def test_configured_server_keeps_a_sourced_binding_and_ignores_the_tower_block(tmp_path):
@@ -295,6 +294,40 @@ def test_tower_exit_makes_has_active_fail_and_restart_points_at_the_new_pane(mon
     registration.register("0", "%40")
     assert registration.resolve_active_pane("0") == "%40"
     assert main.has_active_tower() == 0
+
+
+def test_old_state_keeps_the_control_command_for_restore_only(tmp_path):
+    conf = tmp_path / ".tmux.conf"
+    state = tmp_path / "smart-w.json"
+    custom = """run-shell -b "/home/user/bin/tmux-control-open '#{session_name}'" """
+    state.write_text(
+        json.dumps({"fallback": custom.strip(), "source": "config"}) + "\n",
+        encoding="utf-8",
+    )
+    conf.write_text(keybind.render_block(custom.strip()), encoding="utf-8")
+    applied = []
+    result = keybind.install_smart_w(
+        conf,
+        state,
+        list_keys_line=(
+            "bind-key -T prefix w if-shell 'tower --has-active' "
+            "'run-shell -b \"tower --focus\"' "
+            "'run-shell -b \"/home/user/bin/tmux-control-open\"'"
+        ),
+        tmux_default="choose-tree -Zw",
+        apply=applied.append,
+    )
+    text = conf.read_text(encoding="utf-8")
+    assert result == "choose-tree -Zw"
+    assert "choose-tree -Zw" in text
+    assert "tmux-control-open" not in text
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["fallback"] == "choose-tree -Zw"
+    assert "tmux-control-open" in saved["restore"]
+    keybind.restore_smart_w(conf, state, apply=applied.append)
+    restored = " ".join(applied[-1])
+    assert restored.startswith("bind-key -T prefix w run-shell")
+    assert "tmux-control-open" in restored
 
 
 def test_render_block_quotes_a_fallback_that_contains_quotes():

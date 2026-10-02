@@ -212,9 +212,11 @@ claude = "claude-beta"   # 에이전트 실행에 쓸 명령어를 직접 지정
 
 * 이 세션에 등록된 Tower pane이 살아 있으면 그 pane으로 이동합니다
   (`tower --focus`, pane id. 창 이름으로 찾지 않습니다).
-* 없거나 등록이 오래되었으면, 설치 시점에 기록한 사용자의 `w` 명령을
-  실행합니다. `source-file` 안의 기존 바인딩도 유지합니다. 빈 설정의
-  tmux가 실제로 보고할 때만 `choose-tree`를 씁니다.
+* 없거나 등록이 오래되었으면 tmux의 Window/Pane chooser를 엽니다. 그
+  명령은 빈 설정의 tmux가 실제로 보고하는 값입니다(보통 `choose-tree
+  -Zw`). 따로 있는 CONTROL 창 명령은 쓰지 않습니다.
+* 기존 custom `w`(`source-file` 포함)는 `tower keys restore`로 되돌리기
+  위해서만 저장합니다. 스마트 바인딩이 있는 동안에는 실행되지 않습니다.
 
 `tower keys restore`는 그 블록만 지우고 기록해 둔 `w`를 되돌립니다.
 

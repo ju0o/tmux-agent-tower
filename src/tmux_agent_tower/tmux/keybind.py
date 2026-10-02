@@ -4,16 +4,17 @@ The binding itself never changes when Tower starts or exits. One tmux
 command checks the session registration at key-press time:
 
 * a live registered Tower pane in this session -> ``tower --focus``
-* anything else -> the user's ``w`` command
+* anything else -> tmux's own window/pane chooser
 
-Public installs do not write this on their own. ``tower keys install``
-(or the in-TUI settings screen) is the only opt-in. That command reads
-``list-keys -T prefix`` first. A binding Tower itself already owns is
-not the user's command. The next place to look is the user's config
-with the Tower block removed (so a ``source-file`` that binds ``w`` is
-kept). Only when that still has no ``w`` command do we query a tmux
-server started with an empty config. The default is never a guessed
-string.
+A custom ``w`` command is stored and put back only by
+``tower keys restore``. It is not the command the key runs while this
+block is installed, including a helper that opens a separate control
+window.
+
+The chooser is whatever a tmux server started with an empty config
+reports. It is never a guessed string. The custom command is read from
+the live key, then from the user's config with the Tower block removed
+(so a ``source-file`` binding is kept), then from an older state file.
 
 ``~/.tmux.conf`` is not rewritten. Only the marked block is inserted,
 replaced, or removed, and the file is copied aside before the first
@@ -77,36 +78,28 @@ def is_tower_owned(command: str) -> bool:
     return any(marker in (command or "") for marker in _OWNED_MARKERS)
 
 
-def choose_fallback(
-    list_keys_line: str,
-    tmux_default: str,
-    saved: str = "",
-    saved_source: str = "",
-    config_line: str = "",
-) -> Tuple[str, str]:
-    """``(command, source)`` for the ``w`` action used when Tower is absent.
+def runtime_fallback(tmux_default: str) -> str:
+    """The ``w`` command used while Tower is not running.
 
-    A live user binding wins. When the live key is one Tower installed,
-    the command from the user's config (Tower block removed) wins over a
-    previously saved empty-server default. A saved user command is the
-    safety net when that config cannot be read. The empty-server command
-    is last, and only if it was actually queried.
+    Always the chooser reported by an empty tmux config. A custom
+    command, including one that opens another control window, is not
+    used here.
     """
 
-    live = parse_w_command(list_keys_line)
-    if live and not is_tower_owned(live):
-        return live, "current"
+    command = (tmux_default or "").strip()
+    if not command or is_tower_owned(command):
+        return ""
+    return command
 
-    configured = parse_w_command(config_line)
-    if configured and not is_tower_owned(configured):
-        return configured, "config"
 
-    if saved.strip() and not is_tower_owned(saved) and saved_source != "tmux-default":
-        return saved.strip(), "saved"
+def preserved_command(list_keys_line: str, config_line: str = "", saved_restore: str = "") -> str:
+    """The user's previous ``w`` command, kept for uninstall only."""
 
-    if not tmux_default.strip() or is_tower_owned(tmux_default):
-        return "", "missing"
-    return tmux_default.strip(), "tmux-default"
+    for raw in (parse_w_command(list_keys_line), parse_w_command(config_line), saved_restore):
+        command = (raw or "").strip()
+        if command and not is_tower_owned(command):
+            return command
+    return ""
 
 
 def tower_invocation() -> str:
@@ -129,8 +122,8 @@ def render_block(fallback: str, tower_cmd: str = "tower") -> str:
     focus = f'run-shell -b "{tower_cmd} --focus"'
     return "\n".join([
         BEGIN,
-        "# Ctrl+b w: registered Tower pane when one is alive, otherwise the",
-        "# w command recorded when this block was installed.",
+        "# Ctrl+b w: registered Tower pane when one is alive, otherwise",
+        "# tmux's window chooser. A previous custom w is restore-only.",
         "unbind-key -T prefix w",
         f"bind-key -T prefix w if-shell '{check}' '{focus}' {quoted}",
         END,
@@ -169,28 +162,40 @@ def block_installed(text: str) -> bool:
     return BEGIN in (text or "") and END in (text or "")
 
 
-def load_saved_record(path: Path) -> Tuple[str, str]:
-    """``(fallback command, source)``. Missing source is ``saved`` so an
-    older state file still protects a command the user already recorded.
+def load_saved_record(path: Path) -> Tuple[str, str, str]:
+    """``(runtime command, source, restore command)``.
+
+    Older files stored a custom command in ``fallback``. That value is
+    the restore command, not the key's runtime action.
     """
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return "", ""
+        return "", "", ""
     if not isinstance(data, dict):
-        return "", ""
+        return "", "", ""
     fallback = data.get("fallback")
     command = fallback.strip() if isinstance(fallback, str) else ""
     source = data.get("source")
     if not isinstance(source, str) or not source.strip():
         source = "saved" if command else ""
-    return command, source.strip()
+    source = source.strip()
+    restore = data.get("restore")
+    if isinstance(restore, str) and restore.strip() and not is_tower_owned(restore):
+        restore_command = restore.strip()
+    elif source not in ("", "tmux-default") and command and not is_tower_owned(command):
+        restore_command = command
+    else:
+        restore_command = ""
+    return command, source, restore_command
 
 
 def load_saved_fallback(path: Path) -> str:
-    command, _source = load_saved_record(path)
-    return command
+    """Command ``restore`` should bind. Prefers the saved custom command."""
+
+    command, _source, restore = load_saved_record(path)
+    return restore or command
 
 
 def binding_args(fallback: str, tower_cmd: str = "tower") -> list[str]:
@@ -232,12 +237,11 @@ def install_smart_w(
     touch the files in that case.
     """
 
-    saved, saved_source = load_saved_record(state_file)
-    fallback, source = choose_fallback(
-        list_keys_line, tmux_default, saved, saved_source, config_line
-    )
+    _saved, _saved_source, saved_restore = load_saved_record(state_file)
+    fallback = runtime_fallback(tmux_default)
     if not fallback:
         raise RuntimeError("no fallback")
+    restore = preserved_command(list_keys_line, config_line, saved_restore) or fallback
 
     previous = conf_path.read_text(encoding="utf-8") if conf_path.exists() else ""
     updated = upsert_block(previous, fallback, tower_cmd)
@@ -248,7 +252,11 @@ def install_smart_w(
 
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(
-        json.dumps({"fallback": fallback, "source": source}, indent=2) + "\n",
+        json.dumps(
+            {"fallback": fallback, "source": "tmux-default", "restore": restore},
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     if apply is not None:
