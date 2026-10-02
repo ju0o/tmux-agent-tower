@@ -61,22 +61,30 @@ class DirectoryCache:
     """
 
     limit: int = CACHE_LIMIT
-    _data: Dict[Tuple[str, str], DirectoryPage] = field(default_factory=dict)
-    _order: List[Tuple[str, str]] = field(default_factory=list)
+    _data: Dict[Tuple[str, str, str], DirectoryPage] = field(default_factory=dict)
+    _order: List[Tuple[str, str, str]] = field(default_factory=list)
 
-    def get(self, host: str, path: str) -> Optional[DirectoryPage]:
-        return self._data.get((host, path))
+    def get(self, host: str, path: str, variant: str = "") -> Optional[DirectoryPage]:
+        return self._data.get((host, path, variant))
 
-    def put(self, host: str, path: str, page: DirectoryPage) -> None:
+    def put(self, host: str, path: str, page: DirectoryPage, variant: str = "") -> None:
         if page.error is not None:
             return
-        key = (host, path)
+        key = (host, path, variant)
         if key in self._data:
             self._order.remove(key)
         self._order.append(key)
         self._data[key] = page
         while len(self._order) > self.limit:
             self._data.pop(self._order.pop(0), None)
+
+    def drop(self, host: str, path: str, variant: str = "") -> None:
+        """Forget one directory so the next expand reads it again."""
+
+        key = (host, path, variant)
+        self._data.pop(key, None)
+        if key in self._order:
+            self._order.remove(key)
 
 
 def directory_name(path: str) -> str:
@@ -155,8 +163,17 @@ def validate_local_path(raw: str) -> PathCheck:
     return PathCheck(True, entry=_entry_for(canon))
 
 
-def list_local_children(path: str) -> DirectoryPage:
-    """Direct child directories only. Does not walk grandchildren."""
+# Shown in the tree only when asked, and always collapsed until expanded.
+# Other dot directories stay hidden. A typed path can still open them.
+HEAVY_DIR_NAMES = {".git", ".venv", "node_modules", "venv", "__pycache__", "dist", "build", "target"}
+
+
+def list_local_children(path: str, *, include_heavy: bool = False) -> DirectoryPage:
+    """Direct child directories only. Does not walk grandchildren.
+
+    Uses ``os.scandir``. Heavy directories are omitted unless
+    ``include_heavy`` is set, and even then only that one row is returned.
+    """
 
     check = validate_local_path(path)
     if not check.ok or check.entry is None or check.error is not None:
@@ -164,18 +181,19 @@ def list_local_children(path: str) -> DirectoryPage:
         return DirectoryPage(path=error.path, error=error)
     directory = Path(check.entry.path)
     try:
-        names = sorted(directory.iterdir(), key=lambda item: item.name.lower())
+        with os.scandir(directory) as scanned:
+            names = sorted(scanned, key=lambda item: item.name.lower())
     except (PermissionError, OSError):
         return DirectoryPage(path=str(directory), is_git=check.entry.is_git, error=BrowseError("denied", str(directory)))
 
     children: List[ProjectEntry] = []
     for entry in names:
-        if entry.name.startswith(".") or entry.name in _SKIP:
+        if not _tree_visible(entry.name, include_heavy):
             continue
         try:
-            if not entry.is_dir():
+            if not entry.is_dir(follow_symlinks=True):
                 continue
-            resolved = entry.resolve()
+            resolved = Path(entry.path).resolve()
             if not resolved.is_dir():
                 continue
             if not os.access(resolved, os.R_OK | os.X_OK):
@@ -184,6 +202,14 @@ def list_local_children(path: str) -> DirectoryPage:
             continue
         children.append(_entry_for(resolved))
     return DirectoryPage(path=str(directory), is_git=check.entry.is_git, children=tuple(children))
+
+
+def _tree_visible(name: str, include_heavy: bool) -> bool:
+    if name in HEAVY_DIR_NAMES:
+        return include_heavy
+    if name.startswith(".") or name in _SKIP:
+        return False
+    return True
 
 
 def local_start_roots(
@@ -325,8 +351,14 @@ def script_is_read_only(script: str) -> bool:
     return not any(marker in cleaned for marker in forbidden)
 
 
-def remote_list_script(path: str) -> str:
+def remote_list_script(path: str, *, include_heavy: bool = False) -> str:
     target = shlex.quote(path)
+    if include_heavy:
+        find_line = 'find "$canon" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r child; do'
+        skip_line = '  case "$name" in .*) case "$name" in .git|.venv) ;; *) continue ;; esac ;; esac'
+    else:
+        find_line = 'find "$canon" -mindepth 1 -maxdepth 1 -type d ! -name ".*" 2>/dev/null | while IFS= read -r child; do'
+        skip_line = '  case "$name" in node_modules|.venv|venv|__pycache__|dist|build|target|.git) continue ;; esac'
     return "\n".join([
         "set -u",
         f"target={target}",
@@ -337,9 +369,9 @@ def remote_list_script(path: str) -> str:
         'printf "%s %s\\n" "__STATUS__" "ok"',
         'printf "%s %s\\n" "__PATH__" "$canon"',
         'if [ -e "$canon/.git" ]; then printf "%s\\n" "__GIT__ 1"; else printf "%s\\n" "__GIT__ 0"; fi',
-        'find "$canon" -mindepth 1 -maxdepth 1 -type d ! -name ".*" 2>/dev/null | while IFS= read -r child; do',
+        find_line,
         '  name=$(basename "$child")',
-        '  case "$name" in node_modules|.venv|venv|__pycache__|dist|build|target|.git) continue ;; esac',
+        skip_line,
         '  git=0',
         '  if [ -e "$child/.git" ]; then git=1; fi',
         '  printf "%s\\t%s\\t%s\\n" "$name" "$child" "$git"',
@@ -535,19 +567,21 @@ def list_remote_children(
     cache: Optional[DirectoryCache] = None,
     timeout: float = 6.0,
     runner: Optional[SshRunner] = None,
+    include_heavy: bool = False,
 ) -> DirectoryPage:
+    variant = "heavy" if include_heavy else ""
     if cache is not None:
-        cached = cache.get(host, path)
+        cached = cache.get(host, path, variant)
         if cached is not None:
             return cached
-    kind, stdout = _ssh_text(host, remote_list_script(path), timeout, runner)
+    kind, stdout = _ssh_text(host, remote_list_script(path, include_heavy=include_heavy), timeout, runner)
     if kind != "ok":
         return DirectoryPage(path=path, error=BrowseError("unreachable", path, host))
     page = _parse_list(path, host, stdout)
     if cache is not None and page.ok:
-        cache.put(host, path, page)
+        cache.put(host, path, page, variant)
         if page.path != path:
-            cache.put(host, page.path, page)
+            cache.put(host, page.path, page, variant)
     return page
 
 
@@ -559,18 +593,22 @@ def list_children(
     cache: Optional[DirectoryCache] = None,
     timeout: float = 6.0,
     runner: Optional[SshRunner] = None,
+    include_heavy: bool = False,
 ) -> DirectoryPage:
+    variant = "heavy" if include_heavy else ""
     if cache is not None:
-        cached = cache.get(host, path)
+        cached = cache.get(host, path, variant)
         if cached is not None:
             return cached
     if is_remote:
-        return list_remote_children(host, path, cache=cache, timeout=timeout, runner=runner)
-    page = list_local_children(path)
+        return list_remote_children(
+            host, path, cache=cache, timeout=timeout, runner=runner, include_heavy=include_heavy
+        )
+    page = list_local_children(path, include_heavy=include_heavy)
     if cache is not None and page.ok:
-        cache.put(host, path, page)
+        cache.put(host, path, page, variant)
         if page.path != path:
-            cache.put(host, page.path, page)
+            cache.put(host, page.path, page, variant)
     return page
 
 

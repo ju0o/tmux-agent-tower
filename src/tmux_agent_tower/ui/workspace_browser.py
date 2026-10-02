@@ -25,13 +25,13 @@ from ..launcher.browse import (
     kind_label,
     list_children,
     local_start_roots,
-    parent_path,
     remote_start_roots,
     validate_local_path,
     validate_remote_path,
 )
 from ..launcher.config import load_config
 from ..launcher.discovery import load_recent, record_recent
+from ..launcher.treeview import FolderTree, TreeBook, format_row, visible_window
 from ..launcher.spawn import SpawnTarget, launch_window_name, spawn_into_window, spawn_local, spawn_remote
 from ..state.bindings import ProjectBindingStore
 from ..tmux import structure
@@ -362,6 +362,12 @@ def _search(stdscr, host_key: str, host_label: str, is_remote: bool, roots: Sequ
         return entry
 
 
+@dataclass(frozen=True)
+class BrowseResult:
+    kind: str
+    entry: Optional[ProjectEntry] = None
+
+
 def _tree(
     stdscr,
     host_key: str,
@@ -369,8 +375,25 @@ def _tree(
     is_remote: bool,
     state_dir: Path,
     roots: Sequence[str],
-    cache: DirectoryCache,
-) -> Optional[ProjectEntry]:
+    book: TreeBook,
+    catalog_cache: dict,
+) -> BrowseResult:
+    remembered = book.recall(host_key)
+    if remembered is not None:
+        return _browse_tree(stdscr, host_key, host_label, is_remote, state_dir, roots, book, remembered, catalog_cache)
+    chosen = _pick_root(stdscr, host_key, host_label, is_remote, state_dir, roots)
+    if chosen is None:
+        return BrowseResult("back")
+    tree = FolderTree(host_key, chosen)
+    book.remember(host_key, tree)
+    opened = _load_node(stdscr, host_key, host_label, is_remote, tree, tree.root.path, book.cache_for(host_key), refresh=False)
+    if not opened:
+        book.trees.pop(host_key, None)
+        return BrowseResult("back")
+    return _browse_tree(stdscr, host_key, host_label, is_remote, state_dir, roots, book, tree, catalog_cache)
+
+
+def _pick_root(stdscr, host_key, host_label, is_remote, state_dir, roots) -> Optional[ProjectEntry]:
     if is_remote:
         _flash(stdscr, t("browser.loading"))
         start, error = remote_start_roots(host_key, load_recent(state_dir, host_key))
@@ -392,69 +415,71 @@ def _tree(
         extra_keys={"b": "manual"},
         footer=t("browser.list_hint"),
     )
-    if action == "cancelled":
+    if action == "cancelled" or (action != "manual" and chosen is None):
         return None
     if action == "manual":
         return _ask_path(stdscr, host_key, host_label, is_remote)
-    if chosen is None:
+    checked, error = _validate(host_key, is_remote, chosen.path)
+    if error is not None or checked is None:
+        _show_error(stdscr, error or BrowseError("not_found", chosen.path, host_key), host_label)
         return None
-    return _browse_directory(stdscr, host_key, host_label, is_remote, chosen.path, cache)
+    return checked
 
 
-def _browse_directory(
+def _load_node(stdscr, host_key, host_label, is_remote, tree: FolderTree, path: str, cache: DirectoryCache, *, refresh: bool) -> bool:
+    if refresh:
+        cache.drop(host_key, path, "heavy")
+    page = list_children(host_key, path, is_remote=is_remote, cache=None if refresh else cache, include_heavy=True)
+    if not page.ok:
+        _show_error(stdscr, page.error or BrowseError("unreachable", path, host_key), host_label)
+        return False
+    if refresh:
+        cache.put(host_key, page.path, page, "heavy")
+    tree.apply_children(path, page.children, preserve=refresh)
+    return True
+
+
+def _browse_tree(
     stdscr,
     host_key: str,
     host_label: str,
     is_remote: bool,
-    start: str,
-    cache: DirectoryCache,
-) -> Optional[ProjectEntry]:
-    path = start
-    query = ""
+    state_dir: Path,
+    roots: Sequence[str],
+    book: TreeBook,
+    tree: FolderTree,
+    catalog_cache: dict,
+) -> BrowseResult:
+    cache = book.cache_for(host_key)
     editing = False
-    selected = 0
     stdscr.timeout(-1)
     try:
         while True:
-            page = list_children(host_key, path, is_remote=is_remote, cache=cache)
-            if not page.ok:
-                _show_error(stdscr, page.error or BrowseError("unreachable", path, host_key), host_label)
-                parent = parent_path(path)
-                if parent == path or page.error and page.error.code == "unreachable":
-                    return None
-                path = parent
-                query = ""
-                selected = 0
-                continue
-            path = page.path
-            visible = filter_entries(page.children, query)
-            selected = max(0, min(selected, len(visible) - 1)) if visible else 0
+            rows = tree.visible_rows()
+            current = tree.clamp()
             stdscr.erase()
             height, width = stdscr.getmaxyx()
             safe_add(stdscr, 0, 2, t("browser.tree"), curses.A_BOLD)
             safe_add(stdscr, 2, 2, t("browser.host", host=host_label))
-            safe_add(stdscr, 3, 2, path)
+            safe_add(stdscr, 3, 2, t("browser.root_line", path=tree.root.path))
             row_y = 5
-            if editing or query:
+            if editing or tree.query:
                 cursor = "_" if editing else ""
-                safe_add(stdscr, row_y, 2, f'{t("wizard.search_label")} {query}{cursor}', curses.A_DIM)
+                safe_add(stdscr, row_y, 2, f'{t("wizard.search_label")} {tree.query}{cursor}', curses.A_DIM)
                 row_y += 2
-            row_h = 2 if use_narrow_layout(width) else 1
-            max_rows = max(1, (height - row_y - 4) // row_h)
-            top = 0 if selected < max_rows else selected - max_rows + 1
-            if not visible:
+            max_rows = max(1, height - row_y - 6)
+            window = visible_window(rows, tree.selected, max_rows)
+            top = 0 if tree.selected < max_rows else tree.selected - max_rows + 1
+            if not window:
                 safe_add(stdscr, row_y, 2, t("browser.empty_dir"), curses.A_DIM)
-            for offset, entry in enumerate(visible[top : top + max_rows]):
-                lines = format_entry_lines(entry.name, entry.path, entry.is_git, width)
-                attr = curses.A_REVERSE if top + offset == selected else 0
-                marker = "> " if top + offset == selected else "  "
-                prefix = "▸ "
-                for line_index, line in enumerate(lines[:row_h]):
-                    text = f"{marker}{prefix if line_index == 0 else '  '}{line}"
-                    safe_add(stdscr, row_y + offset * row_h + line_index, 0, text, attr)
-            current = visible[selected] if visible else None
-            detail = current.path if current else path
-            safe_add(stdscr, height - 3, 2, entry_detail(detail))
+            for offset, row in enumerate(window):
+                attr = curses.A_REVERSE if top + offset == tree.selected else 0
+                marker = "> " if top + offset == tree.selected else "  "
+                safe_add(stdscr, row_y + offset, 0, marker + format_row(row), attr)
+            node = current.node
+            safe_add(stdscr, height - 5, 2, t("browser.detail_name", name=node.name))
+            safe_add(stdscr, height - 4, 2, t("browser.detail_path", path=node.path))
+            safe_add(stdscr, height - 3, 2, t("browser.detail_kind", kind=kind_label(node.is_git)))
             safe_add(stdscr, height - 2, 2, t("browser.tree_hint"), curses.A_DIM)
             stdscr.refresh()
             key = read_key(stdscr)
@@ -464,70 +489,91 @@ def _browse_directory(
                     editing = False
                     continue
                 if is_backspace(key):
-                    query = query[:-1]
-                    selected = 0
+                    tree.query = tree.query[:-1]
+                    tree.selected = 0
                     continue
                 if isinstance(key, str) and key.isprintable():
-                    query += key
-                    selected = 0
+                    tree.query += key
+                    tree.selected = 0
                 continue
-            if is_escape(key) or is_backspace(key):
-                parent = parent_path(path)
-                if parent == path:
-                    return None
-                path = parent
-                query = ""
-                selected = 0
-                continue
+            if is_escape(key):
+                return BrowseResult("back")
             if key == curses.KEY_UP:
-                selected -= 1
+                tree.move(-1)
                 continue
             if key == curses.KEY_DOWN:
-                selected += 1
+                tree.move(1)
+                continue
+            if key == curses.KEY_LEFT:
+                tree.collapse_action()
+                continue
+            if key == curses.KEY_RIGHT or is_enter(key):
+                action = tree.expand_action()
+                if action == "fetch":
+                    _load_node(stdscr, host_key, host_label, is_remote, tree, tree.selected_node().path, cache, refresh=False)
                 continue
             if key == "/":
                 editing = True
                 continue
+            if matches_letter(key, "r"):
+                _load_node(stdscr, host_key, host_label, is_remote, tree, tree.refresh_path(), cache, refresh=True)
+                continue
             if matches_letter(key, "b"):
                 manual = _ask_path(stdscr, host_key, host_label, is_remote)
                 if manual is not None:
-                    return manual
+                    return BrowseResult("entry", manual)
+                continue
+            if matches_letter(key, "f"):
+                found = _search(stdscr, host_key, host_label, is_remote, roots, catalog_cache)
+                if found is not None:
+                    return BrowseResult("entry", found)
+                continue
+            if matches_letter(key, "h"):
+                return BrowseResult("host")
+            if matches_letter(key, "l"):
+                chosen = _pick_root(stdscr, host_key, host_label, is_remote, state_dir, roots)
+                if chosen is None:
+                    continue
+                tree = FolderTree(host_key, chosen)
+                book.remember(host_key, tree)
+                _load_node(stdscr, host_key, host_label, is_remote, tree, tree.root.path, cache, refresh=False)
                 continue
             if key == " ":
-                return ProjectEntry(directory_name(path), path, page.is_git)
-            if is_enter(key) and current is not None:
-                path = current.path
-                query = ""
-                selected = 0
+                return BrowseResult("entry", tree.as_entry())
     finally:
         stdscr.timeout(200)
 
 
-def pick_workspaces(stdscr, tower, state_dir: Path, *, multi: bool) -> Optional[List[WorkspacePick]]:
-    """Host first, then recent / search / tree / direct path on that host."""
+def pick_workspaces(stdscr, tower, state_dir: Path, *, multi: bool, open_tree: bool = False) -> Optional[List[WorkspacePick]]:
+    """Host first. A new task opens the tree; other creates can still use the menu."""
 
+    book = TreeBook()
     while True:
         host = _pick_host(stdscr, tower)
         if host is None:
             return None
         host_key, host_label, is_remote = host
-        picked = _browser_home(stdscr, tower, state_dir, host_key, host_label, is_remote, multi)
+        if open_tree and not multi:
+            result = _tree(stdscr, host_key, host_label, is_remote, state_dir, load_config()["project_roots"], book, {})
+            if result.kind == "entry" and result.entry is not None:
+                return [WorkspacePick(host_key, host_label, is_remote, result.entry)]
+            continue
+        picked = _browser_home(stdscr, tower, state_dir, host_key, host_label, is_remote, multi, book)
         if picked is None:
             continue
         return picked
 
 
-def _browser_home(stdscr, tower, state_dir, host_key, host_label, is_remote, multi) -> Optional[List[WorkspacePick]]:
+def _browser_home(stdscr, tower, state_dir, host_key, host_label, is_remote, multi, book: TreeBook) -> Optional[List[WorkspacePick]]:
     cfg = load_config()
     roots = cfg["project_roots"]
     basket: List[ProjectEntry] = []
-    cache = DirectoryCache()
     catalog_cache: dict = {}
     while True:
         items = [
+            ("tree", t("browser.tree")),
             ("recent", t("browser.recent")),
             ("search", t("browser.search")),
-            ("tree", t("browser.tree")),
             ("path", t("browser.manual")),
         ]
         if multi and basket:
@@ -575,7 +621,10 @@ def _browser_home(stdscr, tower, state_dir, host_key, host_label, is_remote, mul
         elif pick.selected_key == "search":
             entry = _search(stdscr, host_key, host_label, is_remote, roots, catalog_cache)
         elif pick.selected_key == "tree":
-            entry = _tree(stdscr, host_key, host_label, is_remote, state_dir, roots, cache)
+            result = _tree(stdscr, host_key, host_label, is_remote, state_dir, roots, book, catalog_cache)
+            if result.kind == "host":
+                return None
+            entry = result.entry
         elif pick.selected_key == "path":
             entry = _ask_path(stdscr, host_key, host_label, is_remote)
         if entry is None:
@@ -659,10 +708,11 @@ def run_workspace_create(
     *,
     multi: bool,
     bound_window: str = "",
+    open_tree: bool = False,
 ) -> None:
     """HOST → PATH → AGENT → PLACEMENT → layout → create."""
 
-    picks = pick_workspaces(stdscr, tower, state_dir, multi=multi)
+    picks = pick_workspaces(stdscr, tower, state_dir, multi=multi, open_tree=open_tree)
     if not picks:
         return
     preamble = _path_preamble(picks)

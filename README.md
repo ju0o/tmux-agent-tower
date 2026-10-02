@@ -184,7 +184,9 @@ made here.
 Asks where to work, then opens that host's workspace browser: recent
 paths, a search under the configured roots, a folder tree, or a path you
 type. Every row shows the full path. A plain folder is allowed, not only
-a git repo. The tree reads the directory you open and nothing under it.
+a git repo. The folder view is a tree: opening a row reads that directory only,
+and the folders above it stay on screen. Enter expands. Space chooses
+the workspace.
 Next you pick an agent, where it should live (a new window, a pane in
 the current window, or an existing window), and a layout, then create.
 `N` is one workspace. `W` adds more than one on the same host. A remote

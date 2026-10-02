@@ -180,7 +180,7 @@ def start_task(stdscr, tower) -> None:
     from .tower import STATE_DIR
     from .workspace_browser import run_workspace_create
 
-    run_workspace_create(stdscr, tower, STATE_DIR, multi=False)
+    run_workspace_create(stdscr, tower, STATE_DIR, multi=False, open_tree=True)
 
 
 def create_blank_window(stdscr, tower) -> None:

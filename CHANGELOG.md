@@ -20,6 +20,15 @@ bumped until this merges.
   create menu. Space is the action menu. `N` and `W` stay. An empty
   list offers those creates instead of a tmux command. The phone still
   only shows the tree and the current location.
+* **Workspace tree** -- folder browse expands and collapses in place.
+  A folder is read only when it is opened, parents stay on screen, and
+  Enter does not create anything. Space chooses that directory and then
+  uses the same agent, placement, and layout flow. `/` filters the
+  folders already loaded. `F` is the bounded project search. `R`
+  rereads one directory. MAINPC and ASUS keep separate trees. Heavy
+  directories such as `node_modules` stay collapsed until opened, and a
+  typed path can still open a hidden one. An empty Tower starts in this
+  tree after the host.
 * **Workspace browser** -- a new task, pane, window, or workspace starts
   by choosing the host, then a path on that host: recent, search, a
   folder tree, or a path you type. Rows show the real path. A normal
