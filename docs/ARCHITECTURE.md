@@ -8,11 +8,11 @@ src/tmux_agent_tower/
 │                   id-targeted structure changes (local TUI only)
 ├── state/          NEW/SEEN visit tracking, custom title overrides
 ├── remote/         minimal SSH-based multi-host prototype (read-only)
-├── launcher/       Workspace Launcher: config, project discovery, spawn
-│                   (creates NEW panes only -- see docs/ROADMAP.md)
+├── launcher/       config, discovery, read-only browse, spawn
+│                   (browse never creates a pane -- see docs/ROADMAP.md)
 ├── i18n/           translator layer (ko/en catalogs); UI text only, never
 │                   business logic
-├── ui/             the curses TUI + Workspace Launcher wizard screens
+├── ui/             the curses TUI, workspace browser, and structure menus
 ├── notify.py       opt-in, off-by-default status-transition notifications
 │                   (notify-send, falling back to tmux display-message)
 └── main.py         `tower` CLI entry point
@@ -22,8 +22,10 @@ src/tmux_agent_tower/
 only ever reads (P3), while `launcher/spawn.py` writes -- it creates new
 windows/panes, locally via direct `tmux` calls and remotely via a
 generated shell script run once over SSH (see its module docstring for the
-exact rules it enforces). Keeping that as its own package makes the
-read-only vs. write-capable boundary obvious at the directory level.
+exact rules it enforces). `launcher/browse.py` stays on the read side for
+both machines: one directory per listing, no tmux until create is
+confirmed. Keeping that as its own package makes the read-only vs.
+write-capable boundary obvious at the directory level.
 
 ## Data flow, one refresh cycle
 

@@ -181,12 +181,17 @@ made here.
 
 ### Workspace Launcher (`N` / `W`)
 
-Picks a host, one or more projects (auto-discovered from your configured
-project roots, searchable, or a manual path), and an agent per project,
-shows a preview you can adjust (per-project agent override, layout), and
-then creates **brand-new** tmux panes for them -- `cd`'d into the project,
-running the chosen agent, titled automatically, and immediately visible in
-the Tower.
+Asks where to work, then opens that host's workspace browser: recent
+paths, a search under the configured roots, a folder tree, or a path you
+type. Every row shows the full path. A plain folder is allowed, not only
+a git repo. The tree reads the directory you open and nothing under it.
+Next you pick an agent, where it should live (a new window, a pane in
+the current window, or an existing window), and a layout, then create.
+`N` is one workspace. `W` adds more than one on the same host. A remote
+host uses the same screens. Listing, path checks, and search are
+read-only SSH, one directory at a time, and they do not install Tower
+there. tmux runs only after you confirm. The new panes are `cd`'d into
+the path you chose, run the agent you chose, and show up in Tower.
 
 This is explicitly *not* the same thing as controlling an already-running
 agent: the launcher only ever creates new panes and never sends input to,
@@ -282,10 +287,13 @@ asus:ASUS
 The Tower will then show that host's panes too (title/command-based
 status only -- see limitations below), refreshed less frequently than the
 local host, and marked `UNKNOWN`/offline gracefully if it's unreachable.
-Nothing is installed on the remote host. The Workspace Launcher (`N`/`W`)
-can also target this host: it runs one bounded, read-only `find` over SSH
-to discover git repositories there too, with the same manual-path (`B`)
-fallback if that turns up nothing.
+Nothing is installed on the remote host. The workspace browser (`N` /
+`W`, and 새 작업) can open that host the same way as this machine.
+Directory listings, path checks, and project search are read-only SSH.
+One directory is fetched at a time and cached. If the host does not
+answer, Tower says it cannot connect and the local session keeps
+working. Search stays inside the usual project directories, with a
+depth and result cap.
 
 ### From your phone (experimental, this branch only)
 

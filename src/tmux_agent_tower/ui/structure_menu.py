@@ -7,16 +7,10 @@ labels. Destructive actions ask first, and cancel is the default.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import List, Optional
 
 from ..i18n import t
-from ..launcher.config import AGENT_LAUNCH_ORDER, load_config
-from ..launcher.discovery import find_git_projects
-from ..launcher.spawn import SpawnTarget, spawn_into_window, spawn_local
-from ..state.bindings import ProjectBindingStore
 from ..tmux import structure
-from .launcher_wizard import _pick_agent, _pick_projects
 from .widgets import prompt_text, run_list_picker, show_message_screen
 
 
@@ -44,9 +38,9 @@ def run_zero_action(stdscr, tower, action: str) -> None:
     if action == "task":
         start_task(stdscr, tower)
     elif action == "window":
-        create_empty_window(stdscr, tower)
+        create_blank_window(stdscr, tower)
     elif action == "pane":
-        add_pane(stdscr, tower, structure.current_window_id(tower.session))
+        create_blank_pane(stdscr, tower)
     elif action == "workspace":
         from .tower import STATE_DIR
         from .launcher_wizard import run_launcher
@@ -181,62 +175,42 @@ def open_pane_menu(stdscr, tower, row: dict) -> str:
 
 
 def start_task(stdscr, tower) -> None:
-    """One project and one agent, then where the new pane should live."""
+    """Host, workspace path, agent, then where the new pane should live."""
 
-    cfg = load_config()
-    roots = cfg["project_roots"]
-    discovered = find_git_projects(roots) if roots else []
-    projects = _pick_projects(
-        stdscr,
-        False,
-        _state_dir(),
-        tower.local_host,
-        discovered,
-        lambda path: Path(path).expanduser().is_dir(),
-        t("wizard.no_projects_found") if not discovered else None,
-    )
-    if not projects:
+    from .tower import STATE_DIR
+    from .workspace_browser import run_workspace_create
+
+    run_workspace_create(stdscr, tower, STATE_DIR, multi=False)
+
+
+def create_blank_window(stdscr, tower) -> None:
+    """Empty window. No workspace and no agent."""
+
+    name = prompt_text(stdscr, t("struct.name_prompt"), context_lines=[t("struct.name_optional")])
+    if name is None:
         return
-    agent = _pick_agent(stdscr)
-    if not agent:
+    created = structure.create_window(tower.session, name=name)
+    if not created.ok:
+        show_message_screen(stdscr, t("struct.failed"), [created.detail])
         return
-    place = run_list_picker(
-        stdscr,
-        t("struct.placement"),
-        [
-            ("new", t("struct.place_window")),
-            ("current", t("struct.place_current")),
-            ("pick", t("struct.place_pick")),
-            ("cancel", t("menu.cancel")),
-        ],
-        footer_hint=t("wizard.hint_list"),
-    )
-    if place.cancelled or place.selected_key in (None, "cancel"):
-        return
-    project = projects[0]
-    target = SpawnTarget(project.path, project.name, agent)
-    bindings = ProjectBindingStore(_state_dir() / "project-bindings.json")
-    if place.selected_key == "new":
-        spawn_local(
-            tower.session,
-            [target],
-            cfg["agents"],
-            bindings=bindings,
-            overrides=tower.overrides,
-        )
-        return
-    window_id = structure.current_window_id(tower.session) if place.selected_key == "current" else _pick_window(stdscr, tower)
-    if not window_id:
+    show_message_screen(stdscr, t("struct.created"), [f"{created.window_id}  {created.pane_id}"])
+
+
+def create_blank_pane(stdscr, tower) -> None:
+    """Empty pane in the current window."""
+
+    window_id = structure.current_window_id(tower.session)
+    if not structure.valid_window_id(window_id):
         show_message_screen(stdscr, t("struct.failed"), [t("nav.stale")])
         return
-    spawn_into_window(
-        tower.session,
-        window_id,
-        target,
-        cfg["agents"],
-        bindings=bindings,
-        overrides=tower.overrides,
-    )
+    direction = _pick_split(stdscr, window_id)
+    if not direction:
+        return
+    created = structure.create_pane(window_id, direction=direction)
+    if not created.ok:
+        show_message_screen(stdscr, t("struct.failed"), [created.detail])
+        return
+    show_message_screen(stdscr, t("struct.created"), [f"{created.window_id}  {created.pane_id}"])
 
 
 def create_empty_window(stdscr, tower) -> None:
@@ -255,59 +229,68 @@ def create_empty_window(stdscr, tower) -> None:
     )
     if how.cancelled or how.selected_key in (None, "cancel"):
         return
-    cwd = ""
-    agent = ""
-    project_name = ""
-    project_path = ""
-    if how.selected_key == "project":
-        cfg = load_config()
-        roots = cfg["project_roots"]
-        discovered = find_git_projects(roots) if roots else []
-        projects = _pick_projects(
-            stdscr,
-            False,
-            _state_dir(),
-            tower.local_host,
-            discovered,
-            lambda path: Path(path).expanduser().is_dir(),
-            None,
-        )
-        if not projects:
+    if how.selected_key == "shell":
+        created = structure.create_window(tower.session, name=name)
+        if not created.ok:
+            show_message_screen(stdscr, t("struct.failed"), [created.detail])
             return
-        project_path = projects[0].path
-        project_name = projects[0].name
-        cwd = project_path
-        agent_pick = run_list_picker(
-            stdscr,
-            t("wizard.pick_agent"),
-            [("shell", t("struct.empty_shell"))] + [(label, label) for label in AGENT_LAUNCH_ORDER] + [("cancel", t("menu.cancel"))],
-            footer_hint=t("wizard.hint_list"),
+        show_message_screen(stdscr, t("struct.created"), [f"{created.window_id}  {created.pane_id}"])
+        return
+
+    from ..launcher.config import load_config, resolve_agent_command
+    from ..launcher.discovery import record_recent
+    from ..launcher.spawn import SpawnTarget, _finish_new_pane
+    from ..state.bindings import ProjectBindingStore
+    from .tower import STATE_DIR
+    from .workspace_browser import WINDOW_LAYOUT, _path_preamble, _pick_agent, _pick_layout, launch_workspaces, pick_workspaces
+
+    picks = pick_workspaces(stdscr, tower, STATE_DIR, multi=False)
+    if not picks:
+        return
+    preamble = _path_preamble(picks)
+    agent = _pick_agent(stdscr, preamble)
+    if not agent:
+        return
+    laid = _pick_layout(stdscr, preamble + [agent])
+    if laid is None:
+        return
+    layout_choice, _label = laid
+    if picks[0].is_remote:
+        results = launch_workspaces(
+            session=tower.session,
+            state_dir=STATE_DIR,
+            picks=picks,
+            agent=agent,
+            placement="new",
+            layout_choice=layout_choice,
+            overrides=tower.overrides,
         )
-        if agent_pick.cancelled or agent_pick.selected_key in (None, "cancel"):
-            return
-        if agent_pick.selected_key != "shell":
-            agent = agent_pick.selected_key
-    created = structure.create_window(tower.session, name=name, cwd=cwd)
+        show_message_screen(
+            stdscr,
+            t("struct.created") if results and results[0].ok else t("struct.failed"),
+            [results[0].detail] if results else [],
+        )
+        return
+
+    entry = picks[0].entry
+    created = structure.create_window(tower.session, name=name, cwd=entry.path)
     if not created.ok:
         show_message_screen(stdscr, t("struct.failed"), [created.detail])
         return
-    if agent and project_path:
-        cfg = load_config()
-        target = SpawnTarget(project_path, project_name, agent)
-        from ..launcher.spawn import _finish_new_pane
-        from ..launcher.config import resolve_agent_command
-
-        command = resolve_agent_command(agent, cfg["agents"])
-        _finish_new_pane(
-            tower.session,
-            target,
-            command,
-            created.pane_id,
-            cfg["agents"],
-            ProjectBindingStore(_state_dir() / "project-bindings.json"),
-            tower.overrides,
-        )
-    show_message_screen(stdscr, t("struct.created"), [f"{created.window_id}  {created.pane_id}"])
+    cfg = load_config()
+    command = resolve_agent_command(agent, cfg["agents"])
+    _finish_new_pane(
+        tower.session,
+        SpawnTarget(entry.path, entry.name, agent),
+        command,
+        created.pane_id,
+        cfg["agents"],
+        ProjectBindingStore(STATE_DIR / "project-bindings.json"),
+        tower.overrides,
+    )
+    structure.apply_layout(tower.session, created.window_id, WINDOW_LAYOUT.get(layout_choice, "tiled"))
+    record_recent(STATE_DIR, picks[0].host_key, entry.path)
+    show_message_screen(stdscr, t("struct.created"), [f"{created.window_id}  {created.pane_id}", entry.path, agent])
 
 
 def add_pane(stdscr, tower, window_id: str) -> None:
@@ -316,6 +299,36 @@ def add_pane(stdscr, tower, window_id: str) -> None:
     if not structure.valid_window_id(window_id):
         show_message_screen(stdscr, t("struct.failed"), [t("nav.stale")])
         return
+    how = run_list_picker(
+        stdscr,
+        t("struct.create_pane"),
+        [
+            ("shell", t("struct.empty_shell")),
+            ("project", t("struct.with_project")),
+            ("cancel", t("menu.cancel")),
+        ],
+        footer_hint=t("wizard.hint_list"),
+        preamble=[window_id],
+    )
+    if how.cancelled or how.selected_key in (None, "cancel"):
+        return
+    if how.selected_key == "shell":
+        direction = _pick_split(stdscr, window_id)
+        if not direction:
+            return
+        created = structure.create_pane(window_id, direction=direction)
+        if not created.ok:
+            show_message_screen(stdscr, t("struct.failed"), [created.detail])
+            return
+        show_message_screen(stdscr, t("struct.created"), [f"{created.window_id}  {created.pane_id}"])
+        return
+    from .tower import STATE_DIR
+    from .workspace_browser import run_workspace_create
+
+    run_workspace_create(stdscr, tower, STATE_DIR, multi=False, bound_window=window_id)
+
+
+def _pick_split(stdscr, window_id: str) -> str:
     direction = run_list_picker(
         stdscr,
         t("struct.split"),
@@ -329,57 +342,8 @@ def add_pane(stdscr, tower, window_id: str) -> None:
         preamble=[window_id],
     )
     if direction.cancelled or direction.selected_key in (None, "cancel"):
-        return
-    how = run_list_picker(
-        stdscr,
-        t("struct.create_pane"),
-        [
-            ("shell", t("struct.empty_shell")),
-            ("project", t("struct.with_project")),
-            ("cancel", t("menu.cancel")),
-        ],
-        footer_hint=t("wizard.hint_list"),
-    )
-    if how.cancelled or how.selected_key in (None, "cancel"):
-        return
-    if how.selected_key == "shell":
-        created = structure.create_pane(window_id, direction=direction.selected_key)
-        if not created.ok:
-            show_message_screen(stdscr, t("struct.failed"), [created.detail])
-            return
-        show_message_screen(stdscr, t("struct.created"), [f"{created.window_id}  {created.pane_id}"])
-        return
-    cfg = load_config()
-    roots = cfg["project_roots"]
-    discovered = find_git_projects(roots) if roots else []
-    projects = _pick_projects(
-        stdscr,
-        False,
-        _state_dir(),
-        tower.local_host,
-        discovered,
-        lambda path: Path(path).expanduser().is_dir(),
-        None,
-    )
-    if not projects:
-        return
-    agent = _pick_agent(stdscr)
-    if not agent:
-        return
-    result = spawn_into_window(
-        tower.session,
-        window_id,
-        SpawnTarget(projects[0].path, projects[0].name, agent),
-        cfg["agents"],
-        bindings=ProjectBindingStore(_state_dir() / "project-bindings.json"),
-        overrides=tower.overrides,
-        direction=direction.selected_key,
-    )
-    show_message_screen(
-        stdscr,
-        t("struct.created") if result.ok else t("struct.failed"),
-        [result.detail],
-    )
+        return ""
+    return direction.selected_key or ""
 
 
 def choose_layout(stdscr, tower, window_id: str) -> None:

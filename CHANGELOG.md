@@ -20,6 +20,14 @@ bumped until this merges.
   create menu. Space is the action menu. `N` and `W` stay. An empty
   list offers those creates instead of a tmux command. The phone still
   only shows the tree and the current location.
+* **Workspace browser** -- a new task, pane, window, or workspace starts
+  by choosing the host, then a path on that host: recent, search, a
+  folder tree, or a path you type. Rows show the real path. A normal
+  folder can be a workspace. Recent paths for MAINPC and ASUS stay
+  apart. The tree reads one directory at a time. On ASUS that read is
+  SSH, cached, and read-only; a timeout says the host cannot be reached
+  and local Tower keeps running. tmux runs only after create is
+  confirmed. An empty Tower opens this from "새 작업 시작".
 * **Launcher isolation** -- `N` always opens a new window, and `W` splits
   and applies layout only inside the one window that launch created.
   The host label is not the window name. Later commands use the window
