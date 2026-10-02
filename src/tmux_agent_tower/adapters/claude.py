@@ -198,12 +198,6 @@ class ClaudeAdapter(AgentAdapter):
 
     def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
         lines = list(ctx.lines)
-        full = "\n".join(lines)
-        if _ACTIVE_VERB_RE.search(full) or _spinner_title(ctx):
-            return None
-        # The box may hold a ghost suggestion (e.g. "❯ pong 7") that a plain
-        # capture cannot tell from typed text; the idle footer still proves
-        # the turn is over.
         tail = ctx.tail(20)
         if not (_EMPTY_PROMPT_RE.search(tail) or _IDLE_FOOTER_RE.search(tail)):
             return None
@@ -211,13 +205,20 @@ class ClaudeAdapter(AgentAdapter):
         if not cooked:
             return None
         end = cooked[-1]
+        if _ACTIVE_VERB_RE.search("\n".join(lines[end:])) or _spinner_title(ctx):
+            return None
+        floor = cooked[-2] + 1 if len(cooked) > 1 else 0
         # Only the last turn: everything after the user's own ❯ line that
-        # precedes the done summary. Older turns stay in scrollback.
-        start = 0
-        for i in range(end - 1, -1, -1):
+        # precedes the done summary. Older turns stay above the previous marker.
+        start = floor
+        found_user = False
+        for i in range(end - 1, floor - 1, -1):
             if _USER_LINE_RE.match(lines[i]):
                 start = i + 1
+                found_user = True
                 break
+        if not found_user and len(cooked) < 2:
+            start = max(start, end - 60)
         text = prose_body(lines[start:end])
         if text is None:
             return None

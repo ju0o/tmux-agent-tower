@@ -69,17 +69,18 @@ class ResultTracker:
             return ResultSnapshot(RESULT_READY, rec.text, rec.fingerprint, rec.generated_at)
 
         if rec.suppressed:
+            # Same body after a turn: do not badge it as new, but keep
+            # the text so Y can still copy what is on screen.
             rec.suppressed = False
             if rec.state != RESULT_READ:
                 rec.state = RESULT_NONE
-                rec.text = ""
             return ResultSnapshot(rec.state, rec.text, rec.fingerprint, rec.generated_at)
 
         return ResultSnapshot(rec.state, rec.text, rec.fingerprint, rec.generated_at)
 
     def snapshot(self, pane_key: str) -> ResultSnapshot:
         rec = self._recs.get(pane_key)
-        if rec is None or rec.suppressed or rec.state == RESULT_NONE:
+        if rec is None or rec.suppressed or not rec.text:
             fingerprint = rec.fingerprint if rec else ""
             generated = rec.generated_at if rec else 0.0
             return ResultSnapshot(RESULT_NONE, "", fingerprint, generated)

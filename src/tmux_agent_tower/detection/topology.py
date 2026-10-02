@@ -98,6 +98,24 @@ def classify_transport(
     }
 
 
+def adapter_for_screen(process_adapter, agent: str, source: str):
+    """Result and status read the terminal, not the local ssh binary.
+
+    A pane whose process is ssh still shows Codex or Claude on screen.
+    Copying a result has to use that visible agent. A name with no
+    adapter keeps the process adapter.
+    """
+
+    if source != "ui-via-ssh":
+        return process_adapter
+    from ..adapters import adapter_named
+
+    named = adapter_named(agent)
+    if named.name == "Shell" and agent != "Shell":
+        return process_adapter
+    return named
+
+
 def agent_through_ssh(agent: str, source: str, title: str, lines) -> tuple:
     """A local ssh process is not the agent. The terminal UI can be.
 

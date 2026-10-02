@@ -208,21 +208,29 @@ class CodexAdapter(AgentAdapter):
         # "Finished" alone, or the same words inside a user prompt, is
         # not that evidence. A Working line means this screen is not final.
         lines = list(ctx.lines)
-        full = "\n".join(lines)
-        if _WORKING_RE.search(full) or title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS):
-            return None
         if not _IDLE_HINT_RE.search(ctx.tail(15)):
             return None
         worked = [i for i, line in enumerate(lines) if re.search(r"worked for", line, re.IGNORECASE)]
         if not worked:
             return None
         end = worked[-1]
-        start = 0
-        for i in range(end - 1, -1, -1):
+        # A Working line from an older turn is above this marker. A new
+        # turn that is still running sits below it, or in the title.
+        if _WORKING_RE.search("\n".join(lines[end:])) or title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS):
+            return None
+        floor = worked[-2] + 1 if len(worked) > 1 else 0
+        start = floor
+        found_user = False
+        for i in range(end - 1, floor - 1, -1):
             stripped = lines[i].strip()
             if stripped.startswith("›") and "ask codex" not in stripped.lower():
                 start = i + 1
+                found_user = True
                 break
+        if not found_user and len(worked) < 2:
+            # No previous turn marker and no user prompt. Do not treat the
+            # whole scrollback as this answer.
+            start = max(start, end - 60)
         text = prose_body(drop_scrolled_user_prompt(lines[start:end]))
         if text is None:
             return None

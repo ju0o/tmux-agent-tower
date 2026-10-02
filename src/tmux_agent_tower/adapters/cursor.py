@@ -67,13 +67,16 @@ class CursorAdapter(AgentAdapter):
         # "Add a follow-up" also sits on screen while a turn is still
         # running ("ctrl+c to stop"). That is not a final answer.
         lines = list(ctx.lines)
-        full = "\n".join(lines)
-        if re.search(r"ctrl\+c to stop", full, re.IGNORECASE):
-            return None
         if not _FOLLOWUP_RE.search(ctx.tail(20)):
             return None
-        end = max(i for i, line in enumerate(lines) if _FOLLOWUP_RE.search(line))
-        text = prose_body(lines[:end])
+        ends = [i for i, line in enumerate(lines) if _FOLLOWUP_RE.search(line)]
+        end = ends[-1]
+        if any(re.search(r"ctrl\+c to stop", line, re.IGNORECASE) for line in lines[end:]):
+            return None
+        floor = ends[-2] + 1 if len(ends) > 1 else 0
+        if len(ends) < 2:
+            floor = max(floor, end - 60)
+        text = prose_body(lines[floor:end])
         if text is None:
             return None
         return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

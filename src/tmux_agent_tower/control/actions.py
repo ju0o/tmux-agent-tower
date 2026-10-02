@@ -25,6 +25,9 @@ MAX_SCREEN_LINES = 60
 MAX_SCREEN_LINE_CHARS = 400
 MAX_SCREEN_BYTES = 16 * 1024
 MAX_IDENTITY_CHARS = 80
+# Explicit Y/S only. The 2s refresh stays on CAPTURE_LINES (30).
+RECOVERY_LINES = 800
+RECOVERY_BYTES = 256 * 1024
 
 _ANSI_RE = re.compile(
     r"\x1b\[[0-?]*[ -/]*[@-~]"
@@ -350,7 +353,8 @@ def focus_pane(session: str, pane_key: str, own_pane_id: str = "") -> Tuple[bool
 def get_result(tower, pane_key: str) -> Tuple[bool, str, dict]:
     """Result state and, when ready or read, the extracted body.
 
-    Opening this does not mark the result read.
+    A fresh Tower process has an empty tracker. Y and S then read a
+    bounded slice of this pane's tmux history once. Polling does not.
     """
 
     row = find_row(tower, pane_key)
@@ -362,13 +366,58 @@ def get_result(tower, pane_key: str) -> Tuple[bool, str, dict]:
     if tracker is None:
         return True, "", {"state": row.get("result_state") or "none", "text": "", "fingerprint": "", "generated_at": 0.0}
     snap = tracker.snapshot(pane_key)
-    text = snap.text if snap.state in ("ready", "read") else ""
+    if not snap.text and row.get("status") not in ("WORKING", "WAITING", "DEAD"):
+        _recover_result(tower, pane_key, tracker)
+        snap = tracker.snapshot(pane_key)
     return True, "", {
         "state": snap.state,
-        "text": text,
+        "text": snap.text or "",
         "fingerprint": snap.fingerprint,
         "generated_at": snap.generated_at,
     }
+
+
+def _recover_result(tower, pane_key: str, tracker) -> None:
+    """Store the newest finished body if this pane's history still has one."""
+
+    ok, _reason, pane_id = find_screen_target(tower.session, pane_key, getattr(tower, "own_pane_id", "") or "")
+    if not ok or not pane_id:
+        return
+    listed = tmux_capture.run_tmux(
+        ["list-panes", "-t", pane_id, "-F", "#{pane_title}\x1f#{pane_current_command}"]
+    )
+    if "\x1f" not in listed:
+        return
+    title, command = listed.split("\x1f", 1)
+    title = title.strip()
+    command = command.strip()
+    lines = _bounded_history(tmux_capture.capture_pane(pane_id, lines=RECOVERY_LINES))
+    if not lines:
+        return
+    from ..adapters.base import PaneContext
+    from ..detection.identity import identify_agent
+    from ..detection.topology import adapter_for_screen, agent_through_ssh
+    from ..adapters import resolve_adapter
+
+    tail = lines[-40:]
+    process = resolve_adapter(command, title, "", tail)
+    name, source = identify_agent(command, title, "", tail)
+    agent, agent_source = agent_through_ssh(name, source, title, tail)
+    adapter = adapter_for_screen(process, agent, agent_source)
+    ctx = PaneContext(title=title, command=command, lines=tuple(lines))
+    candidate = adapter.extract_result(ctx)
+    if candidate is None or not candidate.text:
+        return
+    tracker.observe(pane_key, "IDLE", candidate)
+
+
+def _bounded_history(lines: List[str]) -> List[str]:
+    """Keep the newest lines, and stop if the bytes exceed the cap."""
+
+    kept = list(lines)[-RECOVERY_LINES:]
+    while kept and len("\n".join(kept).encode("utf-8", "replace")) > RECOVERY_BYTES:
+        kept.pop(0)
+    return kept
 
 
 _SAFE_ATTENTION_KEY = re.compile(r"^[0-9yn]$")

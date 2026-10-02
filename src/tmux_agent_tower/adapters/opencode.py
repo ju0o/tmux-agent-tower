@@ -133,9 +133,6 @@ class OpenCodeAdapter(AgentAdapter):
 
     def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
         lines = list(ctx.lines)
-        full = "\n".join(lines)
-        if _WORKING_RE.search(full):
-            return None
         if not _IDLE_HINT_RE.search(ctx.tail(8)):
             return None
         marks = [
@@ -144,7 +141,12 @@ class OpenCodeAdapter(AgentAdapter):
         ]
         if not marks:
             return None
-        text = prose_body(lines[: marks[-1]])
+        if _WORKING_RE.search("\n".join(lines[marks[-1]:])):
+            return None
+        floor = marks[-2] + 1 if len(marks) > 1 else 0
+        if len(marks) < 2:
+            floor = max(floor, marks[-1] - 60)
+        text = prose_body(lines[floor:marks[-1]])
         if text is None:
             return None
         return ResultCandidate(text=text, fingerprint=result_fingerprint(text))

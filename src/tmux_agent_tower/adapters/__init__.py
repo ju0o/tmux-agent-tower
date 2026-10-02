@@ -16,6 +16,15 @@ ADAPTERS = [
 ]
 
 
+def adapter_named(name: str) -> AgentAdapter:
+    """The adapter whose display name is ``name``, or the shell fallback."""
+
+    for adapter in ADAPTERS:
+        if adapter.name == name:
+            return adapter
+    return ShellAdapter.UNKNOWN_FALLBACK
+
+
 def resolve_adapter(command: str, title: str, cmdline: str = "", lines=()) -> AgentAdapter:
     """Pick an adapter from process evidence before the pane title.
 
@@ -37,6 +46,7 @@ __all__ = [
     "AgentAdapter",
     "AdapterResult",
     "PaneContext",
+    "adapter_named",
     "ADAPTERS",
     "resolve_adapter",
 ]

@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..adapters import resolve_adapter
 from ..detection.identity import identify_agent, prefer_override
-from ..detection.topology import agent_through_ssh, classify_transport, peer_topology
+from ..detection.topology import agent_through_ssh, adapter_for_screen, classify_transport, peer_topology
 from ..hostreg import HostRegistry, openssh_hostname
 from ..adapters.base import PaneContext
 from ..detection.result import ResultTracker
@@ -439,7 +439,6 @@ class Tower:
                 pane["command"], pane["title"], pane.get("cmdline") or "", pane.get("lines") or ()
             )
             ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
-            status = self.status_engine.evaluate(pane["pane_id"], pane["dead"], adapter, ctx)
             visit = self.visits.visit_label(self.session, pane["pane_id"])
 
             key = pane["pane_id"]
@@ -481,6 +480,8 @@ class Tower:
                 )
                 identity["agent"] = agent_name
                 identity["agent_source"] = agent_source
+                adapter = adapter_for_screen(adapter, agent_name, agent_source)
+            status = self.status_engine.evaluate(pane["pane_id"], pane["dead"], adapter, ctx)
             project = identity["project"]
             agent = identity["agent"]
             auto_project = identity["auto_project"]
