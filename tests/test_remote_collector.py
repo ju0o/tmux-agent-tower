@@ -23,11 +23,13 @@ def test_parse_snapshot_empty_output_is_unknown():
 
 
 def test_parse_snapshot_valid_line():
-    line = "\x1f".join(["sess", "0", "win", "0", "%1", "title", "codex", "/home/x", "0"])
+    line = "\x1f".join(["sess", "@1", "0", "win", "0", "%1", "title", "codex", "/home/x", "55", "0"])
     result = collector.parse_remote_snapshot("HOST", line)
     assert result["status"] == collector.HOST_STATUS_ONLINE
     assert len(result["panes"]) == 1
     assert result["panes"][0]["pane_id"] == "%1"
+    assert result["panes"][0]["window_id"] == "@1"
+    assert result["panes"][0]["pane_pid"] == "55"
 
 
 def test_parse_snapshot_malformed_line_is_skipped():

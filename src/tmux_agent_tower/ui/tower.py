@@ -92,37 +92,58 @@ def load_remote_hosts() -> List[Dict[str, str]]:
 
 
 def navigator_rows(panes: List[Dict]) -> List[Dict]:
-    """Local panes in session/window order, each tagged with its group.
+    """Session, then a selectable window row, then that window's panes.
 
-    Only panes are rows: a window is a label drawn above its panes
-    (``nav_group``), never something the cursor lands on or Enter opens.
-    Remote rows stay at the end, untagged. Grouping follows session +
-    window index, so a renamed window is a label change, not a different
-    target.
+    The window row's key is ``window_id``. A renamed window stays the same
+    row. Enter on it opens Window Control and does not move the client.
+    Remote panes stay at the end and are not given a local window row.
     """
 
-    local = [row for row in panes if not row.get("remote") and row.get("pane_id")]
-    remote = [row for row in panes if row.get("remote") or not row.get("pane_id")]
+    local = [row for row in panes if not row.get("remote") and row.get("pane_id") and row.get("kind") != "zero"]
+    remote = [row for row in panes if row.get("remote") or (not row.get("pane_id") and row.get("kind") != "zero")]
     order: List[Tuple] = []
     buckets: Dict[Tuple, List[Dict]] = {}
     for row in local:
-        key = (
-            str(row.get("session") or ""),
-            str(row.get("window_index") if row.get("window_index") is not None else ""),
-            str(row.get("window_name") or ""),
-        )
+        window_id = str(row.get("window_id") or "")
+        session = str(row.get("session") or "")
+        index = str(row.get("window_index") if row.get("window_index") is not None else "")
+        key = ("id", window_id) if window_id else ("idx", session, index)
         buckets.setdefault(key, []).append(row)
         if key not in order:
             order.append(key)
 
     out: List[Dict] = []
     for key in order:
-        session, index, name = key
-        label = t("nav.window").format(index=index, name=name)
-        for row in buckets[key]:
+        members = buckets[key]
+        sample = members[0]
+        session = str(sample.get("session") or "")
+        index = str(sample.get("window_index") if sample.get("window_index") is not None else "")
+        name = str(sample.get("window_name") or "")
+        window_id = str(sample.get("window_id") or "")
+        label = t("nav.window_row").format(id=window_id or index, name=name)
+        group = f"win:{session}:{window_id or index}"
+        out.append(
+            {
+                "kind": "window",
+                "key": window_id or f"win:{session}:{index}",
+                "window_id": window_id,
+                "project": label,
+                "agent": t("nav.pane_count").format(n=len(members)),
+                "status": "IDLE",
+                "host": sample.get("host") or "",
+                "session": session,
+                "window_index": index,
+                "window_name": name,
+                "pane_count": len(members),
+                "nav_group": group,
+                "nav_group_label": label,
+                "remote": False,
+            }
+        )
+        for row in members:
             item = dict(row)
             item["kind"] = "pane"
-            item["nav_group"] = f"win:{session}:{index}"
+            item["nav_group"] = group
             item["nav_group_label"] = label
             out.append(item)
     for row in remote:
@@ -130,6 +151,31 @@ def navigator_rows(panes: List[Dict]) -> List[Dict]:
         item["kind"] = "pane"
         out.append(item)
     return out
+
+
+def zero_state_rows() -> List[Dict]:
+    """What to show when Tower has no working pane yet."""
+
+    title = t("zero.title")
+    actions = (
+        ("task", t("zero.task")),
+        ("window", t("zero.window")),
+        ("pane", t("zero.pane")),
+        ("workspace", t("zero.workspace")),
+    )
+    return [
+        {
+            "kind": "zero",
+            "key": f"zero:{action}",
+            "action": action,
+            "project": label,
+            "agent": "",
+            "status": "IDLE",
+            "host": title,
+            "remote": False,
+        }
+        for action, label in actions
+    ]
 
 
 class Tower:
@@ -227,6 +273,8 @@ class Tower:
         no_name: str,
         binding_name: Optional[str] = None,
         process_git: Optional[str] = None,
+        session: str = "",
+        pane_pid: str = "",
     ) -> Dict:
         """Displayed names plus where they came from.
 
@@ -248,10 +296,10 @@ class Tower:
             process_git_name=process_git,
         )
         project, project_source = prefer_override(
-            auto_project, auto_project_source, self.overrides.get_project(key)
+            auto_project, auto_project_source, self.overrides.get_project(key, session, pane_pid)
         )
         agent, agent_source = prefer_override(
-            auto_agent, auto_agent_source, self.overrides.get_agent(key)
+            auto_agent, auto_agent_source, self.overrides.get_agent(key, session, pane_pid)
         )
         return {
             "project": project,
@@ -291,6 +339,8 @@ class Tower:
                 no_name,
                 binding_name=self._binding_name(key, pane.get("session"), pane.get("pane_pid")),
                 process_git=pane.get("process_git"),
+                session=pane.get("session") or "",
+                pane_pid=pane.get("pane_pid") or "",
             )
             project = identity["project"]
             agent = identity["agent"]
@@ -329,11 +379,13 @@ class Tower:
                     "visit": visit,
                     "key": key,
                     "session": pane["session"],
+                    "window_id": pane.get("window_id") or "",
                     "window_index": pane["window_index"],
                     "window_name": pane.get("window_name") or "",
                     "pane_index": pane.get("pane_index"),
                     "pane_active": bool(pane.get("pane_active")),
                     "pane_id": pane["pane_id"],
+                    "pane_pid": pane.get("pane_pid") or "",
                     "kind": "pane",
                     "remote": False,
                 }
@@ -401,7 +453,10 @@ class Tower:
                 # Remote title overrides aren't pushed to the real remote
                 # tmux (no remote install -- see docs/ARCHITECTURE.md), so
                 # the override itself is the effective title here.
-                effective_title = self.overrides.get_title(composite_key) or pane["title"]
+                effective_title = (
+                    self.overrides.get_title(composite_key, pane.get("session") or "", pane.get("pane_pid") or "")
+                    or pane["title"]
+                )
                 basename = Path(pane["path"] or "").name or pane["path"]
                 identity = self._identity(
                     composite_key,
@@ -413,6 +468,8 @@ class Tower:
                     basename,
                     name,
                     no_name,
+                    session=pane.get("session") or "",
+                    pane_pid=pane.get("pane_pid") or "",
                 )
                 project = identity["project"]
                 agent = identity["agent"]
@@ -448,10 +505,12 @@ class Tower:
                         "visit": visit,
                         "key": composite_key,
                         "session": pane.get("session"),
+                        "window_id": pane.get("window_id") or "",
                         "window_index": pane.get("window_index"),
                         "window_name": pane.get("window_name") or "",
                         "pane_index": pane.get("pane_index"),
                         "pane_id": pane.get("pane_id"),
+                        "pane_pid": pane.get("pane_pid") or "",
                         "kind": "pane",
                         "remote": True,
                         "offline": False,
@@ -481,14 +540,19 @@ class Tower:
 
         self.visible_rows = [r for r in self.rows if render.row_matches_filter(r, self.filter_text)]
 
-        if self.attention_mode:
-            # A separate, deliberately re-sorted presentation the user
-            # explicitly asked for (see toggle_attention()) -- this is NOT
-            # the default list silently reordering itself on a refresh.
-            self.visible_rows = render.sort_by_attention(self.visible_rows)
+        local_work = [r for r in self.visible_rows if r.get("pane_id") and not r.get("remote")]
+        if not self.filter_text and not local_work:
+            remotes = [r for r in self.visible_rows if r.get("remote")]
+            self.visible_rows = zero_state_rows() + remotes
+        else:
+            if self.attention_mode:
+                # A separate, deliberately re-sorted presentation the user
+                # explicitly asked for (see toggle_attention()) -- this is NOT
+                # the default list silently reordering itself on a refresh.
+                self.visible_rows = render.sort_by_attention(self.visible_rows)
 
-        if self.navigator_mode:
-            self.visible_rows = navigator_rows(self.visible_rows)
+            if self.navigator_mode:
+                self.visible_rows = navigator_rows(self.visible_rows)
 
         if not self.visible_rows:
             self.selected = 0
@@ -515,26 +579,20 @@ class Tower:
         self.set_filter("")
 
     def _build_visual(self) -> None:
-        if self.navigator_mode:
-            # Session and window are labels only. The cursor moves over
-            # panes; a window line is a divider above its panes.
+        if self.navigator_mode and any(row.get("kind") == "window" for row in self.visible_rows):
+            # Session is a divider. Window and pane are both rows.
             visual = []
             seen = []
-            current_group = None
             for idx, row in enumerate(self.visible_rows):
-                if row.get("nav_group"):
-                    label = f'Session {row.get("session")}'
-                elif row.get("remote"):
+                if row.get("remote"):
                     label = row.get("host") or ""
+                elif row.get("session"):
+                    label = f'Session {row.get("session")}'
                 else:
                     label = ""
                 if label and label not in seen:
                     seen.append(label)
                     visual.append({"type": "header", "host": label})
-                group = row.get("nav_group")
-                if group and group != current_group:
-                    visual.append({"type": "header", "host": row.get("nav_group_label") or "", "level": "window"})
-                current_group = group
                 visual.append({"type": "data", "row": row, "row_index": idx})
             self.visual = visual
             return
@@ -589,20 +647,25 @@ class Tower:
         self.selected = (self.selected + 1) % len(self.visible_rows)
 
     def control_key(self) -> Optional[str]:
-        """Enter. Opens the in-Tower control view. Does not move tmux.
+        """Enter. Opens control for the selected row. Does not move tmux.
 
-        Only panes are rows, so Enter always names one pane id; a window
-        label is not selectable and cannot be opened.
+        A pane returns its pane key. A window returns its window id.
+        A zero-state row returns its action key.
         """
 
         if not self.visible_rows:
             return None
         row = self.visible_rows[self.selected]
-        if enter_intent(row) != "control":
-            return None
-        if row.get("pane_id"):
-            self.visits.mark_seen(self.session, row["pane_id"])
-        return row.get("key")
+        intent = enter_intent(row)
+        if intent == "control":
+            if row.get("pane_id"):
+                self.visits.mark_seen(self.session, row["pane_id"])
+            return row.get("key")
+        if intent == "window":
+            return row.get("window_id")
+        if intent == "zero":
+            return row.get("key")
+        return None
 
     def edit_selected(self, stdscr) -> None:
         """The "E" menu: edit this pane's *display* identity only.
@@ -633,6 +696,8 @@ class Tower:
             return
 
         key = row["key"]
+        session = str(row.get("session") or "")
+        pane_pid = str(row.get("pane_pid") or "")
 
         def _context(current: Optional[str], auto: Optional[str]) -> List[str]:
             lines = []
@@ -643,7 +708,7 @@ class Tower:
             return lines
 
         if pick.selected_key == "project":
-            context = _context(self.overrides.get_project(key), row.get("auto_project"))
+            context = _context(self.overrides.get_project(key, session, pane_pid), row.get("auto_project"))
             name = prompt_text(stdscr, t("prompt.rename"), context_lines=context)
             if name:
                 update_identity(self, key, {"project": name})
@@ -657,7 +722,7 @@ class Tower:
             if agent_pick.cancelled or agent_pick.selected_key is None:
                 pass
             elif agent_pick.selected_key == "__custom__":
-                context = _context(self.overrides.get_agent(key), row.get("auto_agent"))
+                context = _context(self.overrides.get_agent(key, session, pane_pid), row.get("auto_agent"))
                 custom = prompt_text(stdscr, t("prompt.agent_name"), context_lines=context)
                 if custom:
                     update_identity(self, key, {"agent": custom})
@@ -667,7 +732,7 @@ class Tower:
                 update_identity(self, key, {"agent": agent_pick.selected_key})
 
         elif pick.selected_key == "title":
-            context = _context(self.overrides.get_title(key), row.get("pane_title"))
+            context = _context(self.overrides.get_title(key, session, pane_pid), row.get("pane_title"))
             title = prompt_text(stdscr, t("prompt.pane_title"), context_lines=context)
             if title:
                 update_identity(self, key, {"title": title})
@@ -778,6 +843,8 @@ def _build_detail_fields(tower: Tower, row: Dict) -> List[Tuple[str, str]]:
         (t("detail.host"), row.get("host")),
     ]
     fields.extend(_location_fields(row))
+    if row.get("window_id"):
+        fields.append((t("detail.window_id"), row["window_id"]))
     if row.get("pane_id"):
         fields.append((t("detail.pane_id"), row["pane_id"]))
     return fields
@@ -865,7 +932,8 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             hint_keys = [
                 t("hint.move"),
                 t("hint.open"),
-                t("hint.rename"),
+                t("hint.actions"),
+                t("hint.create"),
                 t("hint.add_project"),
                 t("hint.new_workspace"),
                 t("hint.remote"),
@@ -947,12 +1015,16 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
 
         if p["kind"] == "primary":
             marker = ">" if is_selected else " "
-            symbol, state_key = render.primary_badge(row)
-            state_text = f"{symbol} {t(state_key)}"
-            duration = _duration_text(tower, row)
-            if duration and not narrow:
-                state_text = f"{state_text} · {duration}"
-            prefix = f"{marker} "
+            if row.get("kind") in ("window", "zero"):
+                state_text = row.get("agent") or ""
+            else:
+                symbol, state_key = render.primary_badge(row)
+                state_text = f"{symbol} {t(state_key)}"
+                duration = _duration_text(tower, row)
+                if duration and not narrow:
+                    state_text = f"{state_text} · {duration}"
+            indent = "  " if tower.navigator_mode and row.get("kind") == "pane" else ""
+            prefix = f"{indent}{marker} "
             state_width = render.display_width(state_text)
             project_budget = max(8, width - render.display_width(prefix) - state_width - 4)
             if not narrow:
@@ -962,11 +1034,14 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             safe_add(stdscr, y, 0, prefix, base_attr if is_selected else curses.A_BOLD)
             safe_add(stdscr, y, render.display_width(prefix), text, base_attr if is_selected else 0)
 
-            if not narrow:
+            if not narrow and row.get("kind") not in ("window", "zero"):
                 safe_add(stdscr, y, agent_x, (row.get("agent") or "")[:14], base_attr)
             state_x = max(render.display_width(prefix) + render.display_width(text) + 2, width - state_width - 2)
             if state_x > render.display_width(prefix) + 1:
-                status_attr_here = base_attr if is_selected else status_attr(row.get("status") or "")
+                if row.get("kind") in ("window", "zero"):
+                    status_attr_here = base_attr if is_selected else curses.A_DIM
+                else:
+                    status_attr_here = base_attr if is_selected else status_attr(row.get("status") or "")
                 safe_add(stdscr, y, state_x, state_text, status_attr_here)
 
         elif p["kind"] == "activity":
@@ -1126,11 +1201,42 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if is_enter(key):
-            pane_key = tower.control_key()
-            if pane_key:
-                from .control_view import open_control_view
+            row = tower.visible_rows[tower.selected] if tower.visible_rows else None
+            intent = enter_intent(row)
+            if intent == "control":
+                pane_key = tower.control_key()
+                if pane_key:
+                    from .control_view import open_control_view
 
-                open_control_view(stdscr, tower, pane_key)
+                    open_control_view(stdscr, tower, pane_key)
+            elif intent == "window" and row:
+                from .structure_menu import open_window_control
+
+                open_window_control(stdscr, tower, row.get("window_id") or "")
+            elif intent == "zero" and row:
+                from .structure_menu import run_zero_action
+
+                run_zero_action(stdscr, tower, row.get("action") or "")
+            tower.load()
+            tower.last_refresh = time.monotonic()
+            draw(stdscr, tower, remote_state=remote_state)
+            continue
+
+        if key == " ":
+            from .structure_menu import open_context_menu
+
+            open_context_menu(stdscr, tower)
+            tower.load()
+            tower.last_refresh = time.monotonic()
+            draw(stdscr, tower, remote_state=remote_state)
+            continue
+
+        if key == "+":
+            from .structure_menu import open_create_hub
+
+            open_create_hub(stdscr, tower)
+            tower.load()
+            tower.last_refresh = time.monotonic()
             draw(stdscr, tower, remote_state=remote_state)
             continue
 

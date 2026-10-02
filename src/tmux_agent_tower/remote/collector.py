@@ -36,7 +36,7 @@ if ! tmux list-sessions >/dev/null 2>&1; then
     echo "__TOWER_NO_SERVER__"
     exit 0
 fi
-tmux list-panes -a -F '#{session_name}\x1f#{window_index}\x1f#{window_name}\x1f#{pane_index}\x1f#{pane_id}\x1f#{pane_title}\x1f#{pane_current_command}\x1f#{pane_current_path}\x1f#{pane_dead}'
+tmux list-panes -a -F '#{session_name}\x1f#{window_id}\x1f#{window_index}\x1f#{window_name}\x1f#{pane_index}\x1f#{pane_id}\x1f#{pane_title}\x1f#{pane_current_command}\x1f#{pane_current_path}\x1f#{pane_pid}\x1f#{pane_dead}'
 """
 
 
@@ -95,12 +95,13 @@ def parse_remote_snapshot(display_name: str, raw_stdout: str) -> Dict:
 
     for line in text.split("\n"):
         parts = line.split("\x1f")
-        if len(parts) != 9:
+        if len(parts) != 11:
             # Malformed line: skip it rather than failing the whole host.
             continue
 
         (
             session,
+            window_id,
             window_index,
             window_name,
             pane_index,
@@ -108,16 +109,19 @@ def parse_remote_snapshot(display_name: str, raw_stdout: str) -> Dict:
             title,
             command,
             path,
+            pane_pid,
             dead,
         ) = parts
 
         panes.append(
             {
                 "session": session,
+                "window_id": window_id,
                 "window_index": window_index,
                 "window_name": window_name,
                 "pane_index": pane_index,
                 "pane_id": pane_id,
+                "pane_pid": pane_pid,
                 "title": title or "(unnamed)",
                 "command": command,
                 "cmdline": "",

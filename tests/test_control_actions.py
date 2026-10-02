@@ -27,13 +27,20 @@ def test_enter_opens_control_and_does_not_focus(tmp_path, monkeypatch):
     assert tower.control_key() == "%44"
     assert moved == []
 
-    # A window label is not a row: Enter opens nothing and moves nothing.
+    # V mode: Enter opens Window Control and does not move the client.
     tower.visible_rows = [
-        {"kind": "window", "key": "win:0:1", "session": "0", "window_index": "1", "remote": False}
+        {
+            "kind": "window",
+            "key": "@2",
+            "window_id": "@2",
+            "session": "0",
+            "window_index": "1",
+            "remote": False,
+        }
     ]
     tower.selected = 0
-    assert actions.enter_intent(tower.visible_rows[0]) == "ignore"
-    assert tower.control_key() is None
+    assert actions.enter_intent(tower.visible_rows[0]) == "window"
+    assert tower.control_key() == "@2"
     assert moved == []
 
 
@@ -68,7 +75,7 @@ def test_close_kills_only_that_pane_id(monkeypatch):
         return Result()
 
     monkeypatch.setattr(actions.subprocess, "run", fake_run)
-    monkeypatch.setattr(actions.tmux_capture, "run_tmux", lambda args, capture=True, timeout=3.0: "%51")
+    monkeypatch.setattr(actions.tmux_capture, "run_tmux", lambda args, capture=True, timeout=3.0: "%51\n%6")
     monkeypatch.setattr(actions.tmux_capture, "pane_exists", lambda pane_id: True)
     ok, reason = actions.close_pane("0", "%51", own_pane_id="%6")
     assert (ok, reason) == (True, "")
@@ -84,6 +91,23 @@ def test_close_protects_tower_and_refuses_stale(monkeypatch):
     assert actions.close_pane("0", "%6", own_pane_id="%6") == (False, "tower_pane")
     assert actions.close_pane("0", "%999", own_pane_id="%6")[0] is False
     assert calls == []
+
+
+def test_close_refuses_the_last_pane_in_the_session(monkeypatch):
+    calls = []
+    monkeypatch.setattr(actions.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(actions.tmux_capture, "run_tmux", lambda args, capture=True, timeout=3.0: "%51")
+    monkeypatch.setattr(actions.tmux_capture, "pane_exists", lambda pane_id: True)
+    assert actions.close_pane("0", "%51", own_pane_id="%6") == (False, "last_pane")
+    assert calls == []
+
+
+def test_close_confirmation_names_working_and_approval():
+    lines = actions.close_notice_lines("WORKING", "approval_required")
+    assert any("진행" in line or "running" in line for line in lines)
+    assert any("승인" in line or "approval" in line for line in lines)
+    idle = actions.close_notice_lines("IDLE", "input_required")
+    assert any("입력" in line or "input" in line for line in idle)
 
 
 def test_close_confirmation_defaults_to_cancel_and_warns_when_working():

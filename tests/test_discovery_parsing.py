@@ -9,7 +9,7 @@ def test_own_pane_is_excluded_by_id_not_window_name(monkeypatch):
     # "CONTROL" or reused for something else, either wrongly hid its real
     # content or wrongly kept swallowing navigation).
     fs = discovery.FIELD_SEP
-    line = fs.join(["sess", "0", "SomeRenamedWindow", "0", "%1", "title", "bash", "/tmp", "123", "0", "1"])
+    line = fs.join(["sess", "@1", "0", "SomeRenamedWindow", "0", "%1", "title", "bash", "/tmp", "123", "0", "1"])
     monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)
     monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {})
     monkeypatch.setattr(discovery, "discover_project", lambda path: "proj")
@@ -22,7 +22,7 @@ def test_a_window_named_control_is_not_specially_excluded(monkeypatch):
     # "CONTROL". That must be gone: only the exact registered pane_id is
     # excluded, regardless of what any window is named.
     fs = discovery.FIELD_SEP
-    line = fs.join(["sess", "0", "CONTROL", "0", "%1", "title", "bash", "/tmp", "123", "0", "0"])
+    line = fs.join(["sess", "@1", "0", "CONTROL", "0", "%1", "title", "bash", "/tmp", "123", "0", "0"])
     monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)
     monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {})
     monkeypatch.setattr(discovery.capture, "capture_pane", lambda pane_id, lines=30: [])
@@ -34,7 +34,7 @@ def test_a_window_named_control_is_not_specially_excluded(monkeypatch):
 
 def test_no_exclude_pane_id_excludes_nothing(monkeypatch):
     fs = discovery.FIELD_SEP
-    line = fs.join(["sess", "0", "MAINPC", "0", "%1", "title", "bash", "/tmp", "123", "0", "1"])
+    line = fs.join(["sess", "@1", "0", "MAINPC", "0", "%1", "title", "bash", "/tmp", "123", "0", "1"])
     monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)
     monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {})
     monkeypatch.setattr(discovery.capture, "capture_pane", lambda pane_id, lines=30: [])
@@ -58,7 +58,7 @@ def test_empty_tmux_output_returns_empty_list(monkeypatch):
 
 def test_dead_pane_skips_capture(monkeypatch):
     fs = discovery.FIELD_SEP
-    line = fs.join(["sess", "0", "MAINPC", "0", "%1", "title", "bash", "/tmp", "123", "1", "0"])
+    line = fs.join(["sess", "@1", "0", "MAINPC", "0", "%1", "title", "bash", "/tmp", "123", "1", "0"])
     monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)
     monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {})
     monkeypatch.setattr(discovery, "discover_project", lambda path: "proj")
@@ -80,7 +80,7 @@ def test_dead_pane_skips_capture(monkeypatch):
 
 def test_valid_pane_parsed_correctly(monkeypatch):
     fs = discovery.FIELD_SEP
-    line = fs.join(["sess", "0", "MAINPC", "2", "%9", "My Title", "codex", "/home/x", "555", "0", "1"])
+    line = fs.join(["sess", "@9", "0", "MAINPC", "2", "%9", "My Title", "codex", "/home/x", "555", "0", "1"])
     monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)
     monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {"555": "/usr/bin/codex"})
     monkeypatch.setattr(discovery.capture, "capture_pane", lambda pane_id, lines=30: ["hello"])
@@ -95,6 +95,7 @@ def test_valid_pane_parsed_correctly(monkeypatch):
     assert row["lines"] == ["hello"]
     assert row["auto_project"] == "x"
     assert row["session"] == "sess"
+    assert row["window_id"] == "@9"
     assert row["window_index"] == "0"
     assert row["window_name"] == "MAINPC"
     assert row["pane_index"] == "2"

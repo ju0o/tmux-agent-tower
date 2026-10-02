@@ -77,13 +77,27 @@ def _id_fields(output: str) -> List[str]:
     return [part for part in (output or "").replace("\t", " ").split() if part]
 
 
-def _finish_new_pane(session: str, target: SpawnTarget, command: Optional[str], pane_id: str, agents_cfg: Dict[str, str], bindings) -> SpawnResult:
-    """Title, optional start, and binding. The pane already exists and is new."""
+def _finish_new_pane(
+    session: str,
+    target: SpawnTarget,
+    command: Optional[str],
+    pane_id: str,
+    agents_cfg: Dict[str, str],
+    bindings,
+    overrides=None,
+) -> SpawnResult:
+    """Title, optional start, and binding. The pane already exists and is new.
 
+    A reused pane id must not keep the previous pane's override. The new
+    process id does not match that record, so the record is dropped.
+    """
+
+    pane_pid = tmux_capture.run_tmux(
+        ["display-message", "-p", "-t", pane_id, "#{pane_pid}"]
+    ).strip()
+    if overrides is not None:
+        overrides.drop_if_stale(pane_id, session, pane_pid)
     if bindings is not None:
-        pane_pid = tmux_capture.run_tmux(
-            ["display-message", "-p", "-t", pane_id, "#{pane_pid}"]
-        ).strip()
         bindings.record(
             pane_id,
             session,
@@ -114,6 +128,7 @@ def spawn_local(
     agents_cfg: Dict[str, str],
     layout: str = DEFAULT_LAYOUT,
     bindings=None,
+    overrides=None,
 ) -> List[SpawnResult]:
     """Open this launch in a brand-new window and nowhere else.
 
@@ -157,11 +172,34 @@ def spawn_local(
         if not pane_id:
             results.append(SpawnResult(target, False, "pane을 생성하지 못했습니다."))
             continue
-        results.append(_finish_new_pane(session, target, command, pane_id, agents_cfg, bindings))
+        results.append(_finish_new_pane(session, target, command, pane_id, agents_cfg, bindings, overrides))
 
     # Layout only the window this call just created.
     tmux_capture.run_tmux(["select-layout", "-t", window_id, layout], capture=False)
     return results
+
+
+def spawn_into_window(
+    session: str,
+    window_id: str,
+    target: SpawnTarget,
+    agents_cfg: Dict[str, str],
+    bindings=None,
+    overrides=None,
+    direction: str = "auto",
+) -> SpawnResult:
+    """Split one new pane into ``window_id`` only. Other windows stay as they are.
+
+    Does not apply a layout. The split itself is the only change to that window.
+    """
+
+    from ..tmux.structure import create_pane
+
+    created = create_pane(window_id, direction=direction, cwd=target.project_path)
+    if not created.ok or not created.pane_id:
+        return SpawnResult(target, False, "pane을 생성하지 못했습니다.")
+    command = resolve_agent_command(target.agent_label, agents_cfg)
+    return _finish_new_pane(session, target, command, created.pane_id, agents_cfg, bindings, overrides)
 
 
 # --- remote (SSH, see docs/ARCHITECTURE.md for why this shape) -------------

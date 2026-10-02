@@ -4,7 +4,8 @@
 src/tmux_agent_tower/
 ├── adapters/       agent-specific status opinions (Codex, Claude, ...)
 ├── detection/      status engine, project auto-discovery, process helpers
-├── tmux/           thin wrappers around the `tmux` binary (read + navigate)
+├── tmux/           tmux binary wrappers: read, navigate, and
+│                   id-targeted structure changes (local TUI only)
 ├── state/          NEW/SEEN visit tracking, custom title overrides
 ├── remote/         minimal SSH-based multi-host prototype (read-only)
 ├── launcher/       Workspace Launcher: config, project discovery, spawn

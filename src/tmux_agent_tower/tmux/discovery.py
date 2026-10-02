@@ -19,6 +19,7 @@ FIELD_SEP = "\x1f"
 _PANE_FORMAT = FIELD_SEP.join(
     [
         "#{session_name}",
+        "#{window_id}",
         "#{window_index}",
         "#{window_name}",
         "#{pane_index}",
@@ -69,6 +70,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
 
         (
             session_name,
+            window_id,
             window_index,
             window_name,
             pane_index,
@@ -90,6 +92,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
         rows.append(
             {
                 "session": session_name,
+                "window_id": window_id,
                 "window_index": window_index,
                 "window_name": window_name,
                 "pane_index": pane_index,

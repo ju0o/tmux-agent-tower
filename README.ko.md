@@ -132,7 +132,10 @@ tower --focus
 | 키 | 동작 |
 |---|---|
 | `↑` / `↓` (또는 `j`/`k`) | 이동 |
-| `Enter` | 선택한 pane으로 이동 |
+| `Enter` | Pane이면 Pane Control, `V`에서 Window면 Window Control. 클라이언트는 움직이지 않음 |
+| `Space` | 선택한 대상의 작업 메뉴 |
+| `+` | 만들기: 새 작업, Window, Pane, Workspace |
+| `V` | 세션 / Window / Pane 구조. Window에서 Enter는 그 Window 제어 |
 | `E` | 선택한 pane의 프로젝트 이름/에이전트 이름/Pane 이름 편집 |
 | `N` | 프로젝트 1개 추가 (Workspace Launcher, 단일) |
 | `W` | 새 작업공간 시작 (Workspace Launcher, 다중) |
@@ -311,9 +314,9 @@ OpenCode를 제외한 입력대기 판정)은 실제로 그 CLI를 띄워 관찰
 * 원격/다중 호스트 화면은 pane 제목만 보고 실제 내용은 보지 않습니다(원격에
   아무것도 설치하지 않기 위한 의도적인 단순화 -- `docs/ARCHITECTURE.md`
   참고), 그래서 원격 상태는 로컬보다 거칠게 판단됩니다.
-* `E`로 지정한 override(프로젝트/에이전트/제목)는 tmux의 pane id를 키로 삼는데, 이 id는 tmux 서버가
-  재시작되면 재사용됩니다; 드물게 이전 이름이 엉뚱한 나중 pane에 "들러붙을"
-  수 있습니다.
+* `E`로 지정한 override(프로젝트/에이전트/제목)는 세션과 pane 프로세스 id가
+  같을 때만 적용됩니다. pane id가 재사용돼도 이전 이름은 붙지 않습니다.
+  지금 보는 pane에 다시 지정하면 그 값이 우선합니다.
 * Linux/WSL + tmux 환경에서 테스트했습니다. macOS도 (같은 Python + tmux +
   curses 조합이라) 대체로 동작할 것으로 보이지만 여기서 직접 검증하지는
   않았습니다.
@@ -329,7 +332,8 @@ OpenCode를 제외한 입력대기 판정)은 실제로 그 CLI를 띄워 관찰
 [`docs/ROADMAP.md`](docs/ROADMAP.md) 참고. Agent에 입력을 보내거나,
 중단/재시작시키거나, 승인 프롬프트를 자동으로 처리하는 기능은 분명히
 **구현하지 않았고**, 별도의 신중한 설계 검토 없이는 계획에도 없습니다 --
-이 도구는 항상 읽고 이동만 시켜줍니다.
+창과 pane을 만들거나 옮기거나 닫는 일은 로컬 Tower에서 확인한 뒤에만
+합니다. 휴대폰에서는 구조 조회와 현재 위치만 보여 줍니다.
 
 ## 라이선스
 

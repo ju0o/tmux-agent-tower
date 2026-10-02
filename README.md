@@ -229,12 +229,28 @@ the next time you press it. `tower keys restore` removes only that block
 and puts the recorded `w` command back. `tower --focus` still only
 navigates; it never starts a new TUI.
 
-While Tower is open, `V` switches the list to a tmux location tree
-(session, window, pane id). Sessions and windows are dividers only; the
-cursor moves over panes. The project/agent list stays the default.
+While Tower is open, `V` switches the list to the tmux tree. A session
+is a divider. A window is a row: Enter opens Window Control (add a pane,
+rename, layout, manage panes, close) and does not move the client.
+Enter on a pane still opens Pane Control. The project/agent list stays
+the default.
 
-Enter stays inside Tower and opens Pane Control for that pane (window
-dividers cannot be selected or opened). The live area is the same
+`+` opens the create menu: a new task (project, agent, and whether it
+goes in a new window, the current window, or a window you pick), a new
+window, a new pane, or a workspace. `N` and `W` still do what they did.
+Space opens the actions for whatever is selected, so the less common
+moves do not need their own keys. If Tower is the only pane, the list
+says there is no work yet and offers those same creates.
+
+Every structure write uses the window id or pane id tmux returned.
+A window name is only a label, so two windows with the same name stay
+separate. New windows and splits use `-d`, so the client stays where it
+is. Closing a pane warns when work, an approval, or an input question
+is in progress. Tower's own pane, and any window that contains it,
+cannot be closed from these menus. The phone shows the same tree and
+the current location. It does not create or close windows.
+
+The live area is the same
 recent `capture-pane` text the phone uses. `P` sends one prompt as a
 bracketed paste plus a single Enter and reports "Submit confirmed" only
 when the agent visibly started a turn (otherwise the text was sent but
@@ -356,9 +372,10 @@ whether you've opened that pane from the Tower before, shown as a small
 * The remote/multi-host view only sees pane titles, not full content (a
   deliberate simplification to avoid installing anything remotely -- see
   `docs/ARCHITECTURE.md`), so remote status is coarser than local.
-* An `E` override (project/agent/title) is keyed by tmux's pane id, which
-  is reused after a tmux server restart; in rare cases an override can "stick" to an
-  unrelated later pane.
+* An `E` override (project/agent/title) is kept only while the session
+  and the pane's process id still match. A reused pane id does not
+  inherit the previous label. Setting the label again on the pane you
+  are looking at makes it current.
 * Linux/WSL + tmux is the tested target. macOS should mostly work (same
   Python + tmux + curses stack) but hasn't been verified here.
 

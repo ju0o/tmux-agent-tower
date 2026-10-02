@@ -24,7 +24,7 @@ MARKER = "SECRET-SCREEN-MARKER-7f3a"
 
 def _pane_line(pane_id="%1", title="my-title", command="bash", path="/home/example/project", dead="0"):
     fs = discovery.FIELD_SEP
-    return fs.join([SESSION, "0", "win", "0", pane_id, title, command, path, "123", dead, "1"])
+    return fs.join([SESSION, "@1", "0", "win", "0", pane_id, title, command, path, "123", dead, "1"])
 
 
 @pytest.fixture
@@ -265,9 +265,10 @@ def test_identity_edit_is_shared_with_the_pc_tower(env):
     """The TUI's OverrideStore re-reads the file another writer changed."""
 
     tui_store = OverrideStore(tower_module.STATE_DIR / "overrides.json")
-    assert tui_store.get_project("%1") is None  # cached "nothing"
+    assert tui_store.get_project("%1", SESSION, "123") is None
     _post(env["srv"], _identity_path(), {"project": "From Phone"}, env["token"])
-    assert tui_store.get_project("%1") == "From Phone"
+    assert tui_store.get_project("%1", SESSION, "123") == "From Phone"
+    assert tui_store.get_project("%1", SESSION, "999") is None
 
 
 def test_prompt_send_still_works_from_the_detail_flow(env, monkeypatch):

@@ -145,6 +145,28 @@ def test_w_splits_only_inside_the_new_window(monkeypatch):
     assert split_targets == [window_id]
 
 
+def test_spawn_drops_a_stale_override_for_the_reused_pane_id(tmp_path, monkeypatch):
+    from tmux_agent_tower.state.overrides import OverrideStore
+
+    fake = FakeTmux()
+    monkeypatch.setattr(spawn.tmux_capture, "run_tmux", fake.run_tmux)
+    monkeypatch.setattr(spawn, "resolve_agent_command", lambda label, cfg: cfg.get(label))
+    store = OverrideStore(tmp_path / "overrides.json")
+    store.set_agent("%1", "CommandCode", "0", "111")
+    store.set_project("%1", "JuPortal", "0", "111")
+
+    spawn.spawn_local(
+        "0",
+        [SpawnTarget("/proj/a", "Agent-Relay", "Codex")],
+        {"Codex": "codex"},
+        overrides=store,
+    )
+
+    assert store.get_agent("%1", "0", "111") is None
+    assert store.get_agent("%1", "0", "700") is None
+    assert store.get_project("%1", "0", "700") is None
+
+
 def test_spawn_uses_returned_pane_id_for_binding(tmp_path, monkeypatch):
     from tmux_agent_tower.state.bindings import ProjectBindingStore
 

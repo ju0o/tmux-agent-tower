@@ -11,8 +11,8 @@ import time
 
 from ..control.actions import (
     close_choices,
+    close_notice_lines,
     close_pane,
-    close_warning,
     focus_pane,
     get_pane_screen,
     get_result,
@@ -85,6 +85,12 @@ def open_control_view(stdscr, tower, pane_key: str) -> None:
                 continue
             if matches_letter(key, "x"):
                 if _close(stdscr, tower, row):
+                    return
+                continue
+            if key == " ":
+                from .structure_menu import open_pane_menu
+
+                if open_pane_menu(stdscr, tower, row) == "closed":
                     return
                 continue
     finally:
@@ -315,7 +321,7 @@ def _close(stdscr, tower, row: dict) -> bool:
         t("control.close_title"),
         close_choices(),
         footer_hint=t("wizard.hint_list"),
-        preamble=[close_warning(row.get("status") or "")],
+        preamble=close_notice_lines(row.get("status") or "", row.get("attention") or "none"),
     )
     if pick.cancelled or pick.selected_key != "close":
         return False

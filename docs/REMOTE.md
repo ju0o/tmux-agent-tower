@@ -140,6 +140,10 @@ token file is deleted.
 * No auto-approval, no killing/restarting/interrupting an agent, no
   batched/automatic prompts to multiple panes, no cloud relay, no account
   system. See the permanent P5 boundary in `docs/ROADMAP.md`.
+* No window or pane create, move, layout, or close. The phone list is
+  the session/window/pane tree and the detail screen shows the current
+  location, including the window id. Those writes stay on the local TUI
+  until that has been used for a while.
 
 ## Security model
 

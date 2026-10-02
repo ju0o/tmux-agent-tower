@@ -260,7 +260,12 @@ def run_launcher(stdscr, tower, multi: bool, state_dir: Path) -> None:
     else:
         bindings = ProjectBindingStore(state_dir / "project-bindings.json")
         results = spawn_local(
-            tower.session, targets, cfg["agents"], layout=layout, bindings=bindings
+            tower.session,
+            targets,
+            cfg["agents"],
+            layout=layout,
+            bindings=bindings,
+            overrides=tower.overrides,
         )
 
     for p in projects:

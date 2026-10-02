@@ -8,6 +8,18 @@ adapters, same status engine -- `server/httpapi.py` drives a headless
 and known gaps in `docs/REMOTE.md`. Version number is intentionally not
 bumped until this merges.
 
+* **Stale override** -- a saved project/agent/title is used only when the
+  session and pane process id still match. A reused pane id does not keep
+  the previous label, including one the launcher just replaced. A label
+  the user sets on the current pane still wins over detection. Phone and
+  PC share that check.
+* **tmux structure** -- local Tower can create a window or pane, move a
+  pane, break it into a new window, change one window's layout, and
+  rename or close by `window_id` / `pane_id`. `V` selects windows;
+  Enter opens Window Control and does not focus the window. `+` is the
+  create menu. Space is the action menu. `N` and `W` stay. An empty
+  list offers those creates instead of a tmux command. The phone still
+  only shows the tree and the current location.
 * **Launcher isolation** -- `N` always opens a new window, and `W` splits
   and applies layout only inside the one window that launch created.
   The host label is not the window name. Later commands use the window

@@ -113,6 +113,7 @@ def build_status_payload(tower: Tower) -> dict:
                 "remote": bool(row.get("remote")),
                 "offline": False,
                 "session": row.get("session"),
+                "window_id": row.get("window_id"),
                 "window_index": row.get("window_index"),
                 "window_name": row.get("window_name"),
                 "pane_id": row.get("pane_id"),

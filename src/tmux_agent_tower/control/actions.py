@@ -36,13 +36,20 @@ _LOCAL_PANE_KEY_RE = re.compile(r"^%\d+$")
 
 
 def enter_intent(row: Optional[dict]) -> str:
-    """Enter opens the in-Tower control view. It never focuses a pane."""
+    """What Enter does. It never focuses a pane or a window.
+
+    A window row opens Window Control. A pane row opens Pane Control.
+    A zero-state row starts a create action. Nothing here moves tmux.
+    """
 
     if not row or row.get("offline") or row.get("placeholder"):
         return "ignore"
     if row.get("kind") == "window":
-        # Window labels are not rows anymore; nothing to open.
-        return "ignore"
+        if row.get("remote") or not row.get("window_id"):
+            return "ignore"
+        return "window"
+    if row.get("kind") == "zero" and row.get("action"):
+        return "zero"
     if row.get("pane_id") or row.get("key"):
         return "control"
     return "ignore"
@@ -132,6 +139,12 @@ def apply_identity_edit(tower, pane_key: str, body: dict) -> Tuple[bool, str]:
         tower.overrides.reset(pane_key)
         return True, ""
 
+    session = str(row.get("session") or "")
+    pane_pid = str(row.get("pane_pid") or "").strip()
+    # A label without a process id cannot be checked when this pane id is reused.
+    if not session or not pane_pid:
+        return False, "stale"
+
     touched = False
     for field in OVERRIDE_FIELDS:
         if field not in body:
@@ -144,7 +157,7 @@ def apply_identity_edit(tower, pane_key: str, body: dict) -> Tuple[bool, str]:
         cleaned = _clean_identity_value(value)
         if cleaned is None:
             return False, f"invalid_{field}"
-        getattr(tower.overrides, f"set_{field}")(pane_key, cleaned)
+        getattr(tower.overrides, f"set_{field}")(pane_key, cleaned, session, pane_pid)
         touched = True
         if field == "title" and not row.get("remote"):
             tmux_capture.run_tmux(["select-pane", "-t", row["pane_id"], "-T", cleaned], capture=False)
@@ -431,6 +444,23 @@ def close_warning(status: str) -> str:
     }.get(status or "", t("control.close_idle"))
 
 
+def close_notice_lines(status: str, attention: str = "none") -> List[str]:
+    """Lines shown before a pane close. Working states the job will die.
+
+    Approval and input are named even when execution is idle, because
+    those widgets are not the execution status.
+    """
+
+    from ..i18n import t
+
+    lines = [close_warning(status)]
+    if attention == "approval_required":
+        lines.append(t("control.close_approval"))
+    elif attention == "input_required":
+        lines.append(t("control.close_input"))
+    return lines
+
+
 def close_choices() -> List[Tuple[str, str]]:
     """Cancel is first so Enter without moving does not kill the pane."""
 
@@ -451,6 +481,16 @@ def close_pane(session: str, pane_key: str, own_pane_id: str = "") -> Tuple[bool
     ok, reason, pane_id = find_screen_target(session, pane_key, own_pane_id)
     if not ok or not pane_id:
         return False, reason or "not_found"
+    living = [
+        line
+        for line in tmux_capture.run_tmux(
+            ["list-panes", "-s", "-t", session, "-F", "#{pane_id}"]
+        ).split("\n")
+        if line.startswith("%")
+    ]
+    # The last pane in the session is the session. Do not delete it.
+    if len(living) <= 1:
+        return False, "last_pane"
     try:
         result = subprocess.run(
             ["tmux", "kill-pane", "-t", pane_id],

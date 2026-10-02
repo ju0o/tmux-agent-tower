@@ -440,7 +440,9 @@ PAGE_HTML = """<!doctype html>
       var byWindow = {};
       byHost[host].forEach(function (p) {
         var gkey = "";
-        if (!p.offline && p.window_index != null && p.window_index !== "") {
+        if (!p.offline && p.window_id) {
+          gkey = (p.session || "") + ":" + p.window_id;
+        } else if (!p.offline && p.window_index != null && p.window_index !== "") {
           gkey = (p.session || "") + ":" + p.window_index;
         }
         if (!byWindow[gkey]) { byWindow[gkey] = []; groups.push(gkey); }
@@ -453,7 +455,7 @@ PAGE_HTML = """<!doctype html>
           var sample = items[0];
           var label = document.createElement("div");
           label.className = "window-label";
-          label.textContent = "창 " + sample.window_index + (sample.window_name ? ": " + sample.window_name : "");
+          label.textContent = "창 " + (sample.window_id ? sample.window_id + " " : "") + sample.window_index + (sample.window_name ? ": " + sample.window_name : "");
           list.appendChild(label);
         }
         items.forEach(function (p) {
@@ -561,7 +563,7 @@ PAGE_HTML = """<!doctype html>
     $("reject").style.display = p.reject_known ? "block" : "none";
     var where = "Session " + (p.session || "-");
     if (p.window_index != null && p.window_index !== "") {
-      where += "\\nWindow " + p.window_index + ": " + (p.window_name || "");
+      where += "\\nWindow " + (p.window_id ? p.window_id + " " : "") + p.window_index + ": " + (p.window_name || "");
     }
     if (p.pane_id) where += "\\nPane " + p.pane_id + (p.pane_index != null && p.pane_index !== "" ? " · index " + p.pane_index : "");
     $("d-location").textContent = where;

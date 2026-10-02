@@ -9,11 +9,12 @@ from tmux_agent_tower.tmux import keybind, navigation
 from tmux_agent_tower.ui.tower import navigator_rows
 
 
-def _pane(pane_id, window_index, window_name, pane_index="0", active=False, session="0"):
+def _pane(pane_id, window_index, window_name, pane_index="0", active=False, session="0", window_id=""):
     return {
         "kind": "pane",
         "key": pane_id,
         "session": session,
+        "window_id": window_id,
         "window_index": window_index,
         "window_name": window_name,
         "pane_index": pane_index,
@@ -27,22 +28,34 @@ def _pane(pane_id, window_index, window_name, pane_index="0", active=False, sess
     }
 
 
-def test_navigator_windows_are_labels_and_only_panes_are_rows():
+def test_navigator_windows_are_selectable_rows():
     rows = navigator_rows(
         [
-            _pane("%6", "0", "main", active=True),
-            _pane("%44", "0", "main", pane_index="1"),
-            _pane("%51", "1", "agents", active=True),
-            _pane("%52", "1", "agents", pane_index="1"),
+            _pane("%6", "0", "main", active=True, window_id="@1"),
+            _pane("%44", "0", "main", pane_index="1", window_id="@1"),
+            _pane("%51", "1", "agents", active=True, window_id="@2"),
+            _pane("%52", "1", "agents", pane_index="1", window_id="@2"),
             {"key": "asus:%43", "remote": True, "pane_id": "%43", "host": "ASUS", "session": "0", "window_index": "2", "window_name": "ssh"},
         ]
     )
-    assert all(row["kind"] == "pane" for row in rows)
-    assert [row["pane_id"] for row in rows] == ["%6", "%44", "%51", "%52", "%43"]
-    assert [row.get("nav_group") for row in rows] == ["win:0:0", "win:0:0", "win:0:1", "win:0:1", None]
-    assert rows[0]["nav_group_label"] == rows[1]["nav_group_label"]
-    assert "main" in rows[0]["nav_group_label"]
+    assert [row["kind"] for row in rows] == ["window", "pane", "pane", "window", "pane", "pane", "pane"]
+    assert [row["key"] for row in rows if row["kind"] == "window"] == ["@1", "@2"]
+    assert [row["pane_id"] for row in rows if row["kind"] == "pane"] == ["%6", "%44", "%51", "%52", "%43"]
+    assert rows[1]["nav_group"] == rows[2]["nav_group"] == "win:0:@1"
+    assert "main" in rows[0]["project"]
     assert rows[-1]["remote"] is True
+
+
+def test_duplicate_window_names_do_not_merge():
+    rows = navigator_rows(
+        [
+            _pane("%1", "0", "main", window_id="@1"),
+            _pane("%2", "1", "main", window_id="@2"),
+        ]
+    )
+    windows = [row for row in rows if row["kind"] == "window"]
+    assert [row["key"] for row in windows] == ["@1", "@2"]
+    assert windows[0]["nav_group"] != windows[1]["nav_group"]
 
 
 def test_navigator_visual_draws_a_window_divider_once_per_group(tmp_path, monkeypatch):
@@ -54,30 +67,32 @@ def test_navigator_visual_draws_a_window_divider_once_per_group(tmp_path, monkey
     monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
     tower = tower_module.Tower("0", own_pane_id="%6")
     tower.navigator_mode = True
-    tower.rows = [_pane("%6", "0", "main"), _pane("%44", "0", "main", pane_index="1"), _pane("%51", "1", "agents")]
+    tower.rows = [
+        _pane("%6", "0", "main", window_id="@1"),
+        _pane("%44", "0", "main", pane_index="1", window_id="@1"),
+        _pane("%51", "1", "agents", window_id="@2"),
+    ]
     tower._apply_filter()
 
-    assert [row["pane_id"] for row in tower.visible_rows] == ["%6", "%44", "%51"]
+    assert [row["kind"] for row in tower.visible_rows] == ["window", "pane", "pane", "window", "pane"]
+    assert [row.get("pane_id") for row in tower.visible_rows if row["kind"] == "pane"] == ["%6", "%44", "%51"]
     headers = [(item["host"], item.get("level")) for item in tower.visual if item["type"] == "header"]
-    assert headers[0] == ("Session 0", None)
-    assert [h for h in headers if h[1] == "window"] == [
-        (tower.visible_rows[0]["nav_group_label"], "window"),
-        (tower.visible_rows[2]["nav_group_label"], "window"),
-    ]
-    # The cursor cycles over panes only.
-    tower.selected = 2
+    assert headers == [("Session 0", None)]
+    tower.selected = len(tower.visible_rows) - 1
     tower.move_down()
     assert tower.selected == 0
-    assert tower.control_key() == "%6"
+    assert tower.visible_rows[0]["kind"] == "window"
+    assert tower.control_key() == "@1"
 
 
-def test_renamed_window_is_only_a_label():
-    before = navigator_rows([_pane("%44", "0", "main")])
-    after = navigator_rows([_pane("%44", "0", "renamed")])
-    assert before[0]["pane_id"] == after[0]["pane_id"] == "%44"
-    assert before[0]["key"] == after[0]["key"] == "%44"
-    assert before[0]["nav_group"] == after[0]["nav_group"] == "win:0:0"
-    assert "renamed" in after[0]["nav_group_label"]
+def test_renamed_window_keeps_its_id():
+    before = navigator_rows([_pane("%44", "0", "main", window_id="@4")])
+    after = navigator_rows([_pane("%44", "0", "renamed", window_id="@4")])
+    assert before[0]["kind"] == "window"
+    assert before[0]["key"] == after[0]["key"] == "@4"
+    assert before[1]["pane_id"] == after[1]["pane_id"] == "%44"
+    assert before[0]["nav_group"] == after[0]["nav_group"] == "win:0:@4"
+    assert "renamed" in after[0]["project"]
 
 
 def test_enter_prefers_pane_id_over_window_index(monkeypatch):
