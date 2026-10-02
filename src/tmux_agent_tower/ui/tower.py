@@ -91,23 +91,62 @@ def load_remote_hosts() -> List[Dict[str, str]]:
     return hosts
 
 
-def navigator_rows(panes: List[Dict]) -> List[Dict]:
-    """Session, then a selectable window row, then that window's panes.
+def _window_group(row: Dict) -> Tuple:
+    """Identity of the window a pane belongs to. Names are not part of it."""
 
-    The window row's key is ``window_id``. A renamed window stays the same
-    row. Enter on it opens Window Control and does not move the client.
-    Remote panes stay at the end and are not given a local window row.
+    host = str(row.get("host") or "")
+    session = str(row.get("session") or "")
+    window_id = str(row.get("window_id") or "")
+    index = str(row.get("window_index") if row.get("window_index") is not None else "")
+    if row.get("remote"):
+        return ("remote", host, session, window_id or index or "?")
+    if window_id:
+        return ("local", window_id)
+    return ("local", session, index)
+
+
+def _assign_tree_guides(rows: List[Dict]) -> None:
+    """Box-drawing prefixes. Width is measured with ``display_width``
+    at draw time, so a Korean name does not shift the badge.
     """
 
-    local = [row for row in panes if not row.get("remote") and row.get("pane_id") and row.get("kind") != "zero"]
-    remote = [row for row in panes if row.get("remote") or (not row.get("pane_id") and row.get("kind") != "zero")]
+    grouped: List[List[Dict]] = []
+    for row in rows:
+        host = str(row.get("host") or "")
+        if not grouped or str(grouped[-1][0].get("host") or "") != host:
+            grouped.append([])
+        grouped[-1].append(row)
+    for group in grouped:
+        windows = [row for row in group if row.get("kind") == "window"]
+        for index, window in enumerate(windows):
+            last = index == len(windows) - 1
+            if window.get("collapsed"):
+                window["guide"] = "└▸ " if last else "├▸ "
+            else:
+                window["guide"] = "└─ " if last else "├─ "
+            panes = [row for row in group if row.get("kind") == "pane" and row.get("tree_window") == window.get("key")]
+            stem = "   " if last else "│  "
+            for pane_index, pane in enumerate(panes):
+                end = pane_index == len(panes) - 1
+                pane["guide"] = stem + ("└─ " if end else "├─ ")
+
+
+def navigator_rows(panes: List[Dict], collapsed: Optional[set] = None) -> List[Dict]:
+    """Host, then a selectable window row, then that window's panes.
+
+    The window row's key is ``window_id`` locally, and host plus id for
+    a remote window, so two hosts can both have ``@1``. A renamed window
+    stays the same row. Enter on it opens Window Control and does not
+    move the client. ``collapsed`` only hides child rows.
+    """
+
+    closed = collapsed or set()
     order: List[Tuple] = []
     buckets: Dict[Tuple, List[Dict]] = {}
-    for row in local:
-        window_id = str(row.get("window_id") or "")
-        session = str(row.get("session") or "")
-        index = str(row.get("window_index") if row.get("window_index") is not None else "")
-        key = ("id", window_id) if window_id else ("idx", session, index)
+    for row in panes:
+        if row.get("kind") == "zero" or not row.get("pane_id"):
+            continue
+        key = _window_group(row)
         buckets.setdefault(key, []).append(row)
         if key not in order:
             order.append(key)
@@ -120,15 +159,23 @@ def navigator_rows(panes: List[Dict]) -> List[Dict]:
         index = str(sample.get("window_index") if sample.get("window_index") is not None else "")
         name = str(sample.get("window_name") or "")
         window_id = str(sample.get("window_id") or "")
-        label = t("nav.window_row").format(id=window_id or index, name=name)
-        group = f"win:{session}:{window_id or index}"
+        remote = bool(sample.get("remote"))
+        if remote:
+            row_key = f'{sample.get("host") or ""}:{window_id or index}'
+        else:
+            row_key = window_id or f"win:{session}:{index}"
+        label = t("nav.window_row").format(index=index, name=name)
+        group = f"win:{sample.get('host') or ''}:{session}:{window_id or index}"
+        summary = render.window_summary(members)
+        hidden = row_key in closed
         out.append(
             {
                 "kind": "window",
-                "key": window_id or f"win:{session}:{index}",
+                "key": row_key,
                 "window_id": window_id,
                 "project": label,
-                "agent": t("nav.pane_count").format(n=len(members)),
+                "agent": "",
+                "summary": summary,
                 "status": "IDLE",
                 "host": sample.get("host") or "",
                 "session": session,
@@ -137,19 +184,20 @@ def navigator_rows(panes: List[Dict]) -> List[Dict]:
                 "pane_count": len(members),
                 "nav_group": group,
                 "nav_group_label": label,
-                "remote": False,
+                "remote": remote,
+                "collapsed": hidden,
             }
         )
+        if hidden:
+            continue
         for row in members:
             item = dict(row)
             item["kind"] = "pane"
             item["nav_group"] = group
             item["nav_group_label"] = label
+            item["tree_window"] = row_key
             out.append(item)
-    for row in remote:
-        item = dict(row)
-        item["kind"] = "pane"
-        out.append(item)
+    _assign_tree_guides(out)
     return out
 
 
@@ -207,7 +255,8 @@ class Tower:
         self.visible_rows: List[Dict] = []   # rows after the search filter is applied
         self.visual: List[Dict] = []         # visible_rows incl. host headers, for drawing
         self.attention_mode = False          # a separate, re-sorted presentation -- see toggle_attention()
-        self.navigator_mode = False          # tmux window/pane tree -- see toggle_navigator()
+        self.navigator_mode = True           # the tree is the default; V returns here
+        self.collapsed: set = set()          # window row keys hidden in the UI only
         self.notice = ""
         self.selected = 0                    # index into visible_rows
         self.last_refresh = 0.0
@@ -543,16 +592,14 @@ class Tower:
         local_work = [r for r in self.visible_rows if r.get("pane_id") and not r.get("remote")]
         if not self.filter_text and not local_work:
             remotes = [r for r in self.visible_rows if r.get("remote")]
-            self.visible_rows = zero_state_rows() + remotes
+            self.visible_rows = zero_state_rows() + navigator_rows(remotes)
+        elif self.attention_mode:
+            # A flat priority list. The tree itself is not reordered.
+            panes = [r for r in self.visible_rows if r.get("pane_id")]
+            self.visible_rows = render.sort_by_attention(panes)
         else:
-            if self.attention_mode:
-                # A separate, deliberately re-sorted presentation the user
-                # explicitly asked for (see toggle_attention()) -- this is NOT
-                # the default list silently reordering itself on a refresh.
-                self.visible_rows = render.sort_by_attention(self.visible_rows)
-
-            if self.navigator_mode:
-                self.visible_rows = navigator_rows(self.visible_rows)
+            closed = set() if self.filter_text else self.collapsed
+            self.visible_rows = navigator_rows(self.visible_rows, closed)
 
         if not self.visible_rows:
             self.selected = 0
@@ -579,17 +626,12 @@ class Tower:
         self.set_filter("")
 
     def _build_visual(self) -> None:
-        if self.navigator_mode and any(row.get("kind") == "window" for row in self.visible_rows):
-            # Session is a divider. Window and pane are both rows.
+        if not self.attention_mode and any(row.get("kind") == "window" for row in self.visible_rows):
+            # Host is the divider. Window and pane are both rows.
             visual = []
             seen = []
             for idx, row in enumerate(self.visible_rows):
-                if row.get("remote"):
-                    label = row.get("host") or ""
-                elif row.get("session"):
-                    label = f'Session {row.get("session")}'
-                else:
-                    label = ""
+                label = row.get("host") or ""
                 if label and label not in seen:
                     seen.append(label)
                     visual.append({"type": "header", "host": label})
@@ -622,17 +664,38 @@ class Tower:
 
     def toggle_attention(self) -> None:
         self.attention_mode = not self.attention_mode
-        if self.attention_mode:
-            self.navigator_mode = False
         self._apply_filter()
 
     def toggle_navigator(self) -> None:
-        """V: tmux session/window/pane tree. The project list stays the default."""
+        """V returns to the tree. It is not a second list."""
 
-        self.navigator_mode = not self.navigator_mode
-        if self.navigator_mode:
-            self.attention_mode = False
+        self.attention_mode = False
+        self.navigator_mode = True
         self._apply_filter()
+
+    def collapse_selected(self) -> None:
+        """Hide a window's panes. tmux is not changed."""
+
+        row = self.visible_rows[self.selected] if self.visible_rows else None
+        if not row:
+            return
+        key = row.get("key") if row.get("kind") == "window" else row.get("tree_window")
+        if not key:
+            return
+        self.collapsed.add(key)
+        self._apply_filter(key)
+
+    def expand_selected(self) -> None:
+        """Show a window's panes again. tmux is not changed."""
+
+        row = self.visible_rows[self.selected] if self.visible_rows else None
+        if not row:
+            return
+        key = row.get("key") if row.get("kind") == "window" else row.get("tree_window")
+        if not key:
+            return
+        self.collapsed.discard(key)
+        self._apply_filter(key)
 
     # -- actions --------------------------------------------------------
 
@@ -920,29 +983,25 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
         safe_add(stdscr, 1, 2, f'{t("filter.label")} {tower.filter_text}_', curses.A_BOLD)
         start_y = 3
     else:
+        hint_keys = [
+            t("hint.move"),
+            t("hint.fold"),
+            t("hint.open"),
+            t("hint.actions"),
+            t("hint.attention"),
+            t("hint.create"),
+            t("hint.remote"),
+            t("hint.filter_clear") if tower.filter_text else t("hint.filter"),
+            t("hint.quit"),
+        ]
         if narrow:
             hint_keys = [
                 t("hint.move"),
                 t("hint.open"),
-                t("hint.navigator"),
+                t("hint.actions"),
                 t("hint.attention"),
                 t("hint.quit"),
             ]
-        else:
-            hint_keys = [
-                t("hint.move"),
-                t("hint.open"),
-                t("hint.actions"),
-                t("hint.create"),
-                t("hint.add_project"),
-                t("hint.new_workspace"),
-                t("hint.remote"),
-                t("hint.settings"),
-            ]
-            hint_keys.append(t("hint.filter_clear") if tower.filter_text else t("hint.filter"))
-            hint_keys.append(t("hint.navigator"))
-            hint_keys.append(t("hint.attention"))
-            hint_keys += [t("hint.refresh"), t("hint.quit")]
         hint = "   ".join(hint_keys)
         # One clipped line hides V/A/Q. Wrap onto a second line instead.
         if render.display_width(hint) <= max(0, width - 4):
@@ -1014,31 +1073,28 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             safe_add(stdscr, y, 0, " " * max(1, width - 1), base_attr)
 
         if p["kind"] == "primary":
-            marker = ">" if is_selected else " "
-            if row.get("kind") in ("window", "zero"):
-                state_text = row.get("agent") or ""
-            else:
-                symbol, state_key = render.primary_badge(row)
-                state_text = f"{symbol} {t(state_key)}"
-                duration = _duration_text(tower, row)
-                if duration and not narrow:
-                    state_text = f"{state_text} · {duration}"
-            indent = "  " if tower.navigator_mode and row.get("kind") == "pane" else ""
-            prefix = f"{indent}{marker} "
+            parts = render.list_row_parts(row, width, t, _duration_text(tower, row))
+            prefix = parts["guide"] or (" " if not is_selected else "")
+            project_text = parts["project"] if row.get("kind") != "zero" else _project_text(row)
+            if row.get("kind") == "zero":
+                project_text = _project_text(row)
+            state_text = parts["badge"]
+            agent_text = parts["agent"]
             state_width = render.display_width(state_text)
-            project_budget = max(8, width - render.display_width(prefix) - state_width - 4)
-            if not narrow:
-                project_budget = max(10, agent_x - render.display_width(prefix) - 2)
-            text = render.truncate_to_width(_project_text(row), project_budget)
+            prefix_width = render.display_width(prefix)
+            project_budget = max(8, width - prefix_width - state_width - 4)
+            if not narrow and agent_text:
+                project_budget = max(10, agent_x - prefix_width - 2)
+            text = render.truncate_to_width(project_text, project_budget)
 
             safe_add(stdscr, y, 0, prefix, base_attr if is_selected else curses.A_BOLD)
-            safe_add(stdscr, y, render.display_width(prefix), text, base_attr if is_selected else 0)
+            safe_add(stdscr, y, prefix_width, text, base_attr if is_selected else 0)
 
-            if not narrow and row.get("kind") not in ("window", "zero"):
-                safe_add(stdscr, y, agent_x, (row.get("agent") or "")[:14], base_attr)
-            state_x = max(render.display_width(prefix) + render.display_width(text) + 2, width - state_width - 2)
-            if state_x > render.display_width(prefix) + 1:
-                if row.get("kind") in ("window", "zero"):
+            if agent_text:
+                safe_add(stdscr, y, max(prefix_width + render.display_width(text) + 2, agent_x), agent_text[:14], base_attr)
+            state_x = max(prefix_width + render.display_width(text) + 2, width - state_width - 2)
+            if state_text and state_x > prefix_width + 1:
+                if row.get("kind") == "window":
                     status_attr_here = base_attr if is_selected else curses.A_DIM
                 else:
                     status_attr_here = base_attr if is_selected else status_attr(row.get("status") or "")
@@ -1046,7 +1102,8 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
 
         elif p["kind"] == "activity":
             attr = base_attr if is_selected else curses.A_DIM
-            safe_add(stdscr, y, 4, row["activity_text"], attr)
+            indent = render.display_width(row.get("guide") or "") or 4
+            safe_add(stdscr, y, indent, row["activity_text"], attr)
 
     # -- detail panel ------------------------------------------------------
 
@@ -1187,6 +1244,16 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
 
         if is_escape(key) and tower.filter_text:
             tower.clear_filter()
+            draw(stdscr, tower, remote_state=remote_state)
+            continue
+
+        if key == curses.KEY_LEFT:
+            tower.collapse_selected()
+            draw(stdscr, tower, remote_state=remote_state)
+            continue
+
+        if key == curses.KEY_RIGHT:
+            tower.expand_selected()
             draw(stdscr, tower, remote_state=remote_state)
             continue
 

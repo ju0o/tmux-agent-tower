@@ -13,6 +13,17 @@ bumped until this merges.
   the previous label, including one the launcher just replaced. A label
   the user sets on the current pane still wins over detection. Phone and
   PC share that check.
+* **Default tree** -- the list is host, then window, then pane. A window
+  row is selectable: Enter opens Window Control and does not focus the
+  pane. `←` / `→` only hide or show that window's rows. `A` shows panes
+  that need attention and `A` again restores the same tree. `V` returns
+  to the tree. Search keeps the matching pane's host and window.
+* **Result copy** -- `Y` in Pane Control copies the extracted final
+  body to the system clipboard. The live transcript is not copied.
+  WSL uses `clip.exe` with UTF-16 on stdin. If that tool is missing,
+  the text goes to a tmux buffer and the result stays unread. `S`
+  shows the same body and marks it read. The phone still uses
+  `navigator.clipboard`.
 * **tmux structure** -- local Tower can create a window or pane, move a
   pane, break it into a new window, change one window's layout, and
   rename or close by `window_id` / `pane_id`. Left/right is `split-window

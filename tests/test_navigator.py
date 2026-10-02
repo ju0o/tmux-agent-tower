@@ -9,7 +9,20 @@ from tmux_agent_tower.tmux import keybind, navigation
 from tmux_agent_tower.ui.tower import navigator_rows
 
 
-def _pane(pane_id, window_index, window_name, pane_index="0", active=False, session="0", window_id=""):
+def _pane(
+    pane_id,
+    window_index,
+    window_name,
+    pane_index="0",
+    active=False,
+    session="0",
+    window_id="",
+    project="",
+    agent="Claude",
+    status="IDLE",
+    host="MAINPC",
+    remote=False,
+):
     return {
         "kind": "pane",
         "key": pane_id,
@@ -20,11 +33,11 @@ def _pane(pane_id, window_index, window_name, pane_index="0", active=False, sess
         "pane_index": pane_index,
         "pane_id": pane_id,
         "pane_active": active,
-        "host": "MAINPC",
-        "project": pane_id,
-        "agent": "Claude",
-        "status": "IDLE",
-        "remote": False,
+        "host": host,
+        "project": project or pane_id,
+        "agent": agent,
+        "status": status,
+        "remote": remote,
     }
 
 
@@ -35,13 +48,26 @@ def test_navigator_windows_are_selectable_rows():
             _pane("%44", "0", "main", pane_index="1", window_id="@1"),
             _pane("%51", "1", "agents", active=True, window_id="@2"),
             _pane("%52", "1", "agents", pane_index="1", window_id="@2"),
-            {"key": "asus:%43", "remote": True, "pane_id": "%43", "host": "ASUS", "session": "0", "window_index": "2", "window_name": "ssh"},
+            {
+                "key": "asus:%43",
+                "remote": True,
+                "pane_id": "%43",
+                "host": "ASUS",
+                "session": "0",
+                "window_index": "0",
+                "window_name": "work",
+                "project": "JuAgentEconomy",
+                "agent": "Codex",
+                "status": "IDLE",
+            },
         ]
     )
-    assert [row["kind"] for row in rows] == ["window", "pane", "pane", "window", "pane", "pane", "pane"]
-    assert [row["key"] for row in rows if row["kind"] == "window"] == ["@1", "@2"]
+    assert [row["kind"] for row in rows] == [
+        "window", "pane", "pane", "window", "pane", "pane", "window", "pane",
+    ]
+    assert [row["key"] for row in rows if row["kind"] == "window"] == ["@1", "@2", "ASUS:0"]
     assert [row["pane_id"] for row in rows if row["kind"] == "pane"] == ["%6", "%44", "%51", "%52", "%43"]
-    assert rows[1]["nav_group"] == rows[2]["nav_group"] == "win:0:@1"
+    assert rows[1]["nav_group"] == rows[2]["nav_group"] == "win:MAINPC:0:@1"
     assert "main" in rows[0]["project"]
     assert rows[-1]["remote"] is True
 
@@ -77,7 +103,7 @@ def test_navigator_visual_draws_a_window_divider_once_per_group(tmp_path, monkey
     assert [row["kind"] for row in tower.visible_rows] == ["window", "pane", "pane", "window", "pane"]
     assert [row.get("pane_id") for row in tower.visible_rows if row["kind"] == "pane"] == ["%6", "%44", "%51"]
     headers = [(item["host"], item.get("level")) for item in tower.visual if item["type"] == "header"]
-    assert headers == [("Session 0", None)]
+    assert headers == [("MAINPC", None)]
     tower.selected = len(tower.visible_rows) - 1
     tower.move_down()
     assert tower.selected == 0
@@ -91,7 +117,7 @@ def test_renamed_window_keeps_its_id():
     assert before[0]["kind"] == "window"
     assert before[0]["key"] == after[0]["key"] == "@4"
     assert before[1]["pane_id"] == after[1]["pane_id"] == "%44"
-    assert before[0]["nav_group"] == after[0]["nav_group"] == "win:0:@4"
+    assert before[0]["nav_group"] == after[0]["nav_group"] == "win:MAINPC:0:@4"
     assert "renamed" in after[0]["project"]
 
 
@@ -173,3 +199,143 @@ def test_smart_w_binding_does_not_look_up_a_window_name():
     assert args[-1] == "choose-tree -Zw"
     assert "window_name" not in text
     assert "choose-tree" in text
+
+
+def test_tree_is_the_default_and_attention_does_not_reorder_it(tmp_path, monkeypatch):
+    from tmux_agent_tower.ui import tower as tower_module
+
+    monkeypatch.setattr(tower_module, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(tower_module, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(tower_module, "HOST_FILE", tmp_path / "config" / "host")
+    monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
+    tower = tower_module.Tower("0", own_pane_id="%6")
+    assert tower.navigator_mode is True
+    waiting = _pane("%6", "0", "main", window_id="@1", project="JuPortal", status="IDLE")
+    waiting["attention"] = "approval_required"
+    idle = _pane("%7", "1", "agents", window_id="@2", project="Other", status="IDLE")
+    tower.rows = [waiting, idle]
+    tower._apply_filter()
+    tree_keys = [row["key"] for row in tower.visible_rows]
+    assert tree_keys[0] == "@1"
+    assert all(row["kind"] != "window" or row["key"] in ("@1", "@2") for row in tower.visible_rows)
+
+    tower.toggle_attention()
+    assert [row["kind"] for row in tower.visible_rows] == ["pane", "pane"]
+    assert [row["key"] for row in tower.visible_rows] == ["%6", "%7"]
+    tower.toggle_attention()
+    assert [row["key"] for row in tower.visible_rows] == tree_keys
+
+
+def test_collapse_hides_children_and_search_keeps_the_window(tmp_path, monkeypatch):
+    from tmux_agent_tower.control.actions import enter_intent
+    from tmux_agent_tower.ui import render, tower as tower_module
+
+    monkeypatch.setattr(tower_module, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(tower_module, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(tower_module, "HOST_FILE", tmp_path / "config" / "host")
+    monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
+    tower = tower_module.Tower("0")
+    tower.rows = [
+        _pane("%1", "0", "main", window_id="@1", project="Other"),
+        _pane("%2", "1", "agents", window_id="@2", project="JuPortal", agent="Cursor"),
+        _pane("%3", "1", "agents", pane_index="1", window_id="@2", project="Marketplace", agent="Codex"),
+    ]
+    tower._apply_filter()
+    assert enter_intent(tower.visible_rows[0]) == "window"
+    assert tower.control_key() == "@1"
+    tower.collapse_selected()
+    assert [row["key"] for row in tower.visible_rows if row["kind"] == "pane"] == ["%2", "%3"]
+    assert tower.visible_rows[0]["collapsed"] is True
+    tower.expand_selected()
+    assert "%1" in [row.get("pane_id") for row in tower.visible_rows]
+
+    tower.set_filter("JuPortal")
+    shown = tower.visible_rows
+    assert [row["key"] for row in shown] == ["@2", "%2"]
+    assert shown[0]["host"] == "MAINPC"
+    assert "%3" not in [row.get("pane_id") for row in shown]
+    tower.set_filter("agents")
+    assert {row.get("pane_id") for row in tower.visible_rows if row["kind"] == "pane"} == {"%2", "%3"}
+
+    summary = render.window_summary(
+        [
+            {"pane_id": "%1", "attention": "approval_required", "status": "IDLE"},
+            {"pane_id": "%2", "result_state": "ready", "status": "IDLE"},
+            {"pane_id": "%3", "status": "WORKING"},
+            {"pane_id": "%4", "status": "IDLE"},
+        ]
+    )
+    assert summary == "!1 ✓1 ●1"
+    narrow = render.list_row_parts(
+        {"kind": "pane", "project": "쥬포탈", "agent": "Cursor", "status": "WORKING", "pane_id": "%2", "path": "/tmp/secret"},
+        58,
+        lambda key: "작업 중",
+        "3m",
+    )
+    wide = render.list_row_parts(
+        {"kind": "pane", "project": "쥬포탈", "agent": "Cursor", "status": "WORKING", "pane_id": "%2", "guide": "│  ├─ "},
+        100,
+        lambda key: "작업 중",
+        "3m",
+    )
+    assert narrow["agent"] == ""
+    assert "3m" not in narrow["badge"]
+    assert "%2" not in "".join(narrow.values())
+    assert "/tmp/secret" not in "".join(narrow.values())
+    assert wide["agent"] == "Cursor"
+    assert "3m" in wide["badge"]
+    assert render.display_width("쥬포탈") == 6
+    assert render.display_width("├─ ") == render.display_width("└─ ")
+
+
+def test_live_session_tree_is_readable_and_does_not_focus():
+    import subprocess
+
+    from tmux_agent_tower.control.actions import enter_intent
+
+    def tmux(*args):
+        return subprocess.run(["tmux", *args], capture_output=True, text=True, check=False)
+
+    if tmux("-V").returncode != 0:
+        return
+    before = tmux("list-windows", "-t", "0", "-F", "#{window_id}")
+    if before.returncode != 0:
+        return
+    listed = tmux(
+        "list-panes",
+        "-s",
+        "-t",
+        "0",
+        "-F",
+        "#{window_id}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{pane_index}\t#{pane_current_command}",
+    )
+    panes = []
+    for line in listed.stdout.splitlines():
+        window_id, index, name, pane_id, pane_index, command = line.split("\t")
+        panes.append(
+            {
+                "kind": "pane",
+                "key": pane_id,
+                "pane_id": pane_id,
+                "session": "0",
+                "window_id": window_id,
+                "window_index": index,
+                "window_name": name,
+                "pane_index": pane_index,
+                "host": "MAINPC",
+                "project": command or pane_id,
+                "agent": "Shell",
+                "status": "IDLE",
+                "remote": False,
+            }
+        )
+    rows = navigator_rows(panes)
+    windows = [row for row in rows if row["kind"] == "window"]
+    assert windows
+    assert all(row["window_id"].startswith("@") for row in windows)
+    assert enter_intent(windows[0]) == "window"
+    pane = next(row for row in rows if row["kind"] == "pane")
+    assert enter_intent(pane) == "control"
+    assert pane["guide"]
+    after = tmux("list-windows", "-t", "0", "-F", "#{window_id}")
+    assert after.stdout == before.stdout

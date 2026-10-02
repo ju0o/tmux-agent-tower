@@ -9,6 +9,7 @@ from __future__ import annotations
 import curses
 import time
 
+from ..clipboard import copy_text
 from ..control.actions import (
     close_choices,
     close_notice_lines,
@@ -74,6 +75,9 @@ def open_control_view(stdscr, tower, pane_key: str) -> None:
                 show_result = False
                 continue
             if matches_letter(key, "y"):
+                notice = _copy_result(tower, pane_key)
+                continue
+            if matches_letter(key, "s"):
                 notice, show_result = _show_result(tower, pane_key)
                 continue
             if matches_letter(key, "e"):
@@ -191,6 +195,7 @@ def _draw_actions(stdscr, y: int, row: dict) -> None:
         "A": t("control.key_approve"),
         "N": t("control.key_reject"),
         "Y": t("control.key_result"),
+        "S": t("control.key_show"),
         "E": t("control.key_edit"),
         "G": t("control.key_go"),
         "X": t("control.key_close"),
@@ -282,14 +287,44 @@ def _prompt(stdscr, tower, row: dict) -> str:
     return t("control.prompt_sent")
 
 
+def _mark_shown(tower, pane_key: str, payload: dict) -> None:
+    tracker = getattr(tower, "results", None)
+    fingerprint = payload.get("fingerprint") or ""
+    if tracker is not None and fingerprint:
+        tracker.mark_read(pane_key, fingerprint)
+
+
+def _copy_result(tower, pane_key: str) -> str:
+    """Copy the extracted final body. The live screen is not included.
+
+    A tmux-buffer fallback is not a successful clipboard copy, so it
+    does not mark the result read.
+    """
+
+    ok, reason, payload = get_result(tower, pane_key)
+    if not ok:
+        return reason or ""
+    text = payload.get("text") or ""
+    if not text:
+        return t("control.no_result")
+    outcome = copy_text(text)
+    if outcome.clipboard:
+        _mark_shown(tower, pane_key, payload)
+        return t("control.copied")
+    if outcome.buffer:
+        return t("control.copied_buffer")
+    return t("control.copy_failed")
+
+
 def _show_result(tower, pane_key: str) -> tuple:
-    """Show the extracted body. Clipboard copy is a later slice."""
+    """Show the extracted body. A visible body is then marked read."""
 
     ok, reason, payload = get_result(tower, pane_key)
     if not ok:
         return reason or "", False
     if not payload.get("text"):
         return t("control.no_result"), False
+    _mark_shown(tower, pane_key, payload)
     return t("control.result_shown"), True
 
 

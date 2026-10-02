@@ -194,6 +194,7 @@ def control_actions(row: Dict) -> List[Tuple[str, bool]]:
     actions.extend(
         [
             ("Y", True),
+            ("S", True),
             ("E", True),
             ("G", local_pane),
             ("X", local_pane),
@@ -355,6 +356,8 @@ def row_matches_filter(row: Dict, filter_text: str) -> bool:
         row.get("title_line") or "",
         row.get("path") or "",
         row.get("host") or "",
+        row.get("window_name") or "",
+        str(row.get("window_index") if row.get("window_index") is not None else ""),
     )
 
     return any(needle in h.lower() for h in haystacks)
@@ -398,6 +401,55 @@ def sort_by_attention(rows: List[Dict]) -> List[Dict]:
     """
 
     return sorted(rows, key=card_rank)
+
+
+_SUMMARY_ORDER = ("!", "?", "✓", "●", "◇")
+
+
+def window_summary(panes: Sequence[Dict]) -> str:
+    """Non-zero marks inside one window. Idle is omitted so a quiet
+    window stays a name. Each pane contributes its one primary badge.
+    """
+
+    counts = {symbol: 0 for symbol in _SUMMARY_ORDER}
+    for pane in panes:
+        if not pane.get("pane_id"):
+            continue
+        symbol, _key = primary_badge(pane)
+        if symbol in counts:
+            counts[symbol] += 1
+    return " ".join(f"{symbol}{counts[symbol]}" for symbol in _SUMMARY_ORDER if counts[symbol])
+
+
+def list_row_parts(row: Dict, width: int, badge_text: Callable[[str], str], duration: str = "") -> Dict[str, str]:
+    """What one tree row is allowed to show.
+
+    A pane row is the project, and on a wide terminal the agent, primary
+    badge, and duration. Pane id, cwd, and identity source stay off this
+    line. A narrow window row is the name only.
+    """
+
+    narrow = use_narrow_layout(width)
+    guide = row.get("guide") or ""
+    if row.get("kind") == "window":
+        return {
+            "guide": guide,
+            "project": row.get("project") or "",
+            "agent": "",
+            "badge": "" if narrow else (row.get("summary") or ""),
+        }
+    if row.get("kind") == "zero":
+        return {"guide": "", "project": row.get("project") or "", "agent": "", "badge": ""}
+    symbol, key = primary_badge(row)
+    badge = f"{symbol} {badge_text(key)}"
+    if duration and not narrow:
+        badge = f"{badge} · {duration}"
+    return {
+        "guide": guide,
+        "project": row.get("project") or "",
+        "agent": "" if narrow else (row.get("agent") or ""),
+        "badge": badge,
+    }
 
 
 def row_line_count(row: Dict, narrow: bool) -> int:

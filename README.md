@@ -239,13 +239,14 @@ the next time you press it. `tower keys restore` removes only that block
 and puts the recorded `w` command back. `tower --focus` still only
 navigates; it never starts a new TUI.
 
-While Tower is open, `V` switches the list to the tmux tree. A session
-is a divider. A window is a row: Enter opens Window Control (add a pane,
-rename, layout, manage panes, close) and does not move the client.
-Enter on a pane still opens Pane Control. Space opens the same actions
-without a shortcut. Closing a window lists each pane's project, agent,
-and state, and cancel is the default. The project/agent list stays
-the default.
+The list is a tree: host, then window, then pane. A window row shows
+its name and a short count of anything that is not idle. Enter on that
+row opens Window Control and does not move the client. Enter on a pane
+opens Pane Control. `←` and `→` fold that window in the list only.
+`A` replaces the tree with the panes that need attention, and `A`
+again puts the same tree back. `V` also returns to the tree. In Pane
+Control, `Y` copies the extracted final result. `S` shows that same
+text. The live screen is not what gets copied.
 
 `+` opens the create menu: a new task (project, agent, and whether it
 goes in a new window, the current window, or a window you pick), a new

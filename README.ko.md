@@ -129,13 +129,17 @@ tower --focus
 `Ctrl+b w` 단축키가 하는 일이 바로 이것입니다 -- 또 다른 TUI를 띄우는 게
 아니라 단순 이동 명령이라서 키에 바인딩해도 안전합니다.
 
+기본 화면은 Host, Window, Pane 순서의 트리입니다. Window 줄에서 Enter는
+그 Window 제어이고, 클라이언트를 옮기지 않습니다.
+
 | 키 | 동작 |
 |---|---|
 | `↑` / `↓` (또는 `j`/`k`) | 이동 |
-| `Enter` | Pane이면 Pane Control, `V`에서 Window면 Window Control. 클라이언트는 움직이지 않음 |
+| `Enter` | Window면 Window Control, Pane이면 Pane Control. 클라이언트는 움직이지 않음 |
+| `←` / `→` | 선택한 Window의 하위만 접거나 펼침 |
 | `Space` | 선택한 대상의 작업 메뉴 |
 | `+` | 만들기: 새 작업, Window, Pane, Workspace |
-| `V` | 세션 / Window / Pane 구조. Window에서 Enter는 그 Window 제어 |
+| `Y` / `S` | Pane Control에서 최종 Result 복사 / 결과 보기 |
 | `E` | 선택한 pane의 프로젝트 이름/에이전트 이름/Pane 이름 편집 |
 | `N` | 프로젝트 1개 추가 (Workspace Launcher, 단일) |
 | `W` | 새 작업공간 시작 (Workspace Launcher, 다중) |
