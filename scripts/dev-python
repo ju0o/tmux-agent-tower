@@ -1,0 +1,12 @@
+#!/bin/sh
+# Run Python against THIS checkout's src.
+# Another checkout's editable install is ignored because this src is first
+# on PYTHONPATH. A .venv is used only when it lives inside this checkout.
+set -e
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+export TOWER_DEV_ROOT="$ROOT"
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+if [ -x "$ROOT/.venv/bin/python" ]; then
+  exec "$ROOT/.venv/bin/python" "$@"
+fi
+exec python3 "$@"

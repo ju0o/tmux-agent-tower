@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tmux-agent-tower"
-version = "0.2.2"
+version = "0.3.0rc1"
 description = "A local-first TUI control tower for monitoring coding agents across tmux panes."
 readme = "README.md"
 license = { text = "MIT" }
@@ -42,6 +42,9 @@ tower = "tmux_agent_tower.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+tmux_agent_tower = ["resources/harnesses/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

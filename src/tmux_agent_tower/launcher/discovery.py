@@ -94,8 +94,8 @@ def _recent_file(state_dir: Path, host_key: str) -> Path:
 
 
 def load_recent(state_dir: Path, host_key: str) -> List[str]:
-    """Recent projects are scoped per host: a MAINPC path recorded here
-    must never bleed into ASUS's list (or vice versa), since a path from
+    """Recent projects are scoped per host: a workstation-a path recorded here
+    must never bleed into workstation-b's list (or vice versa), since a path from
     one host's filesystem is almost certainly meaningless on the other.
     """
 

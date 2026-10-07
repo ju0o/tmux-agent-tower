@@ -23,8 +23,13 @@ from .base import (
     AgentAdapter,
     AdapterResult,
     PaneContext,
+    ResultCandidate,
     BRAILLE_SPINNER_CHARS,
-    looks_like_generic_waiting,
+    count_prompt_echoes,
+    prompt_head,
+    drop_scrolled_user_prompt,
+    prose_body,
+    result_fingerprint,
     title_has_spinner,
 )
 
@@ -47,6 +52,19 @@ _NOT_AN_ACTIVITY_RE = re.compile(r"^(working\s*\(|finished\b)", re.IGNORECASE)
 # still running the same box instead reads "tab to queue message", which is
 # deliberately NOT treated as an idle signal.
 _IDLE_HINT_RE = re.compile(r"ask codex to do anything|for agents.*for shortcuts", re.IGNORECASE)
+_ALLOW_RE = re.compile(r"allow this command to run\?", re.IGNORECASE)
+_WOULD_RUN_RE = re.compile(r"would you like to run the following command\?", re.IGNORECASE)
+_YES_PROCEED_RE = re.compile(r"1\.\s+yes,\s+proceed\b", re.IGNORECASE)
+_TRUST_RE = re.compile(r"trust this folder\?", re.IGNORECASE)
+_OPTION_YES_RE = re.compile(r"^\s*[›>]?\s*1\.\s+yes\b", re.IGNORECASE | re.MULTILINE)
+_OPTION_TRUST_RE = re.compile(r"^\s*[›>]?\s*1\.\s+trust\b", re.IGNORECASE | re.MULTILINE)
+_OPTION_NO_RE = re.compile(r"^\s*[›>]?\s*3\.\s+no\b", re.IGNORECASE | re.MULTILINE)
+_USER_LINE_RE = re.compile(r"^\s*[›>]\s+\S")
+_WORKED_FOR_RE = re.compile(r"\bworked for\b", re.IGNORECASE)
+# Live trust widget (Codex CLI 0.159): the digit does not select the row.
+# The footer is the key binding: "enter continue · esc quit".
+_ENTER_CONTINUE_RE = re.compile(r"enter continue", re.IGNORECASE)
+_ESC_QUIT_RE = re.compile(r"esc quit", re.IGNORECASE)
 
 
 class CodexAdapter(AgentAdapter):
@@ -55,18 +73,159 @@ class CodexAdapter(AgentAdapter):
     title_hints = ("codex",)
 
     def classify(self, ctx: PaneContext) -> AdapterResult:
-        tail = ctx.tail(20)
-
-        if _WORKING_RE.search(tail) or title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS):
-            return AdapterResult("WORKING", "working-line-or-spinner")
-
-        if looks_like_generic_waiting(tail):
-            return AdapterResult("WAITING", "approval-prompt")
-
-        if _IDLE_HINT_RE.search(tail):
-            return AdapterResult("IDLE", "queue-message-hint")
-
+        # The current widget wins. An older "Working" line or a stale
+        # title spinner above an idle prompt is not this turn.
+        widget = self._widget(ctx)
+        idle_at = self._last(widget, _IDLE_HINT_RE, _WORKED_FOR_RE)
+        work_at = self._last(widget, _WORKING_RE)
+        if idle_at >= 0 and idle_at > work_at:
+            return AdapterResult("IDLE", "idle-widget")
+        if work_at >= 0:
+            return AdapterResult("WORKING", "working-widget")
+        if title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS):
+            return AdapterResult("WORKING", "title-spinner")
         return AdapterResult(None)
+
+    @staticmethod
+    def _last(text: str, *patterns) -> int:
+        found = -1
+        for pattern in patterns:
+            for match in pattern.finditer(text):
+                found = max(found, match.start())
+        return found
+
+    def _widget(self, ctx: PaneContext) -> str:
+        """The current bottom widget, not older scrollback above it.
+
+        Eighteen lines covers a command preview between the question and
+        the numbered choices. Idle and working chrome in that window still
+        suppress a menu that has already scrolled away.
+        """
+
+        return "\n".join(ctx.lines[-18:])
+
+    def detect_attention(self, ctx: PaneContext) -> str:
+        widget = self._widget(ctx)
+        command_menu = _OPTION_YES_RE.search(widget) and (
+            _ALLOW_RE.search(widget) or _WOULD_RUN_RE.search(widget) or _YES_PROCEED_RE.search(widget)
+        )
+        trust_menu = _TRUST_RE.search(widget) and _OPTION_TRUST_RE.search(widget)
+        approval_at = -1
+        if command_menu:
+            approval_at = max(
+                self._last(widget, _ALLOW_RE, _WOULD_RUN_RE, _YES_PROCEED_RE),
+                self._last(widget, _OPTION_YES_RE),
+            )
+        if trust_menu:
+            approval_at = max(approval_at, self._last(widget, _TRUST_RE, _OPTION_TRUST_RE))
+
+        lines = widget.split("\n")
+        input_at = -1
+        for index in range(len(lines) - 1, -1, -1):
+            line = lines[index]
+            if line.strip():
+                if line.strip().endswith("?") and not _USER_LINE_RE.match(line):
+                    input_at = index
+                break
+
+        attention_at = max(approval_at, input_at)
+        current_at = max(
+            self._last(widget, _WORKING_RE),
+            self._last(widget, _IDLE_HINT_RE, _WORKED_FOR_RE),
+        )
+        if attention_at < 0 or current_at > attention_at:
+            return "none"
+        if approval_at >= input_at:
+            return "approval_required"
+        if input_at >= 0:
+            return "input_required"
+        return "none"
+
+    def extract_attention_prompt(self, ctx: PaneContext) -> str:
+        from ..detection.attention import clamp_prompt
+
+        if self.detect_attention(ctx) == "none":
+            return ""
+        widget = self._widget(ctx)
+        if _TRUST_RE.search(widget):
+            return clamp_prompt("Trust this folder?")
+        if _WOULD_RUN_RE.search(widget):
+            return clamp_prompt("Would you like to run the following command?")
+        if _ALLOW_RE.search(widget) or _YES_PROCEED_RE.search(widget):
+            return clamp_prompt("Allow this command to run?")
+        for line in reversed(widget.split("\n")):
+            stripped = line.strip()
+            if stripped.endswith("?"):
+                return clamp_prompt(stripped)
+        return ""
+
+    def approve(self, ctx: PaneContext) -> Optional[str]:
+        if self.detect_attention(ctx) != "approval_required":
+            return None
+        widget = self._widget(ctx)
+        if _OPTION_YES_RE.search(widget) and (
+            _ALLOW_RE.search(widget) or _WOULD_RUN_RE.search(widget) or _YES_PROCEED_RE.search(widget)
+        ):
+            return "1"
+        # Trust: only the footer binding. A bare "1" was sent at this widget
+        # and the menu did not move.
+        if _TRUST_RE.search(widget) and _ENTER_CONTINUE_RE.search(widget):
+            return "Enter"
+        return None
+
+    def detect_interaction(self, ctx: PaneContext):
+        from ..detection.interaction import InteractionOption, approval, text_question, unknown
+
+        attention = self.detect_attention(ctx)
+        if attention == "none":
+            return None
+        widget = self._widget(ctx)
+        prompt = self.extract_attention_prompt(ctx)
+        if attention == "input_required":
+            return text_question(prompt, "codex-question")
+        command = _ALLOW_RE.search(widget) or _WOULD_RUN_RE.search(widget) or _YES_PROCEED_RE.search(widget)
+        if command and _OPTION_YES_RE.search(widget):
+            options = [InteractionOption("예", "1")]
+            if _OPTION_NO_RE.search(widget):
+                options.append(InteractionOption("아니오", "3"))
+            return approval(prompt, options, "codex-command-menu")
+        if _TRUST_RE.search(widget) and _ENTER_CONTINUE_RE.search(widget):
+            options = [InteractionOption("진행", "Enter")]
+            if _ESC_QUIT_RE.search(widget):
+                options.append(InteractionOption("취소", "Escape"))
+            return approval(prompt, options, "codex-trust")
+        if attention == "approval_required":
+            return unknown(prompt, "codex-unmapped")
+        return None
+
+    def reject(self, ctx: PaneContext) -> Optional[str]:
+        if self.detect_attention(ctx) != "approval_required":
+            return None
+        widget = self._widget(ctx)
+        if _OPTION_NO_RE.search(widget) and (
+            _ALLOW_RE.search(widget) or _WOULD_RUN_RE.search(widget) or _YES_PROCEED_RE.search(widget)
+        ):
+            return "3"
+        if _TRUST_RE.search(widget) and _ESC_QUIT_RE.search(widget):
+            return "Escape"
+        return None
+
+    def confirm_submitted(self, before: PaneContext, after: PaneContext, text: str) -> Optional[bool]:
+        # Measured on Codex 0.159: a bracketed paste leaves "› <text>" in the
+        # composer with no idle hint. Once Enter is taken the same line
+        # stays as the transcript echo and either a Working line or the
+        # finished "Worked for" + idle hint follows.
+        was_working = self.detect_execution(before) == "WORKING"
+        is_working = self.detect_execution(after) == "WORKING"
+        if is_working and not was_working:
+            return True
+        echoed = count_prompt_echoes(after.lines, _USER_LINE_RE, text) > count_prompt_echoes(
+            before.lines, _USER_LINE_RE, text
+        )
+        tail = after.tail(30)
+        if echoed and (_IDLE_HINT_RE.search(tail) or _WORKED_FOR_RE.search(tail)):
+            return True
+        return None
 
     def extract_activity(self, ctx: PaneContext) -> Optional[Activity]:
         # Bullets are only trustworthy as "current activity" while there is
@@ -98,3 +257,50 @@ class CodexAdapter(AgentAdapter):
                 return Activity(text=text, confidence="high", source="agent-output")
 
         return Activity(text=bullets[-1], confidence="medium", source="agent-output")
+
+    def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        # A finished turn shows "Worked for ..." and the idle prompt.
+        # "Finished" alone, or the same words inside a user prompt, is
+        # not that evidence. A Working line means this screen is not final.
+        lines = list(ctx.lines)
+        if not _IDLE_HINT_RE.search(ctx.tail(15)):
+            return None
+        worked = [i for i, line in enumerate(lines) if re.search(r"worked for", line, re.IGNORECASE)]
+        if not worked:
+            return None
+        end = worked[-1]
+        after_completion = "\n".join(lines[end + 1:])
+        if _TRUST_RE.search(after_completion) and _OPTION_TRUST_RE.search(after_completion):
+            return None
+        # A Working line from an older turn is above this marker. A new
+        # turn that is still running sits below it, or in the title.
+        if _WORKING_RE.search("\n".join(lines[end:])):
+            return None
+        # A stale title spinner must not hide a finished idle widget.
+        if title_has_spinner(ctx.title, BRAILLE_SPINNER_CHARS) and not _IDLE_HINT_RE.search(ctx.tail(15)):
+            return None
+        floor = worked[-2] + 1 if len(worked) > 1 else 0
+        start = floor
+        found_user = False
+        for i in range(end - 1, floor - 1, -1):
+            stripped = lines[i].strip()
+            if stripped.startswith("›") and "ask codex" not in stripped.lower():
+                start = i + 1
+                found_user = True
+                break
+        bounded = found_user or len(worked) > 1
+        if not bounded:
+            # No previous turn marker and no user prompt. Do not treat the
+            # whole scrollback as this answer. A short slice that never
+            # reaches the turn start is a fragment, not the finished body.
+            start = max(start, end - 60)
+        text = prose_body(drop_scrolled_user_prompt(lines[start:end]))
+        if text is None:
+            return None
+        confidence = "high" if bounded else "partial"
+        return ResultCandidate(
+            text=text,
+            fingerprint=result_fingerprint(text),
+            confidence=confidence,
+            complete=bounded,
+        )

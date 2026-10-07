@@ -14,16 +14,12 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from ..i18n import t
-from ..launcher.config import AGENT_LAUNCH_ORDER, load_config
+from ..launcher.config import AGENT_LAUNCH_ORDER
 from ..launcher.discovery import (
-    find_git_projects,
-    find_remote_git_projects,
     load_recent,
-    record_recent,
     manual_path_entry,
     ProjectEntry,
 )
-from ..launcher.spawn import SpawnTarget, spawn_local, spawn_remote
 from .widgets import is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add, show_message_screen
 
 LAYOUT_CYCLE = ["tiled", "even-horizontal", "even-vertical"]
@@ -212,58 +208,8 @@ def _run_preview(stdscr, host_label: str, rows: List[List[str]]) -> Optional[Tup
 
 
 def run_launcher(stdscr, tower, multi: bool, state_dir: Path) -> None:
-    host_pick = _pick_host(stdscr, tower)
-    if host_pick is None:
-        return
-    host_key, host_label, is_remote = host_pick
+    """N and W both start by choosing a host, then a workspace path."""
 
-    if is_remote:
-        if not _check_remote_reachable(host_key):
-            show_message_screen(stdscr, t("wizard.remote_unreachable", host=host_label), [])
-            return
-        discovered = find_remote_git_projects(host_key)
-        validate = lambda p: _check_remote_path_exists(host_key, p)  # noqa: E731
-    else:
-        cfg = load_config()
-        roots = cfg["project_roots"]
-        discovered = find_git_projects(roots) if roots else []
-        validate = lambda p: Path(p).expanduser().is_dir()  # noqa: E731
+    from .workspace_browser import run_workspace_create
 
-    no_roots_hint = t("wizard.no_projects_found") if not discovered else None
-    projects = _pick_projects(stdscr, multi, state_dir, host_key, discovered, validate, no_roots_hint)
-
-    if not projects:
-        return
-
-    default_agent = _pick_agent(stdscr)
-    if default_agent is None:
-        return
-
-    rows: List[List[str]] = [[p.name, default_agent] for p in projects]
-    result = _run_preview(stdscr, host_label, rows)
-    if result is None:
-        return
-    final_rows, layout = result
-
-    cfg = load_config()
-    targets = [
-        SpawnTarget(project_path=p.path, project_name=p.name, agent_label=agent)
-        for p, (_, agent) in zip(projects, final_rows)
-    ]
-
-    if is_remote:
-        results = spawn_remote(host_key, host_label, targets, cfg["agents"], layout=layout)
-    else:
-        results = spawn_local(tower.session, host_label, targets, cfg["agents"], layout=layout)
-
-    for p in projects:
-        record_recent(state_dir, host_key, p.path)
-
-    result_lines = []
-    for r in results:
-        if r.ok:
-            result_lines.append(f"{r.target.project_name} {t('wizard.result_ok_suffix', agent=r.target.agent_label)}")
-        else:
-            result_lines.append(f"{r.target.project_name} {t('wizard.result_fail_suffix', detail=r.detail)}")
-
-    show_message_screen(stdscr, t("wizard.result_title"), result_lines)
+    run_workspace_create(stdscr, tower, state_dir, multi=multi)
