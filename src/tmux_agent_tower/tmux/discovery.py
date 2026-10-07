@@ -65,7 +65,9 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
         if not line:
             continue
 
-        parts = line.split(FIELD_SEP)
+        # tmux 3.4 escapes control characters in format output as octal text;
+        # tmux 3.6 emits the unit separator byte directly.
+        parts = line.replace(r"\037", FIELD_SEP).split(FIELD_SEP)
         if len(parts) != _EXPECTED_FIELDS:
             continue
 

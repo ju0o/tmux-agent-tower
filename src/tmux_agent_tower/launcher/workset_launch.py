@@ -156,11 +156,15 @@ def launch_workset(
         member = plan[0]
         is_remote = plan[5]
         host_key = plan[3]
+        # pane_id/window_id identify the newly created tmux resource. The pane
+        # PID can change after the start command replaces its shell, so use the
+        # live row's PID for target identity and overrides below.
         row = next((item for item in tower.rows
                     if item.get("pane_id") == result.pane_id
-                    and str(item.get("pane_pid") or "") == result.pane_pid
+                    and (not result.window_id or item.get("window_id") == result.window_id)
                     and bool(item.get("remote")) == is_remote
-                    and (not is_remote or item.get("result_provider_host") == host_key)), None)
+                    and (item.get("result_provider_host") == host_key if is_remote
+                         else item.get("session") == result.session)), None)
         if row is None:
             _rollback_batches(tower, created_batches)
             raise WorksetLaunchError("시작된 작업을 목록에서 확인할 수 없어 이번 실행을 정리했습니다.")

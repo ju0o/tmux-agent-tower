@@ -100,3 +100,18 @@ def test_valid_pane_parsed_correctly(monkeypatch):
     assert row["window_name"] == "workstation-a"
     assert row["pane_index"] == "2"
     assert row["pane_active"] is True
+
+
+def test_tmux_34_octal_separator_is_parsed(monkeypatch):
+    line = r"sess\037@9\0370\037workstation-a\0372\037%9\037My Title\037codex\037/home/user\037555\0370\0371"
+    monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)
+    monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {})
+    monkeypatch.setattr(discovery.process_detection, "ppid_by_pid", lambda: {})
+    monkeypatch.setattr(discovery.capture, "capture_pane", lambda pane_id, lines=30: ["hello"])
+    monkeypatch.setattr(discovery, "discover_project", lambda path: "x")
+
+    rows = discovery.list_panes("sess")
+
+    assert len(rows) == 1
+    assert rows[0]["pane_id"] == "%9"
+    assert rows[0]["pane_pid"] == "555"

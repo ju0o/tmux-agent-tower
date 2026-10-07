@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 import uuid
+from dataclasses import replace
 
 import pytest
 
@@ -49,6 +50,29 @@ def isolated_tower(tmp_path, monkeypatch):
 
 def _agents():
     return {name: "sleep 600" for name in ("Codex", "Claude", "Cursor", "OpenCode", "Shell")}
+
+
+def test_launch_resolves_new_pane_after_its_process_id_changes(tmp_path, isolated_tower, monkeypatch):
+    from tmux_agent_tower.launcher import workset_launch
+
+    tower, state_dir, _base = isolated_tower
+    project = tmp_path / "project"
+    project.mkdir()
+    workset = new_workset(kind="saved_work", name="PID refresh", members=[
+        WorkMember("", "builder", "Shell", display_name="Builder",
+                   project_name="project", project_path=str(project)),
+    ])
+    real_spawn = workset_launch.spawn_local
+
+    def report_startup_pid(*args, **kwargs):
+        return [replace(row, pane_pid="999999999") for row in real_spawn(*args, **kwargs)]
+
+    monkeypatch.setattr(workset_launch, "spawn_local", report_startup_pid)
+    launched = launch_workset(tower, workset, state_dir, agents_cfg=_agents())
+
+    assert len(launched.members) == 1
+    assert launched.members[0]["pane_pid"] != "999999999"
+    assert launched.members[0]["role"] == "builder"
 
 
 def test_template_override_launches_role_group_and_duplicate_without_touching_existing_pane(tmp_path, isolated_tower):
