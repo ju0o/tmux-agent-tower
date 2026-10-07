@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..i18n import t
+from .perf_trace import event
 from .render import truncate_to_width
 
 
@@ -34,9 +35,23 @@ def read_key(stdscr):
     """
 
     try:
-        return stdscr.get_wch()
+        key = stdscr.get_wch()
     except curses.error:
         return -1
+    if key in (curses.KEY_UP, curses.KEY_DOWN, curses.KEY_LEFT, curses.KEY_RIGHT):
+        category = "Arrow"
+    elif is_enter(key):
+        category = "Enter"
+    elif is_escape(key):
+        category = "Esc"
+    elif key == " ":
+        category = "Space"
+    elif matches_letter(key, "j") or matches_letter(key, "k"):
+        category = "JK"
+    else:
+        category = "Other"
+    event("KEY_RECEIVED", key=category)
+    return key
 
 
 def is_enter(key) -> bool:
@@ -176,6 +191,7 @@ def run_list_picker(
     checked: Optional[Set[Any]] = None,
     extra_keys: Optional[Dict[str, str]] = None,
     footer_hint: str = "",
+    preamble: Optional[Sequence[str]] = None,
 ) -> PickResult:
     """Generic single/multi-select list picker with optional live search.
 
@@ -196,6 +212,7 @@ def run_list_picker(
     # instead of being treated as a hotkey, until Enter/Esc leaves it again
     # (the filter itself stays applied).
     editing_search = False
+    first_draw = True
 
     stdscr.timeout(-1)
 
@@ -210,6 +227,11 @@ def run_list_picker(
             safe_add(stdscr, 0, 2, title, curses.A_BOLD)
 
             row_y = 2
+            for line in preamble or []:
+                safe_add(stdscr, row_y, 2, line)
+                row_y += 1
+            if preamble:
+                row_y += 1
             if searchable:
                 cursor = "_" if editing_search else ""
                 safe_add(stdscr, row_y, 2, f'{t("wizard.search_label")} {search}{cursor}', curses.A_DIM)
@@ -242,6 +264,9 @@ def run_list_picker(
             safe_add(stdscr, hint_y, 2, footer_hint, curses.A_DIM)
 
             stdscr.refresh()
+            if first_draw:
+                event("FIRST_DRAW", view="menu")
+                first_draw = False
             key_code = read_key(stdscr)
 
             if editing_search:

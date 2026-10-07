@@ -1,5 +1,5 @@
   Folder access
-  /home/example/project
+  /home/user/project
 
   Trust this folder? Codex can read,
   edit, and run files here, subject

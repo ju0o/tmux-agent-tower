@@ -1,9 +1,10 @@
 from tmux_agent_tower.adapters import resolve_adapter
 from tmux_agent_tower.adapters.base import PaneContext
+from tmux_agent_tower.adapters.cursor import CursorAdapter
+from tmux_agent_tower.adapters.opencode import OpenCodeAdapter
 from tmux_agent_tower.detection.status import (
     StatusEngine,
     STATUS_WORKING,
-    STATUS_WAITING,
     STATUS_IDLE,
     STATUS_UNKNOWN,
     STATUS_DEAD,
@@ -66,7 +67,7 @@ def test_idle_after_hold_window_expires():
     engine.evaluate("p1", False, adapter, _ctx(["a"], command="bash"), now=now)
     engine.evaluate("p1", False, adapter, _ctx(["a", "b"], command="bash"), now=now + 0.1)
     status = engine.evaluate("p1", False, adapter, _ctx(["a", "b"], command="bash"), now=now + 10)
-    assert status == STATUS_IDLE
+    assert status == STATUS_UNKNOWN
 
 
 def test_no_flicker_on_stable_unchanged_screen():
@@ -78,14 +79,15 @@ def test_no_flicker_on_stable_unchanged_screen():
         status = engine.evaluate(
             "p1", False, adapter, _ctx(["stable"], command="bash"), now=now + 1 + i
         )
-        assert status == STATUS_IDLE, "status flickered on an unchanged screen"
+        assert status == STATUS_UNKNOWN, "a stable screen with no opinion is not idle"
 
 
 def test_generic_waiting_fallback_for_unknown_adapter():
     engine = StatusEngine()
     adapter = resolve_adapter("some-random-tool", "")
     ctx = _ctx(["Do you want to proceed?", "(y/n)"], command="some-random-tool")
-    assert engine.evaluate("p1", False, adapter, ctx) == STATUS_WAITING
+    assert engine.evaluate("p1", False, adapter, ctx) == STATUS_UNKNOWN
+    assert adapter.detect_attention(ctx) == "none"
 
 
 def test_forget_clears_state():
@@ -140,18 +142,16 @@ def test_duration_resets_on_status_transition():
     engine.evaluate("p1", False, adapter, working_ctx, now=now + 30)
     assert engine.duration_seconds("p1", now=now + 30) == 30.0
 
-    # Transition WORKING -> WAITING: duration must restart from 0, not
-    # keep accumulating from when it started WORKING. The content change
-    # itself is provisionally read as WORKING for one tick (existing,
-    # intentional anti-flicker rule); it settles into WAITING once the
-    # same new content is observed unchanged on the following tick.
+    # A recognized approval prompt is IDLE execution plus independent
+    # attention, and immediately clears the prior working hold.
     waiting_ctx = _ctx(["Allow this command to run?", "1. Yes", "2. No"])
-    engine.evaluate("p1", False, adapter, waiting_ctx, now=now + 31)
+    assert engine.evaluate("p1", False, adapter, waiting_ctx, now=now + 31) == STATUS_IDLE
+    assert adapter.detect_attention(waiting_ctx) == "approval_required"
     status = engine.evaluate("p1", False, adapter, waiting_ctx, now=now + 35)
-    assert status == STATUS_WAITING
-    assert engine.duration_seconds("p1", now=now + 35) == 0.0
+    assert status == STATUS_IDLE
+    assert engine.duration_seconds("p1", now=now + 35) == 4.0
     engine.evaluate("p1", False, adapter, waiting_ctx, now=now + 44)
-    assert engine.duration_seconds("p1", now=now + 44) == 9.0
+    assert engine.duration_seconds("p1", now=now + 44) == 13.0
 
 
 def test_dead_duration_accumulates_across_repeated_observations():
@@ -178,3 +178,124 @@ def test_pane_id_reused_after_dead_resets_baseline_not_duration_semantics():
     status = engine.evaluate("p1", False, adapter, _ctx(["fresh process output"], command="bash"), now=now + 5)
     assert status == STATUS_UNKNOWN
     assert engine.duration_seconds("p1", now=now + 5) == 0.0
+
+
+def test_runtime_identity_change_without_dead_observation_resets_status_history():
+    engine = StatusEngine()
+    adapter = resolve_adapter("bash", "")
+    now = 1000.0
+    engine.evaluate("p1", False, adapter, _ctx(["old runtime"]), now=now, runtime_identity="4101")
+    assert engine.evaluate(
+        "p1", False, adapter, _ctx(["old runtime", "new output"]), now=now + 1,
+        runtime_identity="4101",
+    ) == STATUS_WORKING
+
+    # A respawn/reused pane id starts with a clean observation baseline,
+    # even if Tower did not observe its dead interval.
+    status = engine.evaluate(
+        "p1", False, adapter, _ctx(["old runtime", "new output"]), now=now + 2,
+        runtime_identity="5202",
+    )
+    assert status == STATUS_UNKNOWN
+    assert engine.duration_seconds("p1", now=now + 2) == 0.0
+
+
+def test_idle_widget_beats_a_ticking_clock():
+    engine = StatusEngine(hold_seconds=8.0)
+    adapter = resolve_adapter("codex", "")
+    now = 1000.0
+    first = _ctx(["The answer is ready.", "Worked for 2s", "› Ask Codex to do anything  1s"])
+    second = _ctx(["The answer is ready.", "Worked for 2s", "› Ask Codex to do anything  2s"])
+    assert engine.evaluate("p1", False, adapter, first, now=now) == STATUS_IDLE
+    assert engine.evaluate("p1", False, adapter, second, now=now + 2) == STATUS_IDLE
+
+
+def test_cursor_current_followup_beats_stale_working_scrollback(fixture_lines):
+    adapter = CursorAdapter()
+    ctx = _ctx(fixture_lines("cursor-stale-working-idle.txt"), command="cursor-agent")
+    assert adapter.classify(ctx).status == STATUS_IDLE
+    assert StatusEngine().evaluate("cursor-pane", False, adapter, ctx) == STATUS_IDLE
+
+
+def test_cursor_current_spinner_still_means_working(fixture_lines):
+    adapter = CursorAdapter()
+    ctx = _ctx(fixture_lines("cursor-working-spinner.txt"), command="cursor-agent")
+    assert adapter.classify(ctx).status == STATUS_WORKING
+
+
+def test_opencode_current_footer_beats_stale_working_scrollback(fixture_lines):
+    adapter = OpenCodeAdapter()
+    ctx = _ctx(fixture_lines("opencode-stale-working-idle.txt"), command="opencode")
+    assert adapter.classify(ctx).status == STATUS_IDLE
+    assert StatusEngine().evaluate("opencode-pane", False, adapter, ctx) == STATUS_IDLE
+
+
+def test_opencode_current_working_footer_still_means_working(fixture_lines):
+    adapter = OpenCodeAdapter()
+    ctx = _ctx(fixture_lines("opencode-working.txt"), command="opencode")
+    assert adapter.classify(ctx).status == STATUS_WORKING
+
+
+def test_old_working_history_yields_to_current_idle_fixtures(fixture_lines):
+    cases = (
+        ("codex", "codex-working.txt", "codex-idle.txt"),
+        ("claude", "claude-working.txt", "claude-idle.txt"),
+        ("cursor-agent", "cursor-stale-working-idle.txt", None),
+        ("opencode", "opencode-stale-working-idle.txt", None),
+    )
+    for command, old_work, current_idle in cases:
+        lines = fixture_lines(old_work)
+        if current_idle:
+            lines += fixture_lines(current_idle)
+        adapter = resolve_adapter(command, "")
+        ctx = _ctx(lines, command=command)
+        assert adapter.classify(ctx).status == STATUS_IDLE, command
+        assert StatusEngine().evaluate(command, False, adapter, ctx) == STATUS_IDLE
+
+
+def test_recognized_attention_is_idle_execution_on_all_current_prompt_fixtures(fixture_lines):
+    cases = (
+        ("codex", "codex-waiting.txt"),
+        ("claude", "claude-waiting.txt"),
+        ("cursor-agent", "cursor-waiting.txt"),
+        ("opencode", "opencode-waiting.txt"),
+    )
+    for command, fixture in cases:
+        adapter = resolve_adapter(command, "")
+        ctx = _ctx(fixture_lines(fixture), command=command)
+        assert adapter.detect_attention(ctx) == "approval_required", command
+        assert StatusEngine().evaluate(command, False, adapter, ctx) == STATUS_IDLE, command
+
+
+def test_current_approval_overrides_older_working_fixture(fixture_lines):
+    cases = (
+        ("codex", "codex-working.txt", "codex-waiting.txt"),
+        ("claude", "claude-working.txt", "claude-waiting.txt"),
+        ("cursor-agent", "cursor-working-spinner.txt", "cursor-waiting.txt"),
+        # opencode-waiting is an explicitly unverified fixture shape; this
+        # tests only that unverified prompts do not become WORKING.
+        ("opencode", "opencode-working.txt", "opencode-waiting.txt"),
+    )
+    for command, old_work, current_prompt in cases:
+        lines = fixture_lines(old_work) + fixture_lines(current_prompt)
+        adapter = resolve_adapter(command, "")
+        ctx = _ctx(lines, command=command)
+        assert adapter.detect_attention(ctx) == "approval_required", command
+        assert StatusEngine().evaluate(command, False, adapter, ctx) == STATUS_IDLE, command
+
+
+def test_question_is_idle_execution_with_input_attention():
+    adapter = resolve_adapter("codex", "")
+    ctx = _ctx(["Which format do you want?"], command="codex")
+    assert adapter.detect_attention(ctx) == "input_required"
+    assert StatusEngine().evaluate("question", False, adapter, ctx) == STATUS_IDLE
+
+
+def test_strong_working_evidence_beats_a_stable_screen_hash():
+    engine = StatusEngine(hold_seconds=0.01)
+    adapter = resolve_adapter("codex", "")
+    ctx = _ctx(["Working (1m • esc to interrupt)"])
+    now = 1000.0
+    for step in range(4):
+        status = engine.evaluate("p1", False, adapter, ctx, now=now + step)
+        assert status == STATUS_WORKING

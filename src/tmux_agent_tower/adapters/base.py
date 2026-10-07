@@ -10,6 +10,7 @@ single wrong regex cannot silently corrupt every other agent's status.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
@@ -80,6 +81,145 @@ _NO_OPINION = AdapterResult(status=None)
 
 
 @dataclass(frozen=True)
+class ResultCandidate:
+    """An adapter-extracted final body with independent turn/body evidence.
+
+    ``confidence`` remains for compatibility; ``complete`` gates result
+    display/copy and is derived from ``turn_complete`` and ``body_complete``.
+    ``fingerprint`` identifies the text so the same answer is not announced
+    again.
+    """
+
+    text: str
+    fingerprint: str
+    confidence: str = "high"
+    complete: bool = True
+    source: str = ""
+    turn_identity: str = ""
+    timestamp: float = 0.0
+    turn_complete: Optional[bool] = None
+    body_complete: Optional[bool] = None
+
+    def __post_init__(self) -> None:
+        # Legacy callers supplied one flag. Treat it as evidence for both
+        # dimensions, except that "partial" never proves a complete body.
+        turn_complete = self.turn_complete
+        body_complete = self.body_complete
+        if turn_complete is None:
+            turn_complete = self.complete and self.confidence != "partial"
+        if body_complete is None:
+            body_complete = self.complete and self.confidence != "partial"
+        complete = bool(turn_complete and body_complete)
+        object.__setattr__(self, "turn_complete", bool(turn_complete))
+        object.__setattr__(self, "body_complete", bool(body_complete))
+        object.__setattr__(self, "complete", complete)
+
+
+_CHROME_LINE = re.compile(
+    r"^(?:"
+    r"worked for\b|cooked for\b|esc to interrupt\b|ctrl\+c to stop\b|"
+    r"ctrl\+p commands\b|ask codex\b|add a follow-up\b|tab to queue\b|"
+    r"send a message\b|auto balance\b|"
+    r"[•∙]\s*(?:finished|explored|called|working|read)\b|"
+    r"finished\b|empty\s+[—-]|^\s*[→~]|"
+    r"plan,\s*search,\s*build anything\b|"
+    r"trust this (?:folder|directory|project|repo|workspace)\b|"
+    r"\[a\]\s*trust\b|\[d\]\s*don'?t trust\b|"
+    r"yes,\s*i trust this folder\b"
+    r")",
+    re.IGNORECASE,
+)
+# Status chrome, not an answer. "Done", "OK", "완료", "PASS", and "네"
+# can be the whole final body once an adapter has completion evidence.
+_ONLY_COMPLETION_WORD = re.compile(
+    r"^(?:finished|complete|completed|작업끝)[.!]?\s*$",
+    re.IGNORECASE,
+)
+_BOX_ONLY = re.compile(r"^[\s─┃▀▁▂▃▄▅▆▇█░▒▓·•│╭╮╯╰▶═\-_=]+$")
+# A tool row is not the answer: "• Added file (+3 -0)", a numbered diff
+# gutter ("1 +<html>"), or the collapsed "Show details" control.
+_TOOL_LINE = re.compile(
+    r"^(?:"
+    r"[•∙]\s*(?:added|edited|ran|read|explored|called|updated|deleted|"
+    r"created|wrote|opened|searched|applied|removed|patched|listed)\b"
+    r"|\d+\s+[+-]"
+    r"|\+\s+show details\b"
+    r"|-\s+show details\b"
+    r"|show details"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def result_fingerprint(text: str) -> str:
+    return hashlib.sha256(text.strip().encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def drop_scrolled_user_prompt(lines: Sequence[str]) -> list:
+    """Drop a user prompt whose ``›`` marker has scrolled off screen.
+
+    That tail sits above the first answer bullet and is split from it by
+    a blank line. A code fence in the head is part of the answer.
+    """
+
+    first = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not (stripped.startswith("•") or stripped.startswith("∙")):
+            continue
+        if _TOOL_LINE.match(stripped) or _CHROME_LINE.match(stripped):
+            continue
+        first = index
+        break
+    if first is None:
+        return list(lines)
+    head = lines[:first]
+    if any("```" in line for line in head):
+        return list(lines)
+    if not any(not line.strip() for line in head):
+        return list(lines)
+    return list(lines[first:])
+
+
+def prose_body(lines: Sequence[str]) -> Optional[str]:
+    """Drop tool logs and status chrome while preserving answer formatting.
+
+    "Finished" alone is still chrome. Length is not evidence: the caller
+    has already found that agent's completion marker. Indentation and blank
+    lines are part of the body, especially inside Markdown code fences.
+    """
+
+    kept = []
+    fence = ""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            kept.append("")
+            continue
+        raw = line.rstrip()
+        if fence:
+            kept.append(raw)
+            if stripped.startswith(fence * 3):
+                fence = ""
+            continue
+        if stripped.startswith(("```", "~~~")):
+            fence = stripped[0]
+            kept.append(raw)
+            continue
+        if _BOX_ONLY.match(stripped) or _CHROME_LINE.match(stripped) or _TOOL_LINE.match(stripped):
+            continue
+        kept.append(stripped)
+    while kept and not kept[0].strip():
+        kept.pop(0)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    text = "\n".join(kept)
+    if not text or _ONLY_COMPLETION_WORD.match(text.strip()):
+        return None
+    return text
+
+
+@dataclass(frozen=True)
 class Activity:
     """A best-effort, one-line description of what an agent looks like
     it's doing right now, extracted purely from terminal output patterns
@@ -141,9 +281,114 @@ class AgentAdapter:
 
         return None
 
+    def detect_execution(self, ctx: PaneContext) -> Optional[str]:
+        """WORKING or IDLE when this agent is sure. Never an attention value."""
+
+        status = self.classify(ctx).status
+        if status in ("WORKING", "IDLE"):
+            return status
+        return None
+
+    def detect_attention(self, ctx: PaneContext) -> str:
+        """``none``, ``approval_required``, ``input_required``, or ``error``.
+
+        The default never guesses. A shared regex is not an attention detector.
+        """
+
+        return "none"
+
+    def extract_attention_prompt(self, ctx: PaneContext) -> str:
+        """The current question only, already clamped. Empty when there is none."""
+
+        return ""
+
+    def detect_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        return self.extract_result(ctx)
+
+    def approve(self, ctx: PaneContext) -> Optional[str]:
+        """One tmux key this agent's current approval widget documents, or None.
+
+        None means Tower must not send a key. Callers must not invent Enter or y.
+        """
+
+        return None
+
+    def reject(self, ctx: PaneContext) -> Optional[str]:
+        """One tmux key for the labeled reject choice, or None."""
+
+        return None
+
+    def detect_interaction(self, ctx: PaneContext):
+        """Current widget only. None when this agent has nothing to ask.
+
+        The default never invents a numbered menu from old scrollback.
+        """
+
+        return None
+
+    def followup_submit_key(self, before: PaneContext, after: PaneContext, text: str) -> Optional[str]:
+        """One more submit key, only when the screen still shows the text unsent.
+
+        The default never sends a second Enter. An adapter returns a key
+        only from evidence on ``after``.
+        """
+
+        return None
+
+    def extract_result(self, ctx: PaneContext) -> Optional[ResultCandidate]:
+        """Final answer body, or None. Silence is not a result. The
+        default has no final-response concept (shells and unknown
+        commands stay None).
+        """
+
+        return None
+
+    def submit_key(self, ctx: PaneContext) -> str:
+        """The one tmux key that submits this agent's composer. Measured
+        live for Codex, Claude Code, and OpenCode: a bracketed paste
+        followed by a single Enter. Never sent twice by the caller."""
+
+        return "Enter"
+
+    def confirm_submitted(self, before: PaneContext, after: PaneContext, text: str) -> Optional[bool]:
+        """Did the agent take the text as a new turn?
+
+        True when there is evidence, None when unknown. The default only
+        trusts a WORKING signal; agents with a transcript echo override
+        this so a turn that finishes in two seconds is still confirmed.
+        """
+
+        if self.detect_execution(after) == "WORKING":
+            return True
+        return None
+
 
 def looks_like_generic_waiting(text: str) -> bool:
     return bool(_GENERIC_WAIT_RE.search(text))
+
+
+def prompt_head(text: str, width: int = 24) -> str:
+    """The start of the first non-blank line, used to find the echoed
+    user turn in a transcript without matching on the whole prompt."""
+
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if stripped:
+            return stripped[:width]
+    return ""
+
+
+def count_prompt_echoes(lines: Sequence[str], marker: re.Pattern, text: str) -> int:
+    """Count transcript rows that contain this prompt's first line."""
+
+    head = prompt_head(text)
+    if not head:
+        return 0
+    return sum(1 for line in lines if marker.match(line) and head in line)
+
+
+def count_matches(lines: Sequence[str], pattern: "re.Pattern[str]") -> int:
+    return sum(1 for line in lines if pattern.search(line))
 
 
 def title_has_spinner(title: str, chars: set) -> bool:

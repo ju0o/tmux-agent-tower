@@ -78,7 +78,7 @@ def _parse_config_text(text: str) -> Dict:
     # top-level "notifications" boolean toggle -- they'd otherwise collide
     # (a bare `notifications = true` and a `[notifications]` section both
     # wanting to write into the same `result["notifications"]` slot).
-    result: Dict = {"project_roots": None, "agents": {}, "notification_kinds": {}}
+    result: Dict = {"project_roots": None, "agents": {}, "notification_kinds": {}, "remote": {}}
     section: Optional[str] = None
 
     for raw_line in text.splitlines():
@@ -103,6 +103,8 @@ def _parse_config_text(text: str) -> Dict:
             key, value = bool_match.group(1), bool_match.group(2).lower() == "true"
             if section == "notifications":
                 result["notification_kinds"][key] = value
+            elif section == "remote":
+                result["remote"][key] = value
             elif section is None:
                 result[key] = value
             continue
@@ -122,7 +124,8 @@ def load_config() -> Dict:
     """Returns ``{"language": str|None, "project_roots": [...],
     "agents": {Label: command}, "show_activity": bool,
     "show_status_duration": bool, "notifications": bool,
-    "notification_kinds": {"waiting": bool, "dead": bool}}``.
+    "notification_kinds": {"waiting": bool, "dead": bool},
+    "remote_autostart": bool, "remote_intro_seen": bool}``.
 
     Notifications default OFF (safe/quiet by default -- see
     docs/ROADMAP.md's Task Awareness section); activity and duration
@@ -136,6 +139,8 @@ def load_config() -> Dict:
     show_status_duration = True
     notifications = False
     notification_kinds = {"waiting": True, "dead": False}
+    remote_autostart = False
+    remote_intro_seen = False
 
     try:
         text = CONFIG_FILE.read_text(encoding="utf-8")
@@ -153,6 +158,12 @@ def load_config() -> Dict:
 
         for kind, value in parsed.get("notification_kinds", {}).items():
             notification_kinds[kind] = bool(value)
+
+        remote_cfg = parsed.get("remote") or {}
+        if "autostart" in remote_cfg:
+            remote_autostart = bool(remote_cfg["autostart"])
+        if "intro_seen" in remote_cfg:
+            remote_intro_seen = bool(remote_cfg["intro_seen"])
 
         config_key_to_label = {v: k for k, v in AGENT_LABEL_TO_CONFIG_KEY.items()}
         for config_key, command in parsed.get("agents", {}).items():
@@ -176,7 +187,54 @@ def load_config() -> Dict:
         "show_status_duration": show_status_duration,
         "notifications": notifications,
         "notification_kinds": notification_kinds,
+        "remote_autostart": remote_autostart,
+        "remote_intro_seen": remote_intro_seen,
     }
+
+
+_REMOTE_SECTION_RE = re.compile(r"^\s*\[remote\]\s*$")
+_ANY_SECTION_RE = re.compile(r"^\s*\[")
+
+
+def set_remote_flag(name: str, value: bool) -> None:
+    """Set one bool inside the ``[remote]`` table (``autostart`` or
+    ``intro_seen``) without rewriting any other key in the file.
+    """
+
+    if name not in ("autostart", "intro_seen"):
+        return
+
+    new_line = f"{name} = {'true' if value else 'false'}"
+
+    try:
+        lines = CONFIG_FILE.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    except Exception:
+        return
+
+    start = next((i for i, line in enumerate(lines) if _REMOTE_SECTION_RE.match(line)), None)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(["[remote]", new_line])
+    else:
+        end = next((j for j in range(start + 1, len(lines)) if _ANY_SECTION_RE.match(lines[j])), len(lines))
+        replaced = False
+        for j in range(start + 1, end):
+            key = lines[j].split("=", 1)[0].strip()
+            if key == name:
+                lines[j] = new_line
+                replaced = True
+                break
+        if not replaced:
+            lines.insert(start + 1, new_line)
+
+    try:
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def resolve_agent_command(agent_label: str, agents_cfg: Dict[str, str]) -> Optional[str]:

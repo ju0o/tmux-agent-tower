@@ -5,8 +5,8 @@ Design constraints (see docs/STATUS_ENGINE.md for the full rationale):
 * STATUS and VISIT are completely independent. Whether a human has looked
   at a pane yet must never change what status is reported for it. This
   engine has no notion of "seen"/"new" at all.
-* States: WORKING, WAITING, IDLE, UNKNOWN, DEAD. There is no "CHECKING"
-  state — an unvisited-but-actively-working pane must report WORKING.
+* Execution states: WORKING, IDLE, UNKNOWN, DEAD. Attention (approval,
+  input, error) and result are separate axes and are not returned here.
 * A wrong WORKING or wrong IDLE is worse than an honest UNKNOWN.
 * Hysteresis: a WORKING verdict is "held" for a short window after the
   screen last changed, so a pane that pauses output for a second or two
@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence
 
-from ..adapters.base import AgentAdapter, PaneContext, looks_like_generic_waiting
+from ..adapters.base import AgentAdapter, PaneContext
 
 STATUS_WORKING = "WORKING"
 STATUS_WAITING = "WAITING"
@@ -44,6 +44,7 @@ class _PaneState:
     observations: int = 0
     current_status: Optional[str] = None
     status_since: float = 0.0
+    runtime_identity: Optional[str] = None
 
 
 class StatusEngine:
@@ -78,9 +79,10 @@ class StatusEngine:
         adapter: AgentAdapter,
         ctx: PaneContext,
         now: Optional[float] = None,
+        runtime_identity: Optional[str] = None,
     ) -> str:
         now = now if now is not None else time.monotonic()
-        status = self._evaluate_status(pane_id, dead, adapter, ctx, now)
+        status = self._evaluate_status(pane_id, dead, adapter, ctx, now, runtime_identity)
 
         # Deliberately NOT calling forget() for a dead pane (an earlier
         # version did, every single observation) -- that reset
@@ -105,11 +107,19 @@ class StatusEngine:
         adapter: AgentAdapter,
         ctx: PaneContext,
         now: float,
+        runtime_identity: Optional[str],
     ) -> str:
         if dead:
             return STATUS_DEAD
 
         state = self._state.setdefault(pane_id, _PaneState())
+
+        # pane_id is a display address, not a runtime identity. tmux can
+        # respawn a pane under the same id; never carry its old hash or
+        # working hold into a different (or no longer identifiable) process.
+        if state.runtime_identity != runtime_identity:
+            state = _PaneState(runtime_identity=runtime_identity)
+            self._state[pane_id] = state
 
         if state.current_status == STATUS_DEAD:
             # Coming back from dead: pane_id was reused by a new process,
@@ -127,36 +137,36 @@ class StatusEngine:
 
         opinion = adapter.classify(ctx)
 
+        # A recognized current question or approval prompt proves this turn
+        # is waiting for the user. Keep that execution fact separate from
+        # the attention value returned by the adapter.
+        if adapter.detect_attention(ctx) in ("approval_required", "input_required"):
+            state.active_until = 0.0
+            return STATUS_IDLE
+
         # 1. Strong, agent-specific WORKING evidence always wins and refreshes
         #    the hold window.
         if opinion.status == STATUS_WORKING:
             state.active_until = now + self.hold_seconds
             return STATUS_WORKING
 
-        # 2. The screen is actually producing new output right now.
+        # 2. An idle widget is the current frame. A ticking clock or cursor
+        #    under that widget is not work, and it must not keep the hold.
+        if opinion.status == STATUS_IDLE:
+            state.active_until = 0.0
+            return STATUS_IDLE
+
+        # 3. The screen is actually producing new output right now.
         if changed:
             state.active_until = now + self.hold_seconds
             return STATUS_WORKING
 
-        # 3. Output paused very recently after being active -- hold WORKING
+        # 4. Output paused very recently after being active -- hold WORKING
         #    briefly instead of flapping to IDLE/UNKNOWN and back.
         if state.active_until > now:
             return STATUS_WORKING
 
-        # 4. Agent-specific WAITING evidence.
-        if opinion.status == STATUS_WAITING:
-            return STATUS_WAITING
-
-        # 5. Agent-specific IDLE evidence (adapter is confident it's idle-ready).
-        if opinion.status == STATUS_IDLE:
-            return STATUS_IDLE
-
-        # 6. Generic waiting-prompt fallback for agents without a specific
-        #    adapter opinion.
-        if looks_like_generic_waiting(ctx.tail(20)):
-            return STATUS_WAITING
-
-        # 7. No adapter opinion, no change, no generic signal at all.
+        # 5. No adapter opinion and no recent output.
         blank = not ctx.lines or all(not line.strip() for line in ctx.lines)
 
         if first_observation or blank:
@@ -165,5 +175,7 @@ class StatusEngine:
             # "don't know" beats guessing IDLE or WORKING.
             return STATUS_UNKNOWN
 
-        # 8. Stable, non-blank, no waiting markers -> best-effort IDLE.
-        return STATUS_IDLE
+        # 6. Stable and non-blank, but the adapter has no opinion. IDLE
+        #    here was a guess: a paused tool call looked idle. UNKNOWN
+        #    is the honest execution state. Attention stays separate.
+        return STATUS_UNKNOWN

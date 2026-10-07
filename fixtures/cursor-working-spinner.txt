@@ -1,0 +1,9 @@
+Reply with only OK.
+
+ ⠘⠆ Working
+    Tip: Use /config to customize Cursor settings and behavior.
+
+  → Add a follow-up                                          ctrl+c to stop
+
+  Auto Balance                                              Run Everything
+  /home/user/project

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Start Tower from THIS checkout. A `tower` found on PATH is not used.
+# Another checkout's editable install stays on disk and is not imported.
+set -e
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+exec "$ROOT/scripts/dev-python" -m tmux_agent_tower.main "$@"

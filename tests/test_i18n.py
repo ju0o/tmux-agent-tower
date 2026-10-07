@@ -28,5 +28,5 @@ def test_unknown_key_falls_back_to_english_then_key_itself():
 
 
 def test_format_kwargs_are_applied():
-    text = i18n.t("footer.selected", host="MAINPC", project="demo")
-    assert "MAINPC" in text and "demo" in text
+    text = i18n.t("footer.selected", host="workstation-a", project="demo")
+    assert "workstation-a" in text and "demo" in text

@@ -1,4 +1,4 @@
-  /home/example/project        ◆ 2 │ 40K / 500K │ [Dashboard]
+  /home/user/project        ◆ 2 │ 40K / 500K │ [Dashboard]
 
      ▾ Tasks 1
      ⸬ Task Example background task (2) 30s [↗][✗]

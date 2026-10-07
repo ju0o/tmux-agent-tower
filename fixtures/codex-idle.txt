@@ -6,5 +6,5 @@
 
 › Ask Codex to do anything
 
-  GPT-6-Luna medium · /home/example/project · Example task title
+  GPT-6-Luna medium · /home/user/project · Example task title
   ← for agents · ? for shortcuts

@@ -2,25 +2,21 @@
 
 Stored separately from auto-detection so that:
 
-* auto-discovery (git-root basename, adapter-detected agent name) never
-  clobbers a value the user explicitly chose, on this or any future
-  refresh, and
+* auto-discovery never clobbers a value the user explicitly chose, and
 * a manual agent-name override is display-only metadata -- it never
-  changes what process is running or sends it anything (see
-  ``ui/launcher_wizard.py``'s module docstring for the same boundary
-  applied to spawning; this is the same boundary applied to labeling).
+  changes what process is running or sends it anything.
+* a task role describes work only; it never changes the Agent identity.
 
-Keyed by pane_id (or a ``"alias:pane_id"`` composite for remote panes).
-Note tmux pane ids (``%12``) are stable for the lifetime of the tmux
-server but are reused after a server restart, so an override can in rare
-cases "stick" to an unrelated later pane that reused the same id. This is
-a known, documented limitation (see README) rather than a correctness bug
-worth a heavier keying scheme for a v0.1.x prototype.
+A pane id (``%12``) is reused after that pane dies. An override is
+applied only when the session and the pane's process id still match the
+ones recorded when the user set it. A record without that identity, or
+one whose pid belongs to an older pane, is ignored. Phone and PC share
+this file and this check.
 
-v0.1.2 note: the on-disk format changed from ``{key: "project name"}`` to
+v0.1.2 changed the on-disk shape from ``{key: "project name"}`` to
 ``{key: {"project": ..., "agent": ..., "title": ...}}``. ``_load()``
-migrates the old flat-string shape in place (in memory; it's rewritten to
-the new shape on the next write) so existing overrides are never lost.
+still accepts that older shape. Those entries have no session or
+pane pid, so they are not applied.
 """
 
 from __future__ import annotations
@@ -29,7 +25,9 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 
-FIELDS = ("project", "agent", "title")
+ROLE_IDS = ("orchestrator", "planner", "builder", "reviewer", "qa", "dogfood", "e2e")
+FIELDS = ("project", "task_name", "agent", "title", "execution_host", "role")
+_KEPT = FIELDS + ("task_name_origin", "session", "pane_pid")
 
 
 class OverrideStore:
@@ -37,9 +35,23 @@ class OverrideStore:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._cache: Optional[Dict[str, Dict[str, str]]] = None
+        self._loaded_stamp: Optional[tuple] = None
+
+    def _stamp(self) -> Optional[tuple]:
+        try:
+            st = self.path.stat()
+        except FileNotFoundError:
+            return None
+        except Exception:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def _load(self) -> Dict[str, Dict[str, str]]:
-        if self._cache is not None:
+        # Another writer (Tower Remote's identity edits from the phone)
+        # shares this file. Re-read when it changed on disk so the TUI
+        # picks the edit up on its next refresh instead of at restart.
+        stamp = self._stamp()
+        if self._cache is not None and stamp == self._loaded_stamp:
             return self._cache
 
         try:
@@ -47,8 +59,6 @@ class OverrideStore:
         except FileNotFoundError:
             data = {}
         except Exception:
-            # Malformed override file: fail safe to "no overrides" rather
-            # than crashing the whole TUI.
             data = {}
 
         migrated: Dict[str, Dict[str, str]] = {}
@@ -56,18 +66,18 @@ class OverrideStore:
         if isinstance(data, dict):
             for key, value in data.items():
                 if isinstance(value, str):
-                    # v0.1.0/v0.1.1 shape: a bare project-name string.
                     migrated[str(key)] = {"project": value}
                 elif isinstance(value, dict):
                     entry = {
                         field: str(value[field])
-                        for field in FIELDS
+                        for field in _KEPT
                         if field in value and isinstance(value[field], (str, int, float))
                     }
                     if entry:
-                        migrated[str(key)] = {k: str(v) for k, v in entry.items()}
+                        migrated[str(key)] = entry
 
         self._cache = migrated
+        self._loaded_stamp = stamp
         return self._cache
 
     def _save(self) -> None:
@@ -75,65 +85,156 @@ class OverrideStore:
             self.path.write_text(json.dumps(self._cache, indent=2, sort_keys=True), encoding="utf-8")
         except Exception:
             pass
+        self._loaded_stamp = self._stamp()
 
-    def _get_field(self, key: str, field: str) -> Optional[str]:
-        return self._load().get(key, {}).get(field)
+    @staticmethod
+    def _matches(entry: Dict[str, str], session: str, pane_pid: str) -> bool:
+        """True only for this session and this pane process."""
 
-    def _set_field(self, key: str, field: str, value: str) -> None:
+        if str(entry.get("session") or "") != str(session or ""):
+            return False
+        stored = str(entry.get("pane_pid") or "").strip()
+        current = str(pane_pid or "").strip()
+        if not stored or stored != current:
+            return False
+        return True
+
+    def _get_field(self, key: str, field: str, session: str, pane_pid: str) -> Optional[str]:
+        entry = self._load().get(str(key))
+        if not entry or not self._matches(entry, session, pane_pid):
+            return None
+        return entry.get(field)
+
+    def _set_field(self, key: str, field: str, value: str, session: str, pane_pid: str) -> None:
+        """Stamp the override with the pane the user is looking at now.
+
+        A blank session or pid is refused: it could not be checked later,
+        and an unchecked label is how a dead pane's name landed on a new one.
+        """
+
+        if not str(key) or not str(session or "") or not str(pane_pid or "").strip():
+            return
         data = self._load()
-        entry = dict(data.get(key, {}))
+        entry = dict(data.get(str(key), {}))
         entry[field] = value
-        data[key] = entry
+        entry["session"] = str(session)
+        entry["pane_pid"] = str(pane_pid).strip()
+        data[str(key)] = entry
         self._cache = data
         self._save()
 
-    def get_project(self, key: str) -> Optional[str]:
-        return self._get_field(key, "project")
+    def get_project(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        return self._get_field(key, "project", session, pane_pid)
 
-    def set_project(self, key: str, value: str) -> None:
-        self._set_field(key, "project", value)
+    def set_project(self, key: str, value: str, session: str, pane_pid: str) -> None:
+        self._set_field(key, "project", value, session, pane_pid)
 
-    def get_agent(self, key: str) -> Optional[str]:
-        return self._get_field(key, "agent")
+    def get_task_name(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        return self._get_field(key, "task_name", session, pane_pid)
 
-    def set_agent(self, key: str, value: str) -> None:
-        self._set_field(key, "agent", value)
+    def get_task_name_origin(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        if not self.get_task_name(key, session, pane_pid):
+            return None
+        return "auto" if self._get_field(key, "task_name_origin", session, pane_pid) == "auto" else "user"
 
-    def get_title(self, key: str) -> Optional[str]:
-        return self._get_field(key, "title")
+    def set_task_name(self, key: str, value: str, session: str, pane_pid: str, *, origin: str = "user") -> None:
+        if not str(key) or not str(session or "") or not str(pane_pid or "").strip():
+            return
+        data = self._load()
+        entry = dict(data.get(str(key), {}))
+        entry["task_name"] = value
+        entry["task_name_origin"] = "auto" if origin == "auto" else "user"
+        entry["session"] = str(session)
+        entry["pane_pid"] = str(pane_pid).strip()
+        data[str(key)] = entry
+        self._cache = data
+        self._save()
 
-    def set_title(self, key: str, value: str) -> None:
-        self._set_field(key, "title", value)
+    def get_agent(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        return self._get_field(key, "agent", session, pane_pid)
 
-    def clear_field(self, key: str, field: str) -> None:
-        """Clears just one field (e.g. "use auto-detected agent again")
-        without touching any other override for the same pane -- unlike
-        ``reset()``, which clears all of them.
+    def set_agent(self, key: str, value: str, session: str, pane_pid: str) -> None:
+        self._set_field(key, "agent", value, session, pane_pid)
+
+    def get_title(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        return self._get_field(key, "title", session, pane_pid)
+
+    def set_title(self, key: str, value: str, session: str, pane_pid: str) -> None:
+        self._set_field(key, "title", value, session, pane_pid)
+
+    def get_execution_host(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        return self._get_field(key, "execution_host", session, pane_pid)
+
+    def set_execution_host(self, key: str, value: str, session: str, pane_pid: str) -> None:
+        self._set_field(key, "execution_host", value, session, pane_pid)
+
+    def get_role(self, key: str, session: str = "", pane_pid: str = "") -> Optional[str]:
+        role = self._get_field(key, "role", session, pane_pid)
+        return role if role in ROLE_IDS else None
+
+    def set_role(self, key: str, value: str, session: str, pane_pid: str) -> None:
+        if value in ROLE_IDS:
+            self._set_field(key, "role", value, session, pane_pid)
+
+    def drop_if_stale(self, key: str, session: str, pane_pid: str) -> bool:
+        """Drop a record that does not belong to this pane. True if removed.
+
+        The launcher calls this for a pane it just created. A reused pane
+        id must not keep the previous pane's label.
         """
 
         data = self._load()
-        entry = data.get(key)
-        if not entry or field not in entry:
+        entry = data.get(str(key))
+        if not entry:
+            return False
+        if self._matches(entry, session, pane_pid):
+            return False
+        del data[str(key)]
+        self._cache = data
+        self._save()
+        return True
+
+    def clear_field(
+        self,
+        key: str,
+        field: str,
+        session: Optional[str] = None,
+        pane_pid: Optional[str] = None,
+    ) -> None:
+        """Clears just one field without touching the other labels.
+
+        When an identity is supplied, it must be complete and match the
+        record. The two-argument form remains available to legacy callers.
+        """
+
+        data = self._load()
+        entry = data.get(str(key))
+        if not entry or (field not in entry and not (field == "task_name" and "task_name_origin" in entry)):
             return
+        if session is not None or pane_pid is not None:
+            if not str(session or "").strip() or not str(pane_pid or "").strip():
+                return
+            if not self._matches(entry, str(session), str(pane_pid)):
+                return
 
         entry = dict(entry)
-        del entry[field]
-
-        if entry:
-            data[key] = entry
+        entry.pop(field, None)
+        if field == "task_name":
+            entry.pop("task_name_origin", None)
+        leftover = {k: v for k, v in entry.items() if k in FIELDS}
+        if leftover:
+            data[str(key)] = entry
         else:
-            del data[key]
+            del data[str(key)]
 
         self._cache = data
         self._save()
 
     def reset(self, key: str) -> None:
-        """Clears every override (project/agent/title) for ``key`` --
-        only this one pane, never the whole store.
-        """
+        """Clears every override for ``key`` -- only this one pane."""
 
         data = self._load()
-        if key in data:
-            del data[key]
+        if str(key) in data:
+            del data[str(key)]
             self._cache = data
             self._save()

@@ -6,4 +6,4 @@
 
 
   Auto Balance · 12.0%                   Run Everything
-  /home/example/project
+  /home/user/project

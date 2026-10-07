@@ -2,7 +2,7 @@
 
 **English | [한국어](README.ko.md)**
 
-See what your coding agents are doing across tmux panes.
+See your AI work, talk to its Agent, and collect complete results from one place.
 
 If you run Codex, Claude Code, OpenCode, Grok CLI, or Cursor Agent CLI in
 several tmux panes at once (maybe across more than one machine), it's easy
@@ -11,24 +11,18 @@ for your approval, and which one finished ten minutes ago. Tmux Agent
 Tower is a small, local-first TUI that lists them all in one screen and
 jumps you straight to the one that needs you.
 
-![Tmux Agent Tower screenshot: a host-grouped pane list showing status, agent, and visit columns](docs/assets/demo.png)
-
-*(mockup with generic placeholder project names; the Korean UI is the
-current default -- see [Language](#language) below)*
-
 ```
-TMUX AGENT TOWER                                    MAINPC ● 2  ○ 1   ASUS ○ 1
+TMUX AGENT TOWER       Current access: This laptop · Copy: This laptop · Auto
 
-── MAINPC ──────────────────────────────────────────────────────────────────
-> ● alpha-api                                        Codex          WORKING
-    Marketplace build
-NEW ! web-app                                        Codex          WAITING
-  ○ docs                                             Grok           IDLE
+▼ Mobile app · API update
+   ● Build       Codex
+   ! QA          Claude
+   ✓ Review      Cursor
+▶ Tower · Remote improvement
+   ● 2 working · ! 1 needs attention · ✓ 1 new result
 
-── ASUS ────────────────────────────────────────────────────────────────────
-  ● billing-service                                  Claude         WORKING
-
-↑↓ Move   Enter Open   E Edit item   N Add   W Workspace   / Search   R   Q
+↑↓ Move  Enter Open  Space Menu  + New task  S Saved work  L Live  C Settings
+/ Search  Y Copy result  G Open terminal  Esc Back  ? Help
 ```
 
 ## What it is (and isn't)
@@ -36,11 +30,11 @@ NEW ! web-app                                        Codex          WAITING
 * **Local-first**: no server, no account, no cloud backend. It reads your
   own tmux server (and, optionally, a second host over your own SSH
   connection) and shows it to you.
-* **Read-only by default**: it never sends keystrokes into a monitored
-  pane, never kills or restarts a process, and never touches your actual
-  agent CLIs or their credentials. It only reads tmux state and moves
-  *your own* cursor between panes when you press Enter -- the same thing
-  `Ctrl+b` + arrow keys would do.
+* **No background typing**: watching a pane does not type into it.
+  A prompt, an approval key, a rename, or a close runs only after you
+  choose it, and it targets the tmux pane id on the tmux host. It does
+  not follow the host name used to group the row, and it does not touch
+  agent credentials.
 * **Best-effort status**, not a guarantee. Status is inferred from
   terminal output patterns and process activity, not each agent's
   internal API (most don't expose one). New versions of an agent's CLI can
@@ -49,19 +43,32 @@ NEW ! web-app                                        Codex          WAITING
 
 ## Features
 
-* One screen, grouped by host, with a compact row per pane (project,
-  agent, status, and -- when it says something the project name doesn't
-  already -- the pane's own title as a second line) instead of a wide,
-  sparse table.
-* Status and "have I looked at this yet" are tracked completely
-  separately -- an agent working away in a pane you haven't opened yet
-  correctly shows `WORKING`, not some vague "checking" placeholder. A
-  small `NEW` marker (not a whole column) flags an unvisited pane; a
-  visited one shows nothing extra.
-* A selected-item detail panel (project, agent, pane title, path, status,
-  host) fills in anything the compact row had to leave out -- hidden
-  automatically on a short terminal.
-* `/` live-filters the list by project, agent, pane title, path, or host;
+* Work Groups keep related tasks together. Group rows summarize work in
+  progress, attention, and new results; ungrouped tasks remain visible on
+  their own. Task rows put the role, Agent, and status first.
+* The default home organizes work as **Folder → work screen → task**.
+  Folder names, work-screen names, ordering, and collapse state persist in
+  Tower without changing tmux windows or panes. Unfiled windows appear under
+  **Other**. Work Groups remain a separate way to describe an Agent team.
+* A compact selected-task summary shows its name, Agent, role, status,
+  project, and execution location. Internal terminal identifiers are in
+  the advanced terminal view.
+* Persistent conversations keep the live output and message composer on
+  one screen. Multiline prompts, per-task drafts, and complete-result copy
+  are supported.
+* `L` opens Live directly for the selected task or Work Group. A task opens in
+  focus view; a group uses its saved focus, split, grid, or main-and-side
+  layout. Groups with more visible members move through pages instead of
+  squeezing every task into the screen. With no task selected, choose a layout
+  and its members. `Enter` opens the selected conversation, `Y` copies that
+  task's newest complete result, `Space` opens its existing task menu, and `G`
+  focuses its terminal. PageUp/PageDown scroll output; Home returns to the
+  latest output. Short or narrow terminals show one focused task. Remote,
+  ended, or identity-changed panes never reuse old output. Live reads with
+  `capture-pane` and does not change tmux layout. Focus, split, grid,
+  main-and-side, the 42×14 fallback, and the 160×45 layout were exercised in
+  an isolated tmux session.
+* `/` live-filters tasks by task name, Work Group, project, Agent, or role;
   `Esc` clears it.
 * Project name is auto-discovered with a real priority chain: your own
   override, then the enclosing git repo's name, then a meaningful pane
@@ -82,11 +89,11 @@ NEW ! web-app                                        Codex          WAITING
 * **Status duration**: how long Tower has continuously observed a pane in
   its current status (`대기 · 4m`), shown next to the status and in the
   detail panel.
-* **Attention View** (`A`) re-sorts the list by what needs you first --
-  `WAITING > UNKNOWN > DEAD > WORKING > IDLE` -- without changing the
-  default per-host order; press `A` again to go back.
+* Execution status, attention, and complete-result availability stay
+  separate. The home view and Work Group summaries surface approval,
+  questions, and new complete results without exposing terminal IDs.
 * Optional, **off-by-default** notifications on a genuine status change
-  (e.g. an agent starts WAITING on you), via `notify-send` or a
+  (e.g. an agent starts waiting on approval or a question), via `notify-send` or a
   `tmux display-message` fallback wherever there's no desktop
   notification daemon. One-shot per transition -- no repeat spam while a
   pane just sits in the same status.
@@ -123,10 +130,24 @@ Inside any tmux pane:
 tower
 ```
 
-runs the TUI right there, in that pane. If you start another one in a
-different pane later, that one becomes "the" active Tower -- older ones
+runs the TUI right there, in that pane. Press `M` → **Start phone
+remote** when you want the same view on your phone (no shell command).
+If you start another Tower in a different pane later, that one becomes
+"the" active Tower -- older ones
 keep running, nothing is killed, but `tower --focus` (see below) will jump
 to the newest one.
+
+To open a Tower session on another SSH host while keeping this device as
+the clipboard destination:
+
+```bash
+tower connect work-server
+```
+
+Use an existing OpenSSH config alias or address. The remote host must have
+one active Tower session; the connector follows `ssh -G` configuration and
+passes the originating Access Client through nested SSH. If several Tower
+sessions are active, select one with `--session`.
 
 Tower remembers which pane it's running in for the rest of that tmux
 session (by pane id, not by window name or position -- a renamed or
@@ -143,51 +164,102 @@ command, not another TUI, so it's safe to bind to a key.
 | Key | Action |
 |---|---|
 | `↑` / `↓` (or `j`/`k`) | Move selection |
-| `Enter` | Jump to the selected pane |
-| `E` | Edit the selected pane's project name, agent label, or pane title |
-| `N` | Add one project (Workspace Launcher, single) |
-| `W` | Start a new workspace (Workspace Launcher, multi) |
-| `/` | Live-filter the list (project/agent/title/path/host); `Esc` clears it |
-| `A` | Toggle Attention View (sorts by what needs you first) |
-| `R` | Refresh immediately |
-| `Q` / `Ctrl+C` | Quit |
+| `Enter` | Fold/expand a folder or work screen, or open a task |
+| `Space` | Open actions for the selected folder, work screen, or task |
+| `+` | Start a task, create a folder, open saved work, or use a template |
+| `S` | Open **Saved work**, with **Continue saved work** and **Work templates** together |
+| `L` | Open Live; a selected Work Group opens as one view |
+| `C` | Open settings |
+| `/` | Search folder, work screen, task, project, Agent, or role; `Esc` clears the search |
+| `Y` | Copy the selected task's latest complete result |
+| `G` | Open the selected task in its real terminal |
+| `Esc` | Go back one level |
+| `?` | Show the basic help |
+| `Ctrl+C` | Quit Tower |
 
-### Editing what's shown (`E`)
+### Task identity and advanced details
 
-Auto-detection is best-effort and sometimes wrong or just unhelpful (a
-project run straight from a drive root can show up as a single letter;
-an agent that isn't recognised shows as `Shell`). `E` opens a small menu
-for the selected row:
+The main UI uses one task name. Tower suggests a name from the project and
+role, or the Agent when no role is assigned (for example, `ExampleProject · Build`
+or `ExampleProject · Codex`). The task menu's **Rename** action sets a name that
+persists across refreshes. Duplicate task names are allowed.
 
-* **Project name** -- overrides the auto-discovered project name.
-* **Agent name** -- overrides the displayed agent label, either picked
-  from the known list or typed freely (e.g. `Gemini CLI`). This is
-  **display-only metadata**: it never changes, restarts, or sends
-  anything to the real process -- it just relabels the row.
-* **Pane title** -- also applied to the pane's real tmux title
-  (`select-pane -T`) on a best-effort basis; a failure there never takes
-  the rest of Tower down with it.
-* **Reset to auto-detection** -- clears all three overrides for *this*
-  pane only (not a global reset).
+The task menu separates identity settings from moving and layout actions.
+Project means the bound project and path; changing it keeps the task name.
+Agent and role changes refresh only an automatic suggestion. A name set by
+the user stays as-is. The phone displays the same task name as the PC.
 
-Overrides persist across refreshes and are stored separately per pane, so
-auto-discovery running again next refresh never clobbers a choice you
-made here.
+The actual terminal title, path, execution host, tmux location, and IDs are
+advanced details. Pane and Window names are not separate task identities and
+are kept out of the basic task edit menu. The Agent label is display metadata;
+changing it does not change or restart the real process.
 
-### Workspace Launcher (`N` / `W`)
+The default list groups only work the user explicitly selects. Ungrouped work
+stays visible, and grouping, removing a member, or ungrouping changes saved
+Tower metadata only; it never moves, renames, or closes a tmux pane or window.
+Work Group names, membership, and member order persist across Tower restarts
+and appear in the same order in the phone view.
 
-Picks a host, one or more projects (auto-discovered from your configured
-project roots, searchable, or a manual path), and an agent per project,
-shows a preview you can adjust (per-project agent override, layout), and
-then creates **brand-new** tmux panes for them -- `cd`'d into the project,
-running the chosen agent, titled automatically, and immediately visible in
-the Tower.
+Moving a task changes its Work Group membership only. Tower view layout and
+member slots are separate from the physical terminal layout. Applying a
+terminal layout or moving a pane is a distinct confirmed action, currently
+limited to fresh, Tower-managed local panes in windows with no unrelated panes.
+Phone controls change logical membership and layout only.
+
+### Saved Work and Work Templates
+
+Choose **Save** from a Work Group menu to save the current setup as **Saved
+Work** or as a **Work Template**. Saved Work remembers the project paths,
+member names, roles, Agents, order, execution preferences, and logical layout.
+A template keeps the roles, default Agents, order, and layout while leaving out
+concrete project paths and personal execution hosts, so it can be reused for a
+different project.
+
+Open **Saved work** with `S` or from `+`; **Continue saved work** and
+**Work templates** appear under that single entry. A template can use a
+different project path and Agent per role.
+Missing paths or unavailable local Agents fail before launch. Each launch uses
+new Tower-created resources and makes one logical Work Group; stored layouts
+contain no tmux pane or window IDs. Partial local launch failures clean up only
+the new window. Phone summaries omit project paths and execution hosts.
+
+The versioned store is `~/.config/tmux-agent-tower/worksets.json`. Writes are
+atomic and private to the current user. Corrupt or newer-format data is kept
+untouched. The older `workspace-presets.json` remains for existing Workflow
+integration and is separate from Work Group based Saved Work and templates.
+
+### Additional work creation (More)
+
+Asks where to work, then opens that host's workspace browser: recent
+paths, a search under the configured roots, a folder tree, or a path you
+type. Every row shows the full path. A plain folder is allowed, not only
+a git repo. The folder view is a tree: opening a row reads that directory only,
+and the folders above it stay on screen. Enter expands. Space chooses
+the workspace.
+Next you pick an agent, where it should live (a new window, a pane in
+the current window, or an existing window), and a layout, then create.
+This flow is under `+` → **More**. The old `N` and `W` keys open the same
+new-work chooser for keyboard compatibility. A remote host uses the same screens. Listing, path checks, and search are
+read-only SSH, one directory at a time, and they do not install Tower
+there. tmux runs only after you confirm. The new panes are `cd`'d into
+the path you chose, run the agent you chose, and show up in Tower.
 
 This is explicitly *not* the same thing as controlling an already-running
 agent: the launcher only ever creates new panes and never sends input to,
 closes, or reconfigures anything that existed before it ran -- see
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for why that distinction matters and
 what's still deliberately unbuilt (the "Action Layer").
+
+### Workflow order
+
+`+` → **More** → **Work order** previews role recipes and creates a step-by-step
+run from a separately selected saved workspace. A workspace preset describes
+the host, paths, and available agents; a workflow definition contains only its
+name and ordered roles. The built-ins are Quick Fix (Builder → QA), Feature
+Development (Planner → Builder → Reviewer → QA), and Focused Improvement
+(Orchestrator → Planner → Builder → QA → Dogfood → End to end). Recipes with
+a human step show it explicitly. Previewing or creating a run does not send
+anything to an Agent.
 
 Project search locations come from `~/.config/tmux-agent-tower/config.toml`:
 
@@ -208,20 +280,79 @@ missing, that one project's pane still opens as a plain shell with a
 
 ### Optional: `Ctrl+b w` shortcut
 
-Binding `Ctrl+b w` to jump straight to the active Tower is convenient, but
-it **replaces tmux's built-in `choose-tree` window picker** on that key.
-The installer does not do this automatically. If you want it, add this to
-your `~/.tmux.conf` yourself:
+`Ctrl+b w` stays tmux's window list until you opt in. Tower never
+rewrites `~/.tmux.conf` on install. Inside Tower, `C` → **tmux shortcut**
+→ **Use smart Ctrl+b w** (or `tower keys install`) adds one marked block:
 
-```tmux
-unbind-key w
-bind-key w run-shell -b "tower --focus"
-```
+* Tower is running in this session → `Ctrl+b w` jumps to that pane
+  (`tower --focus`, pane id, not a window name).
+* Tower is not running, or the registration is stale → tmux's window/pane
+  chooser. That command is whatever a tmux server with an empty config
+  reports (normally `choose-tree -Zw`). It is not assumed, and it is not
+  a separate control-window command.
+* A custom `w` binding, including one from a `source-file`, is saved and
+  put back only by `tower keys restore`. It does not run while the smart
+  binding is installed.
 
-Note the `--focus`, not bare `tower` -- this binding should only ever
-*navigate* to your already-running Tower, never launch a new curses TUI
-from a backgrounded key press (which wouldn't have anywhere sensible to
-attach to).
+Quitting Tower does not unbind the key. The same binding checks again
+the next time you press it. `tower keys restore` removes only that block
+and puts the recorded `w` command back. `tower --focus` still only
+navigates; it never starts a new TUI.
+
+The default home shows **Folder → work screen → task**. Enter folds or opens a
+folder/work screen; Enter on a task opens its conversation. Windows without a
+folder appear under **Other**. Work Groups remain a separate logical Agent-team
+membership and are shown with their tasks. The physical host/window/pane view
+is available from **More → Terminal structure**. In a task conversation, `Y`
+copies the complete latest result; it never copies only the visible screen.
+
+`+` opens the common start menu: one task, a folder, a Work Group, Saved work,
+or a template. Workspace and terminal structure actions are under **More**. `S`
+opens Saved work and its templates together. Space opens actions for the
+selected folder, work screen, or task. If Tower has no work yet, the same
+start choices are shown in the list.
+
+Every structure write uses the window id or pane id tmux returned.
+A window name is only a label, so two windows with the same name stay
+separate. New windows and splits use `-d`, so the client stays where it
+is. Closing a pane warns when work, an approval, or an input question
+is in progress. Tower's own pane, and any window that contains it,
+cannot be closed from these menus. The phone shows the same tree and
+the current location. It does not create or close windows.
+
+Pane Control keeps the live pane capture above an inline composer. Enter
+sends the message and leaves the detail open with the composer ready for
+the next turn. Ctrl+O inserts a manual newline. Multiline pastes keep
+Korean text, CRLF/LF line breaks, and code fences intact.
+The composer says `Message` for an Agent, `Command` for a shell, and
+`Answer` for a measured text question. A measured approval or choice
+replaces the composer with its observed safe controls; an unknown
+interaction blocks input. Submit confirmation is based on visible
+agent-side evidence, with no blind retry.
+
+In Pane Control, `Ctrl+Y` copies the complete latest result, `Ctrl+S` shows it,
+`Ctrl+E` edits the display name, `Ctrl+G` moves to the pane, and `Ctrl+X`
+asks before closing that pane. Cancel is the default. Tower's own pane
+cannot be closed there. `Ctrl+b w` still comes back. Tower does not guess
+approval keys or Enter. `Ctrl+I` opens advanced actions; `Ctrl+L` copies
+the current live screen as a separate action.
+
+### Hosts
+
+The tree groups panes by where the work runs. Each pane still has three hosts:
+
+* **Observer host** — the machine where this Tower process is running.
+  An SSH login used to reach that machine does not change it.
+* **Tmux host** — the machine whose tmux server owns the session and
+  pane id. Prompt, focus, rename, and close use that pane.
+* **Execution host** — where the shell or agent is working. An `ssh`
+  client inside a local pane is grouped under the destination and
+  labeled `via` the tmux host. If the remote directory is not known,
+  the project stays unnamed.
+
+A configured peer's own tmux is a separate read-only snapshot. The same
+pane id on two servers is not one pane. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### `tower --doctor`
 
@@ -235,24 +366,48 @@ Add a line to `~/.config/tmux-agent-tower/remote-hosts.txt`, referencing an
 SSH alias you've already set up in `~/.ssh/config`:
 
 ```
-asus:ASUS
+remote-workstation:Remote workstation
 ```
 
 The Tower will then show that host's panes too (title/command-based
 status only -- see limitations below), refreshed less frequently than the
 local host, and marked `UNKNOWN`/offline gracefully if it's unreachable.
-Nothing is installed on the remote host. The Workspace Launcher (`N`/`W`)
-can also target this host: it runs one bounded, read-only `find` over SSH
-to discover git repositories there too, with the same manual-path (`B`)
-fallback if that turns up nothing.
+Nothing is installed on the remote host. The unified new-work chooser can
+open that host the same way as this machine.
+Directory listings, path checks, and project search are read-only SSH.
+One directory is fetched at a time and cached. If the host does not
+answer, Tower says it cannot connect and the local session keeps
+working. Search stays inside the usual project directories, with a
+depth and result cap.
 
-### Language
+### From your phone (experimental, this branch only)
 
-The TUI asks once, on its very first run, whether to show Korean or
-English, and remembers the answer in
+Inside Tower, press `M` and choose **Start phone remote**. Tower prints
+an `https://…ts.net` address and a pairing code on screen. Save that
+address on your phone (home screen or bookmark). The header shows
+`Remote: ● connected` while it is actually up.
+
+Quitting Tower with `Q` does not stop the phone remote. Stop it from
+`M` → **Stop remote**. `M` → **Autostart** can start it for you the next
+time you run `tower`.
+
+The same service is available from a shell for debugging
+(`tower serve`, `tower serve --lan`, `tower serve --tailscale`). You
+don't need those for normal use. Read `docs/REMOTE.md` first -- it is
+the security model and the list of what this deliberately does not do.
+
+### First task and language
+
+An empty Tower home offers **Start your first task**, **Open saved work**,
+and **Use a work template**. Starting a task asks for its name, project,
+and an available Agent, then opens its conversation. When the current
+folder looks like a project, Tower offers it as the first choice. No
+remote connection or clipboard setup is required; copy destination starts
+on automatic.
+
+Tower opens directly to Home on first launch. Change Korean/English later
+from **Settings → Language**; the choice is also stored in
 `~/.config/tmux-agent-tower/config.toml` (`language = "ko"` / `"en"`).
-There's no in-app way to change it again yet in this release -- edit that
-line by hand and restart `tower` if you want to switch.
 
 ### Task awareness settings
 
@@ -278,25 +433,29 @@ actually "done."
 ## Supported agents
 
 Codex, Claude Code, OpenCode, Grok CLI, Cursor Agent CLI, and a generic
-shell/SSH fallback for anything else. Every adapter's WORKING/IDLE (and,
-except OpenCode, WAITING) patterns were verified against a real, live
-session of that CLI -- see [`docs/STATUS_ENGINE.md`](docs/STATUS_ENGINE.md)
-for exactly what evidence each one looks for. OpenCode's own
-permission/approval prompt specifically was never observed live (the
-tested session auto-approved writes), so WAITING falls back to a generic
-pattern for that agent only -- see `adapters/opencode.py`'s docstring.
-Detection is inherently best-effort and will drift as these CLIs' UIs
-change; PRs updating a pattern (with a sanitized fixture) are welcome.
+shell/SSH fallback for anything else. Each adapter owns its own
+execution and attention detection. There is no shared regex that marks
+every agent as waiting. Codex and Claude Code numbered approval menus
+are the only ones Tower will answer with a key (`1` / `3`). OpenCode
+and Cursor can be recognized as approval from fixtures, but Tower does
+not send a key for them because those widgets were not verified live.
+See [`docs/STATUS_ENGINE.md`](docs/STATUS_ENGINE.md). Detection is
+inherently best-effort and will drift as these CLIs' UIs change; PRs
+updating a pattern (with a sanitized fixture) are welcome.
 
 ## Status meanings
 
 * `● WORKING` -- actively producing output or showing an agent-specific
   "I'm working" signal.
-* `! WAITING` -- looks like it's waiting on your approval/input.
-* `○ IDLE` -- alive, nothing pending.
-* `? UNKNOWN` -- not enough evidence either way. This is a deliberate,
-  honest fallback -- see `docs/STATUS_ENGINE.md` for why "unknown" beats a
-  confident wrong answer.
+* `○ IDLE` -- alive, with no agent-specific working signal. An approval
+  or a question can still be set on the attention axis at the same time.
+* `! 승인 필요` / `? 입력 필요` -- attention, not a status. Approval is a
+  permission widget. Input is a free-text or choice question. They are
+  never the same mark.
+* `◇ UNKNOWN` -- not enough evidence either way (`확인 불가`). This is a
+  deliberate, honest fallback -- see `docs/STATUS_ENGINE.md` for why
+  "unknown" beats a confident wrong answer. The mark is not `?`, which
+  is reserved for input needed.
 * `× DEAD` -- the pane or its process has exited.
 
 Visited state is completely independent of status -- it only tracks
@@ -311,9 +470,10 @@ whether you've opened that pane from the Tower before, shown as a small
 * The remote/multi-host view only sees pane titles, not full content (a
   deliberate simplification to avoid installing anything remotely -- see
   `docs/ARCHITECTURE.md`), so remote status is coarser than local.
-* An `E` override (project/agent/title) is keyed by tmux's pane id, which
-  is reused after a tmux server restart; in rare cases an override can "stick" to an
-  unrelated later pane.
+* An `E` override (project/agent/title) is kept only while the session
+  and the pane's process id still match. A reused pane id does not
+  inherit the previous label. Setting the label again on the pane you
+  are looking at makes it current.
 * Linux/WSL + tmux is the tested target. macOS should mostly work (same
   Python + tmux + curses stack) but hasn't been verified here.
 
@@ -325,10 +485,12 @@ whether you've opened that pane from the Tower before, shown as a small
 
 ## Roadmap
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md). Sending input to agents,
-interrupting/restarting them, or auto-approving prompts are explicitly
-**not** implemented and not planned without a separate, deliberate design
-pass -- this tool only ever reads and lets you navigate.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md). Automatic relay, killing or
+restarting an agent, and auto-approving prompts are not in this version.
+On this branch you can send one prompt you typed into the pane you
+selected, and you can create, move, and close local windows and panes
+after you confirm. The phone shows the same rows and can send that same
+prompt. It does not create or close windows.
 
 ## License
 

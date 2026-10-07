@@ -1,0 +1,23 @@
+  ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt
+
+     → Read .
+
+     Empty — 0 files.
+
+     ▣  Build · Space Bunny Free · 6.0s
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Space Bunny Free OpenCode Zen
+  ╹──────────────────────────────────────────────────────────────────────────────────
+   /home/user/project      11.6K (1%)  ctrl+p commands
