@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.0-rc1
+
+- Work Groups organize related tasks, while task identity remains independent
+  of project, Agent, role, and terminal placement.
+- Persistent conversations support multiline prompts, per-task drafts, and
+  live output on the same screen.
+- Result copy resolves the newest complete Agent result and routes it to one
+  verified clipboard destination. Partial results fail safely.
+- Saved Work and task templates preserve reusable group structure, roles,
+  order, and logical layout with project and Agent overrides.
+- Live views, task movement, first-run guidance, search, and settings use a
+  unified user-work navigation model.
+- Generic SSH connection setup preserves the originating Access Client
+  through nested connections.
+
 ## v0.2.2 - Main stabilization checkpoint
 
 No feature changes. This is the tagged baseline the `feat/tower-remote`
@@ -106,8 +121,8 @@ columns.
   already.
 * **VISIT is no longer a column.** An unvisited pane gets a small `NEW`
   marker in front of it; a visited one shows nothing extra.
-* **Host summary hides zero counts** (`MAINPC ● 3  ○ 4` instead of
-  `MAINPC ●3 !0 ○4 ?0 ×0`) and moved to the title line, right-aligned per
+* **Host summary hides zero counts** (`workstation-a ● 3  ○ 4` instead of
+  `workstation-a ●3 !0 ○4 ?0 ×0`) and moved to the title line, right-aligned per
   host.
 * **New selected-item detail panel** at the bottom (project, agent, pane
   title, path, status, host, pane id) -- auto-hidden on a short terminal
