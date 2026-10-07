@@ -159,6 +159,36 @@ def test_submit_confirmed_when_codex_starts_working(monkeypatch):
     assert sent == [("%7", "Reply with pong", "Enter")]
 
 
+def test_confirmed_tower_prompt_records_only_the_pane_history_watermark(monkeypatch):
+    from tmux_agent_tower.detection.result import ResultTracker
+
+    identity = {
+        "tmux_host": "host", "server_scope": {"socket": "/tmp/tmux-test"},
+        "session": "0", "window_id": "@1", "pane_id": "%7", "pane_pid": "1234",
+    }
+
+    class Tower:
+        results = ResultTracker()
+        rows = [{"key": "%7"}]
+
+        def load(self):
+            return None
+
+    tower = Tower()
+    _prompt_flow(
+        monkeypatch,
+        [["› Ask Codex to do anything"], ["› Reply with pong", "Working (1s • esc to interrupt)"]],
+    )
+    monkeypatch.setattr(actions, "pane_result_identity", lambda _row: identity)
+    monkeypatch.setattr(actions.tmux_capture, "pane_history_position", lambda _pane: (17, 200))
+
+    result = actions.send_prompt(tower, "%7", "Reply with pong")
+
+    assert result.submitted
+    assert tower.results.turn_start_watermark("%7", identity) == (17, 200)
+    assert "Reply with pong" not in repr(tower.results._turn_watermarks)
+
+
 def test_submit_not_confirmed_when_text_stays_in_the_composer(monkeypatch):
     before = ["› Ask Codex to do anything"]
     stuck = ["› Reply with pong"]

@@ -355,6 +355,17 @@ SSH pane first uses its local tmux history; if that history is incomplete,
 Tower uses a remote source only when that exact local pane has a persisted
 provider binding. A plain `ssh workstation-b` TUI without such a binding fails closed;
 Tower does not infer a remote Agent pane from its execution host.
+`turn_complete` records the Agent's completion boundary; `body_complete` records
+proof that the copied body starts at this turn's boundary. A result is ready or
+copyable only when both are true. Tower-submitted turns keep only the pane's
+numeric tmux history position as an in-memory watermark; external turns must
+prove their start from bounded history or a registered Result Provider. History
+recovery joins terminal-wrapped rows and rejects a suffix when its start is
+unproven.
+Result cleanup preserves internal blank lines and fenced-code indentation so
+the copied text remains faithful to the Agent's logical body.
+An authoritative deep-history read may restore readiness after the fast
+visible-screen poll saw only a suffix; that suffix cannot replace the full body.
 One Y writes one primary destination. The notice names that destination and
 confirms a complete result.
 A Codex trust chooser appearing after the last `Worked for` marker

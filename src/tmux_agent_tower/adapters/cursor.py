@@ -28,7 +28,7 @@ from .base import (
     result_fingerprint,
 )
 
-_FOLLOWUP_RE = re.compile(r"add a follow-up", re.IGNORECASE)
+_FOLLOWUP_RE = re.compile(r"^\s*(?:→\s*)?add a follow-up\b", re.IGNORECASE | re.MULTILINE)
 _STOP_RE = re.compile(r"ctrl\+c to stop", re.IGNORECASE)
 # Captured above the follow-up prompt while the turn was still generating.
 _RUNNING_TOKENS_RE = re.compile(r"\bRunning\s+\d+(?:\.\d+)?k\s+tokens\b", re.IGNORECASE)
@@ -186,4 +186,6 @@ class CursorAdapter(AgentAdapter):
             fingerprint=result_fingerprint(text),
             confidence=confidence,
             complete=bounded,
+            turn_complete=True,
+            body_complete=bounded,
         )

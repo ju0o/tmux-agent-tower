@@ -93,6 +93,7 @@ def fetch_remote_history(
     lines: int = 800,
     timeout: float = DEFAULT_TIMEOUT,
     session_id: str = "",
+    join_wrapped: bool = False,
 ) -> List[str] | None:
     """Read bounded history for one registered remote tmux pane.
 
@@ -118,7 +119,7 @@ def fetch_remote_history(
         f"test \"$(tmux display-message -p -t {pane_id} '#{{pane_pid}}')\" = {pane_pid} || exit 4; "
         f"test \"$(tmux display-message -p -t {pane_id} '#{{pane_dead}}')\" = 0 || exit 4; "
         f"{session_check}"
-        f"tmux capture-pane -p -t {pane_id} -S -{lines}"
+        f"tmux capture-pane -p{' -J' if join_wrapped else ''} -t {pane_id} -S -{lines}"
     )
     try:
         result = _run_ssh(host_alias, script, timeout)

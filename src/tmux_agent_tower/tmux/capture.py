@@ -33,7 +33,7 @@ def run_tmux(args: Sequence[str], capture: bool = True, timeout: float = DEFAULT
     return ""
 
 
-def capture_pane(pane_id: str, lines: int = 30) -> list:
+def capture_pane(pane_id: str, lines: int = 30, *, join_wrapped: bool = False) -> list:
     """Visible screen text with trailing blank rows removed.
 
     A tall pane whose TUI draws in its upper part leaves dozens of empty
@@ -42,13 +42,34 @@ def capture_pane(pane_id: str, lines: int = 30) -> list:
     UNKNOWN while its idle footer sat 41 lines above the bottom).
     """
 
-    output = run_tmux(["capture-pane", "-p", "-t", pane_id, "-S", f"-{lines}"])
+    args = ["capture-pane", "-p"]
+    if join_wrapped:
+        args.append("-J")
+    args.extend(("-t", pane_id, "-S", f"-{lines}"))
+    output = run_tmux(args)
     if not output:
         return []
     rows = output.split("\n")
     while rows and not rows[-1].strip():
         rows.pop()
     return rows
+
+
+def pane_history_position(pane_id: str):
+    """Return numeric history size/limit for a target pane, without its text."""
+
+    raw = run_tmux([
+        "display-message", "-p", "-t", pane_id,
+        "#{history_size}\t#{history_limit}",
+    ])
+    try:
+        size, limit = raw.strip().split("\t", 1)
+        size, limit = int(size), int(limit)
+    except (TypeError, ValueError):
+        return None
+    if size < 0 or limit < 1 or size > limit:
+        return None
+    return size, limit
 
 
 def select_pane(session: str, window_index: str, pane_id: str) -> None:

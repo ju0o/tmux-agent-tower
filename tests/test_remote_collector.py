@@ -97,6 +97,20 @@ def test_remote_result_history_requires_exact_live_pane_identity(monkeypatch):
     assert "capture-pane" in captured["script"] and "-S -800" in captured["script"]
 
 
+def test_remote_result_history_can_join_terminal_wrapped_rows(monkeypatch):
+    captured = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = "first wrapped row\nsecond row\n"
+
+    monkeypatch.setattr(collector, "_run_ssh", lambda _host, script, _timeout: captured.update(script=script) or FakeResult())
+    assert collector.fetch_remote_history("registered-host", "%12", "345", join_wrapped=True) == [
+        "first wrapped row", "second row",
+    ]
+    assert "capture-pane -p -J" in captured["script"]
+
+
 @pytest.mark.parametrize(
     ("host", "pane_id", "pane_pid", "lines"),
     [("-oProxyCommand=x", "%1", "2", 800), ("host", "%x", "2", 800), ("host", "%1", "x", 800), ("host", "%1", "2", 0)],

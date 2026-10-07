@@ -426,7 +426,10 @@ class Tower:
         # out of tracker caches until the explicit Result view/copy path
         # re-extracts it from the pane.
         if candidate is not None and self.results.state_path is not None:
-            candidate = ResultCandidate("", candidate.fingerprint, candidate.confidence, candidate.complete)
+            candidate = ResultCandidate(
+                "", candidate.fingerprint, candidate.confidence, candidate.complete,
+                turn_complete=candidate.turn_complete, body_complete=candidate.body_complete,
+            )
         return self.results.observe(key, status, candidate, identity=identity).state
 
     def _binding_name(self, key: str, session: Optional[str], pane_pid: Optional[str]) -> Optional[str]:

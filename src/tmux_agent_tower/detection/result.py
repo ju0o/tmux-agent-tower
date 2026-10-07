@@ -105,7 +105,9 @@ class ResultSnapshot:
     text: str
     fingerprint: str
     generated_at: float = 0.0
-    complete: bool = True
+    complete: bool = False
+    turn_complete: bool = False
+    body_complete: bool = False
 
 
 @dataclass
@@ -116,7 +118,10 @@ class _Rec:
     suppressed: bool = False
     generated_at: float = 0.0
     confidence: str = "high"
-    complete: bool = True
+    complete: bool = False
+    turn_complete: bool = False
+    body_complete: bool = False
+    full_recovery: bool = False
     identity: str = ""
 
 
@@ -126,6 +131,20 @@ class ResultTracker:
         # callers/tests. Product entry points pass the shared local path.
         self.state_path = Path(state_path) if state_path is not None else None
         self._recs: Dict[str, _Rec] = {}
+        # Only numeric tmux history positions are kept here; never prompt or
+        # terminal text. This is intentionally process-local metadata.
+        self._turn_watermarks: Dict[str, tuple] = {}
+
+    def record_turn_start(self, pane_key: str, position, identity=None) -> None:
+        key = _identity_key(identity)
+        if key and isinstance(position, tuple) and len(position) == 2:
+            self._turn_watermarks[pane_key] = (int(position[0]), int(position[1]), key)
+
+    def turn_start_watermark(self, pane_key: str, identity=None):
+        stored = self._turn_watermarks.get(pane_key)
+        if stored is None or stored[2] != _identity_key(identity):
+            return None
+        return stored[:2]
 
     def _connect(self) -> sqlite3.Connection:
         assert self.state_path is not None
@@ -179,18 +198,25 @@ class ResultTracker:
             suppressed=state == RESULT_NONE and bool(fingerprint),
             generated_at=generated_at,
             confidence=cached.confidence if same else "high",
-            complete=cached.complete if same else True,
+            complete=cached.complete if same else state in (RESULT_READY, RESULT_READ),
+            turn_complete=cached.turn_complete if same else state in (RESULT_READY, RESULT_READ),
+            body_complete=cached.body_complete if same else state in (RESULT_READY, RESULT_READ),
+            full_recovery=cached.full_recovery if same else False,
             identity=identity,
         )
 
     @staticmethod
     def _snapshot(rec: _Rec, state=None, text=None) -> ResultSnapshot:
+        resolved_state = rec.state if state is None else state
+        complete = rec.complete and resolved_state in (RESULT_READY, RESULT_READ)
         return ResultSnapshot(
-            rec.state if state is None else state,
+            resolved_state,
             rec.text if text is None else text,
             rec.fingerprint,
             rec.generated_at,
-            rec.complete,
+            complete,
+            rec.turn_complete if complete else False,
+            rec.body_complete if complete else False,
         )
 
     @staticmethod
@@ -201,6 +227,16 @@ class ResultTracker:
         rec.generated_at = 0.0
         rec.confidence = candidate.confidence or "partial"
         rec.complete = False
+        rec.turn_complete = candidate.turn_complete
+        rec.body_complete = candidate.body_complete
+        rec.full_recovery = False
+
+    @staticmethod
+    def _is_cached_body_suffix(rec: _Rec, candidate: ResultCandidate) -> bool:
+        return bool(
+            rec.full_recovery and rec.complete and rec.body_complete and rec.text and candidate.text
+            and rec.text.endswith(candidate.text)
+        )
 
     def _observe_shared(
         self,
@@ -208,6 +244,8 @@ class ResultTracker:
         status: str,
         candidate: Optional[ResultCandidate],
         identity: Optional[Mapping[str, object]],
+        *,
+        full_recovery: bool = False,
     ) -> ResultSnapshot:
         identity_key = _identity_key(identity)
         if not identity_key:
@@ -221,6 +259,7 @@ class ResultTracker:
 
             if status in _SUPPRESSING:
                 rec.suppressed = True
+                rec.full_recovery = False
                 # Keep a completed read durable across a running turn, just
                 # as the in-memory tracker did. Other pollers independently
                 # suppress it when their execution evidence says WORKING.
@@ -235,6 +274,11 @@ class ResultTracker:
                 else:
                     snapshot = self._snapshot(rec)
             elif not candidate.complete:
+                if self._is_cached_body_suffix(rec, candidate):
+                    snapshot = self._snapshot(rec)
+                    connection.commit()
+                    self._recs[pane_key] = rec
+                    return snapshot
                 # An incomplete newer candidate invalidates any older ready
                 # result. It cannot be copied and must not remain advertised.
                 self._suppress_partial(rec, candidate)
@@ -245,18 +289,32 @@ class ResultTracker:
                 rec.text = candidate.text
                 rec.confidence = candidate.confidence or "high"
                 rec.complete = candidate.complete
+                rec.turn_complete = candidate.turn_complete
+                rec.body_complete = candidate.body_complete
+                rec.full_recovery = full_recovery
                 rec.state = RESULT_READY
                 rec.suppressed = False
                 rec.generated_at = time.time()
                 snapshot = self._snapshot(rec, RESULT_READY)
                 should_store = True
             elif rec.suppressed:
-                # A completion already present before WORKING must not be
-                # announced as new when it remains on screen afterward.
                 rec.suppressed = False
                 if candidate.text:
                     rec.text = candidate.text
                 rec.complete = candidate.complete
+                rec.turn_complete = candidate.turn_complete
+                rec.body_complete = candidate.body_complete
+                if full_recovery and candidate.turn_complete and candidate.body_complete:
+                    rec.full_recovery = True
+                    if rec.state != RESULT_READ:
+                        rec.state = RESULT_READY
+                        rec.generated_at = rec.generated_at or time.time()
+                else:
+                    rec.full_recovery = False
+                    # Polling alone must not restore a completion that was
+                    # suppressed while a new turn was running.
+                    if rec.state != RESULT_READ:
+                        rec.state = RESULT_NONE
                 snapshot = self._snapshot(rec)
                 should_store = True
             else:
@@ -264,6 +322,10 @@ class ResultTracker:
                     rec.text = candidate.text
                 rec.confidence = candidate.confidence or rec.confidence
                 rec.complete = candidate.complete
+                rec.turn_complete = candidate.turn_complete
+                rec.body_complete = candidate.body_complete
+                if full_recovery and candidate.turn_complete and candidate.body_complete:
+                    rec.full_recovery = True
                 snapshot = self._snapshot(rec)
 
             rec.identity = identity_key
@@ -286,14 +348,17 @@ class ResultTracker:
         status: str,
         candidate: Optional[ResultCandidate],
         identity: Optional[Mapping[str, object]] = None,
+        *,
+        full_recovery: bool = False,
     ) -> ResultSnapshot:
         if self.state_path is not None:
-            return self._observe_shared(pane_key, status, candidate, identity)
+            return self._observe_shared(pane_key, status, candidate, identity, full_recovery=full_recovery)
 
         rec = self._recs.setdefault(pane_key, _Rec())
 
         if status in _SUPPRESSING:
             rec.suppressed = True
+            rec.full_recovery = False
             return self._snapshot(rec, RESULT_NONE, "")
 
         if candidate is None:
@@ -304,6 +369,8 @@ class ResultTracker:
             return self._snapshot(rec, RESULT_NONE, "")
 
         if not candidate.complete:
+            if self._is_cached_body_suffix(rec, candidate):
+                return self._snapshot(rec)
             # Match shared-state polling: partial output is never a Result and
             # suppresses an older completion until a complete candidate arrives.
             self._suppress_partial(rec, candidate)
@@ -314,6 +381,9 @@ class ResultTracker:
             rec.text = candidate.text
             rec.confidence = candidate.confidence or "high"
             rec.complete = candidate.complete
+            rec.turn_complete = candidate.turn_complete
+            rec.body_complete = candidate.body_complete
+            rec.full_recovery = full_recovery
             rec.state = RESULT_READY
             rec.suppressed = False
             rec.generated_at = time.time()
@@ -321,10 +391,24 @@ class ResultTracker:
 
         if rec.suppressed:
             rec.suppressed = False
-            if rec.state != RESULT_READ:
-                rec.state = RESULT_NONE
+            rec.complete = candidate.complete
+            rec.turn_complete = candidate.turn_complete
+            rec.body_complete = candidate.body_complete
+            if full_recovery and candidate.turn_complete and candidate.body_complete:
+                rec.full_recovery = True
+                if rec.state != RESULT_READ:
+                    rec.state = RESULT_READY
+                    rec.generated_at = rec.generated_at or time.time()
+            else:
+                rec.full_recovery = False
+                if rec.state != RESULT_READ:
+                    rec.state = RESULT_NONE
+            if candidate.text:
+                rec.text = candidate.text
             return self._snapshot(rec)
 
+        if full_recovery and candidate.turn_complete and candidate.body_complete:
+            rec.full_recovery = True
         return self._snapshot(rec)
 
     def rebind_identity(self, pane_key: str, old_identity, new_identity) -> bool:
@@ -383,6 +467,8 @@ class ResultTracker:
                 generated_at=generated_at,
                 confidence=source_cache.confidence,
                 complete=source_cache.complete,
+                turn_complete=source_cache.turn_complete,
+                body_complete=source_cache.body_complete,
                 identity=new_key,
             )
         return True

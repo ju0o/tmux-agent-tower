@@ -60,7 +60,13 @@ _OPTION_YES_RE = re.compile(r"^\s*[›>]?\s*1\.\s+yes\b", re.IGNORECASE | re.MUL
 _OPTION_TRUST_RE = re.compile(r"^\s*[›>]?\s*1\.\s+trust\b", re.IGNORECASE | re.MULTILINE)
 _OPTION_NO_RE = re.compile(r"^\s*[›>]?\s*3\.\s+no\b", re.IGNORECASE | re.MULTILINE)
 _USER_LINE_RE = re.compile(r"^\s*[›>]\s+\S")
-_WORKED_FOR_RE = re.compile(r"\bworked for\b", re.IGNORECASE)
+# A body sentence can contain "worked for". Only Codex's standalone elapsed
+# summary line is a turn marker; matching prose here truncated a real Result.
+_WORKED_FOR_RE = re.compile(
+    r"^\s*Worked for \d+(?:\.\d+)?\s*[smh]\b"
+    r"(?:\s+\d+(?:\.\d+)?\s*[smh]\b)?(?:\s*[•·].*)?$",
+    re.IGNORECASE,
+)
 # Live trust widget (Codex CLI 0.159): the digit does not select the row.
 # The footer is the key binding: "enter continue · esc quit".
 _ENTER_CONTINUE_RE = re.compile(r"enter continue", re.IGNORECASE)
@@ -265,7 +271,7 @@ class CodexAdapter(AgentAdapter):
         lines = list(ctx.lines)
         if not _IDLE_HINT_RE.search(ctx.tail(15)):
             return None
-        worked = [i for i, line in enumerate(lines) if re.search(r"worked for", line, re.IGNORECASE)]
+        worked = [i for i, line in enumerate(lines) if _WORKED_FOR_RE.match(line)]
         if not worked:
             return None
         end = worked[-1]
@@ -303,4 +309,6 @@ class CodexAdapter(AgentAdapter):
             fingerprint=result_fingerprint(text),
             confidence=confidence,
             complete=bounded,
+            turn_complete=True,
+            body_complete=bounded,
         )

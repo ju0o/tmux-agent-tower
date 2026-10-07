@@ -447,12 +447,21 @@ def send_prompt(
     confirm_lines = RECOVERY_LINES if len(text) > LONG_PROMPT_CONFIRM_CHARS else 40
     observed = _observe(pane_id, lines=confirm_lines)
     adapter, before = observed if observed is not None else (None, None)
+    tracker = getattr(tower, "results", None)
+    identity = None
+    watermark = None
+    if tracker is not None:
+        row = find_row(tower, pane_key)
+        identity = pane_result_identity(row) if row is not None else None
+        watermark = tmux_capture.pane_history_position(pane_id)
     submit_key = adapter.submit_key(before) if adapter is not None else "Enter"
     if not send_prompt_to_pane(pane_id, text, submit_key):
         return SubmitResult(False, reason="send_failed", pane_id=pane_id)
     if adapter is None or before is None:
         return SubmitResult(True, submitted=False, reason="submit_not_confirmed", pane_id=pane_id)
     if confirm_submission(pane_id, adapter, before, text, lines=confirm_lines):
+        if tracker is not None and watermark is not None:
+            tracker.record_turn_start(pane_key, watermark, identity)
         return SubmitResult(True, submitted=True, reason="submitted", pane_id=pane_id)
     fresh = _observe(pane_id, lines=confirm_lines)
     extra = None
@@ -463,6 +472,8 @@ def send_prompt(
     if not submit_input(pane_id, extra):
         return SubmitResult(True, submitted=False, reason="needs_submit", pane_id=pane_id)
     if confirm_submission(pane_id, adapter, before, text):
+        if tracker is not None and watermark is not None:
+            tracker.record_turn_start(pane_key, watermark, identity)
         return SubmitResult(True, submitted=True, reason="submitted", pane_id=pane_id)
     return SubmitResult(True, submitted=False, reason="submit_not_confirmed", pane_id=pane_id)
 
@@ -545,7 +556,9 @@ def _payload(
         "text": snap.text or "",
         "fingerprint": snap.fingerprint,
         "generated_at": snap.generated_at,
-        "complete": bool(getattr(snap, "complete", True)),
+        "complete": bool(getattr(snap, "complete", False)),
+        "turn_complete": bool(getattr(snap, "turn_complete", snap.complete)),
+        "body_complete": bool(getattr(snap, "body_complete", snap.complete)),
         "source": source,
         "turn_identity": turn_identity,
         "timestamp": snap.generated_at if timestamp is None else timestamp,
@@ -560,6 +573,8 @@ def _candidate_payload(candidate, state: str = "ready") -> dict:
         "fingerprint": candidate.fingerprint,
         "generated_at": candidate.timestamp,
         "complete": candidate.complete,
+        "turn_complete": candidate.turn_complete,
+        "body_complete": candidate.body_complete,
         "source": candidate.source,
         "turn_identity": candidate.turn_identity,
         "timestamp": candidate.timestamp,
@@ -577,13 +592,19 @@ class _RecoveryProvider(ResultProvider):
     def get_latest_complete_result(self, target: ResultTarget):
         self.observation = self.reader(target)
         payload = self.observation or {}
-        if not payload.get("complete") or not payload.get("text"):
+        if (
+            payload.get("turn_complete") is not True
+            or payload.get("body_complete") is not True
+            or not payload.get("complete")
+            or not payload.get("text")
+        ):
             return None
         candidate = ResultCandidate(
             payload["text"], payload.get("fingerprint") or "",
             payload.get("confidence") or "unknown", True,
             payload.get("source") or "", payload.get("turn_identity") or "",
             payload.get("timestamp") or payload.get("generated_at") or 0.0,
+            payload["turn_complete"], payload["body_complete"],
         )
         return normalize_candidate(
             candidate, target, source=payload.get("source") or target.provider_type or "local_tmux",
@@ -593,7 +614,7 @@ class _RecoveryProvider(ResultProvider):
 
 def _empty_incomplete(snap) -> dict:
     payload = _payload(snap)
-    payload.update(text="", complete=False)
+    payload.update(text="", complete=False, turn_complete=False, body_complete=False)
     return payload
 
 
@@ -611,7 +632,9 @@ def _recover_remote_result(row: dict) -> dict:
     session_id = row.get("result_provider_session_id") or row.get("session_id") or ""
     if provider_type != "remote_tmux" or not endpoint or not session_id or row.get("result_provider_liveness") == "stale":
         return {"state": "none", "text": "", "fingerprint": "", "generated_at": 0.0, "complete": False}
-    lines = fetch_remote_history(endpoint, pane_id, pane_pid, lines=RECOVERY_LINES, session_id=session_id)
+    lines = fetch_remote_history(
+        endpoint, pane_id, pane_pid, lines=RECOVERY_LINES, session_id=session_id, join_wrapped=True,
+    )
     if lines is None:
         return {"state": "none", "text": "", "fingerprint": "", "generated_at": 0.0, "complete": False}
     lines = _bounded_history(lines)
@@ -626,11 +649,17 @@ def _recover_remote_result(row: dict) -> dict:
         }
     candidate = adapter.extract_result(ctx)
     if candidate is None or not candidate.text or not candidate.complete:
-        return {"state": "none", "text": "", "fingerprint": "", "generated_at": 0.0, "complete": False}
+        return {
+            "state": "none", "text": "", "fingerprint": "", "generated_at": 0.0,
+            "complete": False,
+            "turn_complete": bool(candidate and candidate.turn_complete),
+            "body_complete": bool(candidate and candidate.body_complete),
+        }
     turn_identity = ":".join((endpoint, session_id, pane_id, pane_pid, candidate.fingerprint))
     candidate = type(candidate)(
         candidate.text, candidate.fingerprint, candidate.confidence, candidate.complete,
         source="remote_tmux", turn_identity=turn_identity, timestamp=time.time(),
+        turn_complete=candidate.turn_complete, body_complete=candidate.body_complete,
     )
     return {
         "state": "ready",
@@ -638,6 +667,8 @@ def _recover_remote_result(row: dict) -> dict:
         "fingerprint": candidate.fingerprint,
         "generated_at": candidate.timestamp,
         "complete": True,
+        "turn_complete": candidate.turn_complete,
+        "body_complete": candidate.body_complete,
         "source": candidate.source,
         "turn_identity": candidate.turn_identity,
         "timestamp": candidate.timestamp,
@@ -687,7 +718,21 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
     if found is None:
         return None
     title, command = found
-    lines = _bounded_history(tmux_capture.capture_pane(pane_id, lines=RECOVERY_LINES))
+    watermark = tracker.turn_start_watermark(pane_key, identity) if tracker is not None else None
+    capture_lines = RECOVERY_LINES
+    if watermark is not None:
+        current = tmux_capture.pane_history_position(pane_id)
+        start_size, start_limit = watermark
+        if (
+            current is not None
+            and start_size < start_limit
+            and current[1] == start_limit
+            and start_size <= current[0] < current[1]
+        ):
+            capture_lines = min(RECOVERY_LINES, max(0, current[0] - start_size))
+    lines = _bounded_history(tmux_capture.capture_pane(
+        pane_id, lines=capture_lines, join_wrapped=True,
+    ))
     if not lines:
         return {"state": "none", "text": "", "fingerprint": "", "generated_at": 0.0, "complete": False}
     from ..adapters.base import PaneContext
@@ -704,13 +749,17 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
     candidate = adapter.extract_result(ctx)
     if candidate is None or not candidate.text:
         return {"state": "none", "text": "", "fingerprint": "", "generated_at": 0.0, "complete": False}
-    snap = tracker.observe(pane_key, "IDLE", candidate, identity=identity)
+    snap = tracker.observe(
+        pane_key, "IDLE", candidate, identity=identity, full_recovery=candidate.complete,
+    )
     if not candidate.complete:
         # Keep the observation for UI state, but never let an older complete
         # tracker body turn this newer fragment into a copy payload.
         return {
             "state": snap.state, "text": "", "fingerprint": candidate.fingerprint,
             "generated_at": snap.generated_at, "complete": False,
+            "turn_complete": candidate.turn_complete,
+            "body_complete": candidate.body_complete,
         }
     turn_identity = hashlib.sha256(
         json.dumps(identity or {}, sort_keys=True, default=str).encode("utf-8")

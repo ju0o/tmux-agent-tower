@@ -85,6 +85,95 @@ def test_codex_result_drops_the_tool_diff_and_keeps_a_code_block():
     assert "print('tower')" in result.text
 
 
+def test_codex_prose_worked_for_is_not_a_turn_boundary():
+    body = [
+        "START_MARKER",
+        "Section 1: The run worked for several configurations.",
+        "",
+        "```python",
+        "    def preserve():",
+        "        return 'all lines'",
+        "```",
+        "",
+        "Section 2: details that must stay in the copied body.",
+        "FOUNDER_ACTION_REQUIRED:",
+        "- review the complete result",
+        "NEXT_ACTION:",
+        "- continue from this exact point",
+        "END_MARKER",
+    ]
+    screen = ["› prepare the report", *body, "Worked for 2m 4s • 10:00", "› Ask Codex to do anything"]
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(screen)))
+
+    assert candidate is not None
+    assert candidate.text == "\n".join(body)
+    assert candidate.turn_complete is True
+    assert candidate.body_complete is True
+    assert candidate.complete is True
+
+
+def test_result_cleanup_preserves_markdown_blank_lines_indentation_and_fenced_chrome():
+    body = [
+        "START_MARKER",
+        "",
+        "  ```python",
+        "    Worked for this exact string must remain code.",
+        "    print('indentation')",
+        "  ```",
+        "",
+        "END_MARKER",
+    ]
+    screen = ["› write the full body", *body, "Worked for 2m 4s • 10:00", "› Ask Codex to do anything"]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(screen)))
+
+    assert candidate is not None and candidate.complete
+    assert candidate.text == "\n".join(body)
+
+
+def test_long_codex_result_outside_visible_screen_never_returns_a_complete_suffix():
+    body = ["START_MARKER"]
+    body.extend(f"한국어 결과 {index:03d}: code and wrapped content is preserved." for index in range(120))
+    body.extend(("FOUNDER_ACTION_REQUIRED:", "- verify every item", "NEXT_ACTION:", "- finish", "END_MARKER"))
+    history = ["› produce the full report", *body, "Worked for 3m 1s", "› Ask Codex to do anything"]
+    visible = history[-30:]
+    visible_candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(visible)))
+    full_candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert visible_candidate is not None
+    assert visible_candidate.turn_complete is True
+    assert visible_candidate.body_complete is False
+    assert visible_candidate.complete is False
+    assert full_candidate is not None and full_candidate.complete is True
+    assert full_candidate.text == "\n".join(body)
+    assert full_candidate.text.startswith("START_MARKER\n")
+    assert full_candidate.text.endswith("END_MARKER")
+
+
+@pytest.mark.parametrize(
+    ("adapter", "command", "prefix", "completion", "idle"),
+    [
+        (CodexAdapter, "codex", ["› user request"], "Worked for 3m 1s", ["› Ask Codex to do anything"]),
+        (ClaudeAdapter, "claude", ["❯ user request"], "✻ Cooked for 3m 1s", ["❯", "⏵⏵ auto mode on"]),
+        (CursorAdapter, "cursor-agent", ["→ Add a follow-up"], "→ Add a follow-up", []),
+        (OpenCodeAdapter, "opencode", ["▣ Build · model · 1.0s", "┃ user request"], "▣ Build · model · 3m 1s", ["ctrl+p commands"]),
+    ],
+)
+def test_long_result_requires_full_body_boundary_for_each_adapter(adapter, command, prefix, completion, idle):
+    body = ["START_MARKER", "Section 1", "", "```python", "    Worked for is code, not a boundary.", "    print('preserve')", "```", ""]
+    body.extend(f"Section {index:03d}: 긴 한국어 결과 본문을 화면 밖까지 온전히 복구해야 합니다." for index in range(120))
+    body.extend(("FOUNDER_ACTION_REQUIRED:", "- review the complete answer", "NEXT_ACTION:", "- finish the task", "END_MARKER"))
+    history = [*prefix, *body, completion, *idle]
+    partial = adapter().extract_result(PaneContext("", command, tuple(history[-30:])))
+    complete = adapter().extract_result(PaneContext("", command, tuple(history)))
+
+    assert partial is None or partial.body_complete is False
+    assert partial is None or partial.complete is False
+    assert complete is not None and complete.complete
+    assert complete.turn_complete is True and complete.body_complete is True
+    assert complete.text == "\n".join(body)
+
+
 def test_codex_working_is_not_a_result():
     assert CodexAdapter().extract_result(ctx("codex-working.txt", title="⠙ working")) is None
 
@@ -108,16 +197,19 @@ def test_codex_trust_widget_after_old_completion_is_not_a_result():
 @pytest.mark.parametrize(
     ("adapter", "command", "screen", "answer"),
     [
-        (CodexAdapter, "codex", ("OK", "Worked for 2s", "› Ask Codex to do anything"), "OK"),
-        (ClaudeAdapter, "claude", ("PASS", "✻ Cooked for 2s", "❯", "⏵⏵ auto mode on"), "PASS"),
-        (CursorAdapter, "cursor-agent", ("완료", "→ Add a follow-up"), "완료"),
-        (OpenCodeAdapter, "opencode", ("OK", "▣ Build · model · 2.0s", "ctrl+p commands"), "OK"),
+        (CodexAdapter, "codex", ("› user request", "OK", "Worked for 2s", "› Ask Codex to do anything"), "OK"),
+        (ClaudeAdapter, "claude", ("❯ user request", "PASS", "✻ Cooked for 2s", "❯", "⏵⏵ auto mode on"), "PASS"),
+        (CursorAdapter, "cursor-agent", ("→ Add a follow-up", "완료", "→ Add a follow-up"), "완료"),
+        (OpenCodeAdapter, "opencode", ("▣ Build · model · 1.0s", "┃ user request", "OK", "▣ Build · model · 2.0s", "ctrl+p commands"), "OK"),
     ],
 )
 def test_short_answer_is_kept_with_agent_completion_evidence(adapter, command, screen, answer):
     result = adapter().extract_result(PaneContext(title="", command=command, lines=screen))
     assert result is not None
     assert result.text == answer
+    assert result.turn_complete is True
+    assert result.body_complete is True
+    assert result.complete is True
 
 
 def test_claude_tool_bullet_alone_is_not_a_result():
@@ -155,6 +247,24 @@ def test_cursor_followup_keeps_the_answer_and_drops_finished():
     result = CursorAdapter().extract_result(ctx("cursor-idle-followup.txt"))
     assert result is not None
     assert result.text == "All tests passed."
+
+
+@pytest.mark.parametrize(
+    ("adapter", "command", "screen"),
+    [
+        (ClaudeAdapter, "claude", ["❯ user request", "START_MARKER", "body worked for several cases", "END_MARKER", "✻ Cooked for 2m", "❯", "⏵⏵ auto mode on"]),
+        (CursorAdapter, "cursor-agent", ["→ Add a follow-up", "START_MARKER", "manual says Add a follow-up here", "END_MARKER", "→ Add a follow-up"]),
+        (OpenCodeAdapter, "opencode", ["▣ Build · model · 1.0s", "┃ prompt", "START_MARKER", "body mentions ▣ Build · model · 3.0s as text", "END_MARKER", "▣ Build · model · 2.0s", "ctrl+p commands"]),
+    ],
+)
+def test_adapter_turn_markers_in_prose_do_not_truncate_complete_bodies(adapter, command, screen):
+    result = adapter().extract_result(PaneContext("", command, tuple(screen)))
+    assert result is not None
+    assert result.text.startswith("START_MARKER")
+    assert result.text.endswith("END_MARKER")
+    assert result.turn_complete is True
+    assert result.body_complete is True
+    assert result.complete is True
 
 
 def test_cursor_still_running_is_not_a_result():
@@ -204,6 +314,37 @@ def test_same_result_does_not_become_ready_again_after_a_new_turn():
     newer = ResultCandidate("A second answer that is actually new.", "second-answer")
     assert newer.fingerprint != first.fingerprint
     assert tracker.observe("%1", "IDLE", newer).state == "ready"
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_full_history_recovery_restores_a_same_result_after_visible_partial_poll(tmp_path, shared):
+    tracker = ResultTracker(tmp_path / "result-state.sqlite3" if shared else None)
+    identity = _shared_identity() if shared else None
+    body = "START_MARKER\n" + "\n".join(f"line {i:03d}" for i in range(100)) + "\nEND_MARKER"
+    complete = ResultCandidate(body, "same-result")
+    assert tracker.observe("%9", "IDLE", complete, identity).state == "ready"
+    assert tracker.observe("%9", "WORKING", None, identity).state == "none"
+    fragment = ResultCandidate("line 090\nline 091\nEND_MARKER", "fragment", confidence="partial")
+    assert tracker.observe("%9", "IDLE", fragment, identity).complete is False
+
+    recovered = tracker.observe("%9", "IDLE", complete, identity, full_recovery=True)
+
+    assert (recovered.state, recovered.text, recovered.complete) == ("ready", body, True)
+    assert recovered.turn_complete is True and recovered.body_complete is True
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_visible_suffix_does_not_hide_a_cached_complete_result(tmp_path, shared):
+    tracker = ResultTracker(tmp_path / "result-state.sqlite3" if shared else None)
+    identity = _shared_identity() if shared else None
+    body = "START_MARKER\nline one\nline two\nEND_MARKER"
+    complete = ResultCandidate(body, "complete-body")
+    tracker.observe("%9", "IDLE", complete, identity, full_recovery=True)
+    suffix = ResultCandidate("line two\nEND_MARKER", "visible-suffix", confidence="partial")
+
+    snapshot = tracker.observe("%9", "IDLE", suffix, identity)
+
+    assert (snapshot.state, snapshot.text, snapshot.complete) == ("ready", body, True)
 
 
 def test_view_or_copy_marks_read_and_a_mismatch_does_not():
@@ -632,6 +773,7 @@ class _RecoverTower:
         self.results = ResultTracker()
         self.rows = [{"key": "%9", "status": status, "remote": False}]
         self.captures = []
+        self.capture_options = []
 
     def load(self):
         return None
@@ -643,8 +785,9 @@ def _patch_history(monkeypatch, tower, history):
             return "%9\n"
         return "Codex\x1fssh\n"
 
-    def capture_pane(pane_id, lines=30):
+    def capture_pane(pane_id, lines=30, **kwargs):
         tower.captures.append(lines)
+        tower.capture_options.append(kwargs)
         return list(history)
 
     monkeypatch.setattr("tmux_agent_tower.control.actions.tmux_capture.run_tmux", run_tmux)
@@ -669,6 +812,31 @@ def test_y_recovers_all_300_lines_beyond_the_visible_30(monkeypatch):
     assert payload["text"] == "\n".join(body)
     assert len(payload["text"].splitlines()) == 300
     assert tower.captures == [RECOVERY_LINES]
+    assert tower.capture_options == [{"join_wrapped": True}]
+
+
+def test_tower_turn_watermark_limits_recovery_to_history_since_send(monkeypatch):
+    from tmux_agent_tower.control.actions import get_result
+
+    identity = {
+        "tmux_host": "host", "server_scope": {"socket": "/tmp/tmux-test"},
+        "session": "0", "window_id": "@1", "pane_id": "%9", "pane_pid": "1234",
+    }
+    body = [f"turn line {index:03d}" for index in range(100)]
+    history = ["› Tower submitted prompt", *body, "Worked for 2m", "› Ask Codex to do anything"]
+    tower = _RecoverTower()
+    tower.results.record_turn_start("%9", (20, 200), identity)
+    _patch_history(monkeypatch, tower, history)
+    monkeypatch.setattr("tmux_agent_tower.control.actions.pane_result_identity", lambda _row: identity)
+    monkeypatch.setattr("tmux_agent_tower.control.actions.tmux_capture.pane_history_position", lambda _pane: (125, 200))
+
+    ok, _reason, payload = get_result(tower, "%9")
+
+    assert ok and payload["complete"] is True
+    assert payload["turn_complete"] is True and payload["body_complete"] is True
+    assert payload["text"] == "\n".join(body)
+    assert tower.captures == [105]
+    assert tower.capture_options == [{"join_wrapped": True}]
 
 
 def test_partial_poll_is_replaced_by_complete_history_recovery(monkeypatch):
@@ -757,6 +925,8 @@ def test_unbounded_candidate_is_not_a_y_payload(monkeypatch):
     ok, _reason, payload = get_result(tower, "%9")
     assert ok
     assert payload["complete"] is False
+    assert payload["turn_complete"] is True
+    assert payload["body_complete"] is False
     assert payload["text"] == ""
 
 
@@ -804,7 +974,24 @@ def test_remote_result_provider_returns_the_normalized_complete_candidate(monkey
     assert payload["source"] == "remote_tmux"
     assert payload["turn_identity"].startswith("workstation-b:$9:%9:123:")
     assert payload["timestamp"] > 0
-    assert calls == [("workstation-b", "%9", "123", {"lines": 800, "session_id": "$9"})]
+    assert calls == [("workstation-b", "%9", "123", {"lines": 800, "session_id": "$9", "join_wrapped": True})]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"complete": True, "text": "unbounded suffix"},
+        {"complete": True, "turn_complete": True, "body_complete": False, "text": "partial"},
+        {"complete": True, "turn_complete": False, "body_complete": True, "text": "not finished"},
+    ],
+)
+def test_result_provider_requires_explicit_turn_and_body_completeness(payload):
+    from tmux_agent_tower.control.actions import _RecoveryProvider
+    from tmux_agent_tower.detection.providers import ResultTarget
+
+    provider = _RecoveryProvider(lambda _target: payload)
+
+    assert provider.get_latest_complete_result(ResultTarget.from_row({"key": "%9"})) is None
 
 
 def test_remote_provider_partial_candidate_stays_out_of_y_payload(monkeypatch):
@@ -1129,7 +1316,7 @@ def test_ssh_pane_uses_the_claude_adapter_for_recovery(monkeypatch):
             return "%9\n"
         return "task\x1fssh\n"
 
-    def capture_pane(pane_id, lines=30):
+    def capture_pane(pane_id, lines=30, **_kwargs):
         return list(screen)
 
     monkeypatch.setattr("tmux_agent_tower.control.actions.tmux_capture.run_tmux", run_tmux)
@@ -1229,7 +1416,7 @@ def test_y_copies_nothing_while_cursor_shows_the_running_token_footer(monkeypatc
     monkeypatch.setattr("tmux_agent_tower.control.actions.tmux_capture.pane_exists", lambda pane_id: True)
     monkeypatch.setattr(
         "tmux_agent_tower.control.actions.tmux_capture.capture_pane",
-        lambda pane_id, lines=30: list(screen),
+        lambda pane_id, lines=30, **_kwargs: list(screen),
     )
     ok, _reason, payload = get_result(_RecoverTower("IDLE"), "%9")
     assert ok is True
@@ -1260,7 +1447,7 @@ def test_y_reads_the_selected_pane_not_the_rest_of_the_window(monkeypatch):
     monkeypatch.setattr("tmux_agent_tower.control.actions.tmux_capture.pane_exists", lambda pane_id: True)
     monkeypatch.setattr(
         "tmux_agent_tower.control.actions.tmux_capture.capture_pane",
-        lambda pane_id, lines=30: list(screen),
+        lambda pane_id, lines=30, **_kwargs: list(screen),
     )
     tower = _RecoverTower("IDLE")
     ok, _reason, payload = get_result(tower, "%9")
@@ -1469,7 +1656,7 @@ def test_ready_badge_and_y_return_the_same_ssh_body(monkeypatch):
     monkeypatch.setattr("tmux_agent_tower.control.actions.tmux_capture.pane_exists", lambda pane_id: True)
     monkeypatch.setattr(
         "tmux_agent_tower.control.actions.tmux_capture.capture_pane",
-        lambda pane_id, lines=30: list(screen),
+        lambda pane_id, lines=30, **_kwargs: list(screen),
     )
     ok, reason, payload = get_result(tower, "%9")
     assert ok and reason == ""
@@ -1495,7 +1682,7 @@ def test_y_sends_the_recovered_body_bytes(monkeypatch):
     monkeypatch.setattr("tmux_agent_tower.control.actions.tmux_capture.pane_exists", lambda pane_id: True)
     monkeypatch.setattr(
         "tmux_agent_tower.control.actions.tmux_capture.capture_pane",
-        lambda pane_id, lines=30: list(screen),
+        lambda pane_id, lines=30, **_kwargs: list(screen),
     )
     ok, _reason, payload = get_result(_RecoverTower("IDLE"), "%9")
     assert ok and payload["text"] == "완료\n둘째 줄"

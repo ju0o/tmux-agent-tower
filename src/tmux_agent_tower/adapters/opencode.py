@@ -38,7 +38,7 @@ from .base import (
 
 # "▣  Build · <model> · 5.2s" closes a turn. A narrow pane wraps the
 # duration onto the next line ("· 2m" / "24s") or stops at minutes.
-_TURN_DONE_RE = re.compile(r"▣.*\d+(?:\.\d+)?\s*[smh]\b", re.IGNORECASE)
+_TURN_DONE_RE = re.compile(r"^\s*▣.*\d+(?:\.\d+)?\s*[smh]\b", re.IGNORECASE)
 _ELAPSED_RE = re.compile(r"\d+(?:\.\d+)?\s*[smh]\b", re.IGNORECASE)
 _PROMPT_BOX_RE = re.compile(r"^\s*[┃│]")
 
@@ -48,7 +48,7 @@ def _done_marks(lines) -> list:
 
     marks = []
     for index, line in enumerate(lines):
-        if "▣" not in line:
+        if not re.match(r"^\s*▣", line):
             continue
         blob = line if index + 1 >= len(lines) else f"{line} {lines[index + 1]}"
         if _ELAPSED_RE.search(blob):
@@ -194,4 +194,6 @@ class OpenCodeAdapter(AgentAdapter):
             fingerprint=result_fingerprint(text),
             confidence="high" if bounded else "partial",
             complete=bounded,
+            turn_complete=True,
+            body_complete=bounded,
         )

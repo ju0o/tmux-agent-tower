@@ -305,4 +305,6 @@ class ClaudeAdapter(AgentAdapter):
             fingerprint=result_fingerprint(text),
             confidence=confidence,
             complete=bounded,
+            turn_complete=True,
+            body_complete=bounded,
         )

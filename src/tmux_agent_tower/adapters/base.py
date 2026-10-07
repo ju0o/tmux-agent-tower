@@ -82,11 +82,12 @@ _NO_OPINION = AdapterResult(status=None)
 
 @dataclass(frozen=True)
 class ResultCandidate:
-    """An adapter-extracted final body and whether its turn boundary is known.
+    """An adapter-extracted final body with independent turn/body evidence.
 
     ``confidence`` remains for compatibility; ``complete`` gates result
-    display/copy. ``fingerprint`` identifies the text so the same answer
-    is not announced again.
+    display/copy and is derived from ``turn_complete`` and ``body_complete``.
+    ``fingerprint`` identifies the text so the same answer is not announced
+    again.
     """
 
     text: str
@@ -96,12 +97,22 @@ class ResultCandidate:
     source: str = ""
     turn_identity: str = ""
     timestamp: float = 0.0
+    turn_complete: Optional[bool] = None
+    body_complete: Optional[bool] = None
 
     def __post_init__(self) -> None:
-        # Keep the old confidence field compatible while making completeness
-        # explicit for consumers that must never copy a fragment.
-        if self.confidence == "partial" and self.complete:
-            object.__setattr__(self, "complete", False)
+        # Legacy callers supplied one flag. Treat it as evidence for both
+        # dimensions, except that "partial" never proves a complete body.
+        turn_complete = self.turn_complete
+        body_complete = self.body_complete
+        if turn_complete is None:
+            turn_complete = self.complete and self.confidence != "partial"
+        if body_complete is None:
+            body_complete = self.complete and self.confidence != "partial"
+        complete = bool(turn_complete and body_complete)
+        object.__setattr__(self, "turn_complete", bool(turn_complete))
+        object.__setattr__(self, "body_complete", bool(body_complete))
+        object.__setattr__(self, "complete", complete)
 
 
 _CHROME_LINE = re.compile(
@@ -171,22 +182,39 @@ def drop_scrolled_user_prompt(lines: Sequence[str]) -> list:
 
 
 def prose_body(lines: Sequence[str]) -> Optional[str]:
-    """Drop tool logs and status chrome. A short final such as "OK" stays.
+    """Drop tool logs and status chrome while preserving answer formatting.
 
     "Finished" alone is still chrome. Length is not evidence: the caller
-    has already found that agent's completion marker.
+    has already found that agent's completion marker. Indentation and blank
+    lines are part of the body, especially inside Markdown code fences.
     """
 
     kept = []
+    fence = ""
     for line in lines:
         stripped = line.strip()
-        if not stripped or _BOX_ONLY.match(stripped) or _CHROME_LINE.match(stripped):
+        if not stripped:
+            kept.append("")
             continue
-        if _TOOL_LINE.match(stripped):
+        raw = line.rstrip()
+        if fence:
+            kept.append(raw)
+            if stripped.startswith(fence * 3):
+                fence = ""
+            continue
+        if stripped.startswith(("```", "~~~")):
+            fence = stripped[0]
+            kept.append(raw)
+            continue
+        if _BOX_ONLY.match(stripped) or _CHROME_LINE.match(stripped) or _TOOL_LINE.match(stripped):
             continue
         kept.append(stripped)
-    text = "\n".join(kept).strip()
-    if not text or _ONLY_COMPLETION_WORD.match(text):
+    while kept and not kept[0].strip():
+        kept.pop(0)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    text = "\n".join(kept)
+    if not text or _ONLY_COMPLETION_WORD.match(text.strip()):
         return None
     return text
 
