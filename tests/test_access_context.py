@@ -133,7 +133,7 @@ def test_local_access_detects_clipboard_capability_without_runtime_error(monkeyp
     )
     monkeypatch.setattr("tmux_agent_tower.clipboard_dest.context_for_process", lambda _pid: None)
     monkeypatch.setattr("tmux_agent_tower.clipboard_dest.bridge_id_for_process", lambda _pid: None)
-    monkeypatch.setattr("tmux_agent_tower.clipboard.choose_clipboard_tool", lambda _which, _env, _system: "wl-copy")
+    monkeypatch.setattr("tmux_agent_tower.clipboard_dest.native_clipboard_provider", lambda: "wl-copy")
 
     client, clients = observe(["/dev/pts/1\t4\t"])
 

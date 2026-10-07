@@ -190,6 +190,35 @@ def test_spawn_uses_returned_pane_id_for_binding(tmp_path, monkeypatch):
     assert record["pane_pid"] == "700"
 
 
+def test_spawn_binds_the_pane_pid_after_start(tmp_path, monkeypatch):
+    from tmux_agent_tower.state.bindings import ProjectBindingStore
+
+    fake = FakeTmux()
+    run_tmux = fake.run_tmux
+
+    def process_replaces_startup_shell(args, *call_args, **call_kwargs):
+        result = run_tmux(args, *call_args, **call_kwargs)
+        if args[0] == "send-keys":
+            fake.pids[args[args.index("-t") + 1]] = "701"
+        return result
+
+    monkeypatch.setattr(spawn.tmux_capture, "run_tmux", process_replaces_startup_shell)
+    monkeypatch.setattr(spawn, "resolve_agent_command", lambda label, cfg: cfg.get(label))
+    store = ProjectBindingStore(tmp_path / "project-bindings.json")
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = spawn.spawn_local(
+        "0", [SpawnTarget(str(project), "ExampleProject", "Shell")],
+        {"Shell": "bash"}, bindings=store,
+    )[0]
+
+    assert result.pane_pid == "701"
+    record = store.usable("%1", "0", "701")
+    assert record and record["pane_pid"] == "701"
+    assert store.usable("%1", "0", "700") is None
+
+
 def test_result_provider_binding_requires_exact_tower_pane_and_remote_identity(tmp_path):
     from tmux_agent_tower.state.bindings import ProjectBindingStore
 

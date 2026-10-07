@@ -30,21 +30,22 @@ SESSION = "scratch-A"
 
 @pytest.fixture
 def private_tmux(tmp_path, monkeypatch):
-    sock = tmp_path / f"tmux-{uuid.uuid4().hex[:8]}.sock"
+    socket_dir = tmp_path / f"tmux-{uuid.uuid4().hex[:8]}"
+    socket_dir.mkdir()
+    monkeypatch.setenv("TMUX_TMPDIR", str(socket_dir))
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
     created = subprocess.run(
-        ["tmux", "-S", str(sock), "new-session", "-d", "-s", SESSION, "-x", "80", "-y", "24", "sleep 300"],
+        ["tmux", "new-session", "-d", "-s", SESSION, "-x", "80", "-y", "24", "sleep 300"],
         capture_output=True, text=True, timeout=10, check=False,
     )
     if created.returncode != 0:
         pytest.skip(f"could not start a private tmux server: {created.stderr.strip()}")
 
-    # Plain `tmux ...` (what the code under test runs) follows $TMUX's socket path.
-    monkeypatch.setenv("TMUX", f"{sock},0,0")
-    monkeypatch.delenv("TMUX_PANE", raising=False)
     try:
-        yield sock
+        yield socket_dir
     finally:
-        subprocess.run(["tmux", "-S", str(sock), "kill-server"], capture_output=True, timeout=10, check=False)
+        subprocess.run(["tmux", "kill-server"], capture_output=True, timeout=10, check=False)
 
 
 @pytest.fixture
@@ -68,8 +69,8 @@ def isolated(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _kill_session(sock):
-    subprocess.run(["tmux", "-S", str(sock), "kill-session", "-t", f"={SESSION}"], capture_output=True, timeout=10, check=False)
+def _kill_session(_socket_dir):
+    subprocess.run(["tmux", "kill-session", "-t", f"={SESSION}"], capture_output=True, timeout=10, check=False)
 
 
 def _get(srv, path, token):

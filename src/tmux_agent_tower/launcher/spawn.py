@@ -114,6 +114,30 @@ def _finish_new_pane(
         raise RuntimeError("new pane identity unavailable")
     if overrides is not None:
         overrides.drop_if_stale(pane_id, session, pane_pid)
+    missing = agents_cfg.get(target.agent_label, target.agent_label)
+    if command:
+        send = ["send-keys", "-t", pane_id, command, "Enter"]
+        title = ["select-pane", "-t", pane_id, "-T", _pane_title(target, True)]
+        if transactional:
+            if not _tmux_ok(send) or not _tmux_ok(title):
+                raise RuntimeError("new agent command could not be sent")
+        else:
+            tmux_capture.run_tmux(send, capture=False)
+            tmux_capture.run_tmux(title, capture=False)
+        # A fast shell can replace its startup process while it begins the
+        # command. Bind the new task to the pane's current PID, not the
+        # short-lived PID observed before the command was sent.
+        current_pid = tmux_capture.run_tmux(
+            ["display-message", "-p", "-t", pane_id, "#{pane_pid}"]
+        ).strip()
+        if current_pid.isdecimal():
+            pane_pid = current_pid
+        elif transactional:
+            raise RuntimeError("new pane identity unavailable after start")
+    else:
+        tmux_capture.run_tmux(
+            ["select-pane", "-t", pane_id, "-T", _pane_title(target, False, missing)], capture=False
+        )
     if bindings is not None:
         from ..detection.sshdest import destination_of_command
 
@@ -128,22 +152,8 @@ def _finish_new_pane(
             transport="ssh" if ssh_target else "",
             transport_target=ssh_target,
         )
-
     if command:
-        send = ["send-keys", "-t", pane_id, command, "Enter"]
-        title = ["select-pane", "-t", pane_id, "-T", _pane_title(target, True)]
-        if transactional:
-            if not _tmux_ok(send) or not _tmux_ok(title):
-                raise RuntimeError("new agent command could not be sent")
-        else:
-            tmux_capture.run_tmux(send, capture=False)
-            tmux_capture.run_tmux(title, capture=False)
         return SpawnResult(target, True, "시작됨", pane_id, session, pane_pid)
-
-    missing = agents_cfg.get(target.agent_label, target.agent_label)
-    tmux_capture.run_tmux(
-        ["select-pane", "-t", pane_id, "-T", _pane_title(target, False, missing)], capture=False
-    )
     return SpawnResult(target, False, f"명령을 찾을 수 없습니다: {missing}", pane_id, session, pane_pid)
 
 
