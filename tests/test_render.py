@@ -54,6 +54,11 @@ def test_meaningful_title_rejects_bare_hostname():
     assert not render.looks_meaningful_title("workstation-a", "workstation-a")  # case-insensitive
 
 
+def test_meaningful_title_rejects_numeric_window_indexes():
+    assert not render.looks_meaningful_title("0", "workstation-a")
+    assert not render.looks_meaningful_title("12", "workstation-a")
+
+
 def test_meaningful_title_accepts_real_title():
     assert render.looks_meaningful_title("JuHome Dev", "workstation-a")
 

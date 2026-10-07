@@ -176,7 +176,9 @@ def watch_counts(rows: Sequence[Dict]) -> Dict[str, int]:
 
     counts = {"approval": 0, "choice": 0, "answer": 0, "result": 0, "working": 0}
     for row in rows:
-        if row.get("placeholder") or row.get("offline") or row.get("kind") in {"window", "work_group"}:
+        if row.get("placeholder") or row.get("offline") or row.get("kind") in {
+            "window", "work_group", "folder", "other_section", "window_asset",
+        }:
             continue
         attention = row.get("attention") or "none"
         if attention == "approval_required":
@@ -272,6 +274,9 @@ def looks_meaningful_title(title: Optional[str], local_host: str) -> bool:
         return False
 
     if stripped.casefold() in {"bash", "zsh", "sh", "fish", "shell", "terminal", "powershell", "cmd"}:
+        return False
+
+    if stripped.isdecimal():
         return False
 
     if local_host and stripped.lower() == local_host.strip().lower():
@@ -490,6 +495,8 @@ def row_matches_filter(row: Dict, filter_text: str) -> bool:
         row.get("display_name") or "",
         row.get("task_name") or "",
         row.get("project") or "",
+        row.get("folder_name") or "",
+        row.get("window_display_name") or "",
         row.get("agent") or "",
         t(f"role.{role}") if role else "",
         row.get("work_group_name") or "",
@@ -569,13 +576,21 @@ def list_row_parts(row: Dict, width: int, badge_text: Callable[[str], str], dura
             "agent": "",
             "badge": "" if narrow else (row.get("summary_compact") or ""),
         }
-    if row.get("kind") == "window":
+    if row.get("kind") in {"window", "window_asset"}:
         return {
             "guide": guide,
-            "project": row.get("project") or "",
+            "project": row.get("display_name") or row.get("project") or "",
             "task": "",
             "agent": "",
-            "badge": "" if narrow else (row.get("summary") or ""),
+            "badge": row.get("summary_compact") if narrow else (row.get("summary") or ""),
+        }
+    if row.get("kind") in {"folder", "other_section"}:
+        return {
+            "guide": guide,
+            "project": row.get("display_name") or "",
+            "task": "",
+            "agent": "",
+            "badge": row.get("summary_compact") if narrow else (row.get("summary") or ""),
         }
     if row.get("kind") == "zero":
         return {"guide": "", "project": row.get("project") or "", "task": "", "agent": "", "badge": ""}
@@ -594,6 +609,9 @@ def list_row_parts(row: Dict, width: int, badge_text: Callable[[str], str], dura
     agent = (row.get("agent") or "").strip()
     if role and role.casefold() not in project.casefold():
         agent = f"{role} · {agent}" if agent else role
+    group = str(row.get("work_group_name") or "").strip()
+    if group and group.casefold() not in project.casefold():
+        task_parts.append(group)
     return {
         "guide": guide,
         "project": project,

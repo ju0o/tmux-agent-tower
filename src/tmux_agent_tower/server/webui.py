@@ -79,6 +79,15 @@ PAGE_HTML = """<!doctype html>
     cursor: pointer;
   }
   .work-group { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+  .work-folder, .work-window { border: 1px solid var(--line); border-radius: 9px; margin: 6px 0; overflow: hidden; }
+  .work-folder > summary, .work-window > summary { list-style: none; cursor: pointer; padding: 10px 12px; background: #20242d; }
+  .work-window > summary { background: #191c23; }
+  .work-folder > summary::-webkit-details-marker, .work-window > summary::-webkit-details-marker { display: none; }
+  .work-folder > summary::before, .work-window > summary::before { content: "▶"; display: inline-block; margin-right: 8px; color: var(--dim); }
+  .work-folder[open] > summary::before, .work-window[open] > summary::before { content: "▼"; }
+  .folder-name, .window-name { font-weight: 650; }
+  .folder-summary, .window-summary { display: block; margin: 3px 0 0 20px; color: var(--dim); font-size: 13px; }
+  .window-content { padding: 2px 7px 6px 14px; }
   .work-group > summary { list-style: none; cursor: pointer; padding: 12px; background: #20242d; }
   .work-group > summary::-webkit-details-marker { display: none; }
   .work-group > summary::before { content: "▶"; display: inline-block; margin-right: 8px; color: var(--dim); }
@@ -348,7 +357,8 @@ PAGE_HTML = """<!doctype html>
   var editBox = $("edit");
 
   var panes = {};        // key -> last status row
-  var collapsedGroups = {};
+  var collapsedFolders = {};
+  var collapsedWindows = {};
   var current = null;    // key of the open detail, or null
   var sending = false;
   var screenTimer = null, listTimer = null;
@@ -638,14 +648,15 @@ PAGE_HTML = """<!doctype html>
       dot.className = "dot " + p.status;
       var proj = document.createElement("div");
       proj.className = "project";
-      proj.textContent = p.display_name || p.task_name || p.project || "(이름 없음)";
+      proj.textContent = p.display_name || p.task_name || p.project || "터미널";
       var agent = document.createElement("div");
       agent.className = "agent";
-      agent.textContent = [p.agent, p.role_label].filter(Boolean).join(" · ");
+      agent.textContent = [p.role_label, p.agent].filter(Boolean).join(" · ");
       row1.appendChild(dot); row1.appendChild(proj); row1.appendChild(agent);
       var projectMeta = document.createElement("div");
       projectMeta.className = "project-meta";
-      projectMeta.textContent = p.project ? "프로젝트 · " + p.project : "";
+      projectMeta.textContent = [p.project ? "프로젝트 · " + p.project : "",
+        p.work_group_name ? "작업 묶음 · " + p.work_group_name : ""].filter(Boolean).join(" · ");
 
       var statusLine = document.createElement("div");
       statusLine.className = "status-line";
@@ -707,70 +718,106 @@ PAGE_HTML = """<!doctype html>
       parent.appendChild(tools);
     }
 
-    var groupedTargets = {};
     var groups = payload.groups || [];
+    var groupByTarget = {};
     groups.forEach(function (g) {
+      (g.member_target_ids || []).forEach(function (target) { groupByTarget[target] = g; });
+    });
+
+    function appendWindow(windowAsset, parent) {
       var section = document.createElement("details");
-      section.className = "work-group";
-      section.open = collapsedGroups[g.group_id] !== true;
-      section.addEventListener("toggle", function () { collapsedGroups[g.group_id] = !section.open; });
+      section.className = "work-window";
+      section.open = collapsedWindows[windowAsset.window_ref] !== undefined
+        ? collapsedWindows[windowAsset.window_ref] : !windowAsset.collapsed;
+      section.addEventListener("toggle", function () { collapsedWindows[windowAsset.window_ref] = !section.open; });
       var summary = document.createElement("summary");
       var name = document.createElement("span");
-      name.className = "work-group-name";
-      name.textContent = g.display_name;
+      name.className = "window-name";
+      name.textContent = windowAsset.display_name || "터미널";
       summary.appendChild(name);
-      if (g.project) {
-        var project = document.createElement("span");
-        project.className = "work-group-meta";
-        project.textContent = "프로젝트 · " + g.project;
-        summary.appendChild(project);
-      }
       var countLine = document.createElement("span");
-      countLine.className = "work-group-summary";
-      countLine.textContent = formatGroupSummary(g.summary_counts || {});
+      countLine.className = "window-summary";
+      countLine.textContent = formatGroupSummary(windowAsset.summary_counts || {});
       summary.appendChild(countLine);
       section.appendChild(summary);
-      var groupTools = document.createElement("div");
-      groupTools.className = "group-tools";
+      var content = document.createElement("div");
+      content.className = "window-content";
+      if (windowAsset.stale) {
+        var stale = document.createElement("div");
+        stale.className = "offline";
+        stale.textContent = "◇ 확인할 수 없는 작업 화면";
+        content.appendChild(stale);
+      } else {
+        (windowAsset.task_target_ids || []).forEach(function (target) {
+          var member = paneRows.find(function (item) { return item.target_id === target || item.key === target; });
+          if (!member) return;
+          appendPaneCard(member, content);
+          appendGroupControls(member, groupByTarget[target] || null, groups, content);
+        });
+      }
+      section.appendChild(content);
+      parent.appendChild(section);
+    }
+
+    function appendFolder(folder, parent) {
+      var section = document.createElement("details");
+      section.className = "work-folder";
+      section.open = collapsedFolders[folder.folder_id] !== undefined
+        ? collapsedFolders[folder.folder_id] : !folder.collapsed;
+      section.addEventListener("toggle", function () { collapsedFolders[folder.folder_id] = !section.open; });
+      var summary = document.createElement("summary");
+      var name = document.createElement("span");
+      name.className = "folder-name";
+      name.textContent = folder.display_name;
+      summary.appendChild(name);
+      var countLine = document.createElement("span");
+      countLine.className = "folder-summary";
+      countLine.textContent = formatGroupSummary(folder.summary_counts || {});
+      summary.appendChild(countLine);
+      section.appendChild(summary);
+      (folder.windows || []).forEach(function (windowAsset) { appendWindow(windowAsset, section); });
+      parent.appendChild(section);
+    }
+
+    var workspace = payload.workspace || {};
+    (workspace.folders || []).forEach(function (folder) { appendFolder(folder, list); });
+    if ((workspace.unfiled_windows || []).length) {
+      appendFolder({ folder_id: "__unfiled__", display_name: "기타",
+        summary_counts: (workspace.unfiled_windows || []).reduce(function (sum, item) {
+          Object.keys(sum).forEach(function (key) { sum[key] += (item.summary_counts || {})[key] || 0; });
+          return sum;
+        }, { error: 0, attention: 0, working: 0, result: 0, idle: 0, unavailable: 0 }),
+        windows: workspace.unfiled_windows }, list);
+    }
+
+    var groupLayouts = document.createElement("details");
+    groupLayouts.className = "advanced";
+    var groupLayoutsTitle = document.createElement("summary");
+    groupLayoutsTitle.textContent = "작업 묶음 보기 배치";
+    groupLayouts.appendChild(groupLayoutsTitle);
+    groups.forEach(function (g) {
+      var tools = document.createElement("div");
+      tools.className = "group-tools";
+      var label = document.createElement("span");
+      label.textContent = g.display_name;
+      tools.appendChild(label);
       var layout = document.createElement("select");
-      layout.setAttribute("aria-label", "보기 배치");
+      layout.setAttribute("aria-label", g.display_name + " 보기 배치");
       [["focus", "집중"], ["split-2", "좌우 2분할"], ["grid-4", "2×2 보기"], ["main-plus-side", "메인 + 사이드"]].forEach(function (entry) {
         var option = document.createElement("option");
         option.value = entry[0]; option.textContent = entry[1];
         option.selected = entry[0] === (g.layout || "focus");
         layout.appendChild(option);
       });
-      layout.addEventListener("click", function (event) { event.stopPropagation(); });
-      layout.addEventListener("change", function (event) {
-        event.stopPropagation();
+      layout.addEventListener("change", function () {
         postGroupAction({ action: "layout", group_id: g.group_id, layout: layout.value });
       });
-      groupTools.appendChild(layout);
-      section.appendChild(groupTools);
-      (g.member_target_ids || []).forEach(function (target) {
-        groupedTargets[target] = true;
-        var member = paneRows.find(function (item) { return item.target_id === target; });
-        if (member) {
-          appendPaneCard(member, section);
-          appendGroupControls(member, g, groups, section);
-        }
-        else {
-          var stale = document.createElement("div");
-          stale.className = "offline";
-          stale.textContent = "◇ " + ((g.member_labels || {})[target] || "확인 불가") + " · 확인 불가";
-          section.appendChild(stale);
-        }
-      });
-      list.appendChild(section);
+      tools.appendChild(layout);
+      groupLayouts.appendChild(tools);
     });
+    if (groups.length) list.appendChild(groupLayouts);
 
-    paneRows.forEach(function (p) {
-      if (p.target_id && groupedTargets[p.target_id]) return;
-      appendPaneCard(p, list);
-      appendGroupControls(p, null, groups, list);
-    });
-
-    if (!paneRows.length && !groups.length) {
+    if (!paneRows.length && !groups.length && !(workspace.folders || []).length) {
       var empty = document.createElement("div");
       empty.className = "empty-state";
       empty.textContent = "아직 실행 중인 작업이 없습니다. PC Tower에서 작업을 시작하거나 저장된 작업을 열어주세요.";

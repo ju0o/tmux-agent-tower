@@ -16,7 +16,7 @@ SESSION = "remote-test-session"
 
 def _pane_line(pane_id="%1", title="my-title", command="bash", path="/home/user/project", dead="0"):
     fs = discovery.FIELD_SEP
-    return fs.join([SESSION, "@1", "0", "win", "0", pane_id, title, command, path, "123", dead, "1"])
+    return fs.join([SESSION, "@1", "0", "bash", "0", pane_id, title, command, path, "123", dead, "1"])
 
 
 @pytest.fixture
@@ -66,6 +66,15 @@ def test_status_payload_never_includes_raw_lines(one_pane):
     payload = httpapi.build_status_payload(tower)
     dumped = json.dumps(payload)
     assert "user@host" not in dumped
+
+
+def test_tower_default_home_uses_folder_window_task_tree(one_pane):
+    tower = tower_module.Tower(SESSION, own_pane_id="")
+    tower.load()
+    assert tower.view_mode == tower_module.USER_WORK_VIEW
+    assert [row["kind"] for row in tower.visible_rows] == ["other_section", "window_asset", "pane"]
+    assert tower.visible_rows[1]["display_name"] == "my-project"
+    assert not any(row.get("kind") == "window" for row in tower.visible_rows)
 
 
 def test_phone_workset_lists_show_structure_without_project_paths(one_pane, monkeypatch):
@@ -257,6 +266,20 @@ def test_status_without_token_is_rejected(server):
     status, body = _get(server, "/api/status")
     assert status == 401
     assert body["ok"] is False
+
+
+def test_workspace_projection_is_authenticated_and_contains_no_paths(server, one_pane):
+    status, _body = _get(server, "/api/workspace")
+    assert status == 401
+    token = _post(server, "/api/pair", {"code": server.pairing.current_code()})[1]["token"]
+
+    status, body = _get(server, "/api/workspace", token=token)
+    assert status == 200
+    assert body["workspace"]["schema_version"] == 1
+    assert body["workspace"]["unfiled_windows"][0]["display_name"] == "my-project"
+    assert body["workspace"]["tasks"][0]["project"] == "my-project"
+    assert str(one_pane) not in json.dumps(body)
+    assert "path" not in json.dumps(body)
 
 
 def test_pairing_then_status_works(server):

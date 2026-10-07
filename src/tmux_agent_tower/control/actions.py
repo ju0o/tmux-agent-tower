@@ -55,6 +55,8 @@ def enter_intent(row: Optional[dict]) -> str:
         return "ignore"
     if row.get("kind") == "work_group":
         return "group"
+    if row.get("kind") in {"folder", "other_section", "window_asset"}:
+        return "toggle"
     if row.get("kind") == "work_group_stale":
         return "ignore"
     if row.get("kind") == "window":

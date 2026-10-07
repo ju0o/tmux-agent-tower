@@ -106,6 +106,41 @@ def open_group_live_view(stdscr, tower, group: dict) -> None:
     _show_live_view(stdscr, tower, [row["key"] for row in rows], layout)
 
 
+def open_window_live_view(stdscr, tower, ref: str) -> None:
+    tower.load()
+    keys = [row["key"] for row in tower.rows
+            if row.get("pane_id") and not row.get("tower_runtime") and row.get("window_ref") == ref]
+    if not keys:
+        from .widgets import show_message_screen
+
+        show_message_screen(stdscr, t("live.title"), [t("live.empty")])
+        return
+    _show_live_view(stdscr, tower, keys, "focus")
+
+
+def open_folder_live_view(stdscr, tower, folder: dict) -> None:
+    tower.load()
+    tasks = [row for row in tower.rows if row.get("pane_id") and not row.get("tower_runtime")]
+    workspace = tower.folders.workspace(tower.window_assets, tasks)
+    if folder.get("kind") == "other_section":
+        windows = workspace["unfiled_windows"]
+    else:
+        item = next((value for value in workspace["folders"]
+                     if value["folder_id"] == folder.get("folder_id")), None)
+        windows = item.get("windows", []) if item else []
+    choices = [(window["window_ref"], window["display_name"])
+               for window in windows if not window.get("stale") and window.get("task_target_ids")]
+    if not choices:
+        from .widgets import show_message_screen
+
+        show_message_screen(stdscr, t("live.title"), [t("live.empty")])
+        return
+    pick = run_list_picker(stdscr, t("folder.pick_window_live"), choices,
+                           footer_hint=t("wizard.hint_list"))
+    if not pick.cancelled and pick.selected_key:
+        open_window_live_view(stdscr, tower, pick.selected_key)
+
+
 def _show_live_view(stdscr, tower, selected_keys, layout: str) -> None:
     """Membership/order are fixed for this view; refreshed rows only update content."""
     initial_rows = {row.get("key"): row for row in tower.rows}

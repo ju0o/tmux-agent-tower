@@ -36,6 +36,31 @@ _PANE_FORMAT = FIELD_SEP.join(
 )
 
 _EXPECTED_FIELDS = _PANE_FORMAT.count(FIELD_SEP) + 1
+_WINDOW_FORMAT = FIELD_SEP.join(
+    ["#{session_name}", "#{session_id}", "#{window_id}", "#{window_index}",
+     "#{window_name}", "#{window_created}"]
+)
+
+
+def list_windows(session: str) -> List[Dict]:
+    """Read the window assets in one Tower session, including empty windows."""
+    output = capture.run_tmux(["list-windows", "-t", session, "-F", _WINDOW_FORMAT]) if session else ""
+    rows = []
+    for line in (output or "").splitlines():
+        parts = line.replace(r"\037", FIELD_SEP).split(FIELD_SEP)
+        if len(parts) != 6 or not parts[2].startswith("@"):
+            continue
+        session_name, session_id, window_id, index, name, created = parts
+        rows.append({"session": session_name, "session_id": session_id, "window_id": window_id,
+                     "window_index": index, "window_name": name, "window_created": created})
+    return rows
+
+
+def window_for_pane(pane_id: str) -> str:
+    """Read the owning window id for a pane, or return empty if it vanished."""
+    if not pane_id:
+        return ""
+    return capture.run_tmux(["display-message", "-p", "-t", pane_id, "#{window_id}"]).strip()
 
 
 def _has_tower_process(pane_pid: str, cmdline_map: Dict[str, str], ppid_map: Dict[str, str]) -> bool:

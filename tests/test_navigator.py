@@ -41,6 +41,40 @@ def _pane(
     }
 
 
+def _apply_user_work_view(tower):
+    from tmux_agent_tower.state.folders import window_ref
+    from tmux_agent_tower.ui import folder_tree
+
+    windows = {}
+    for row in tower.rows:
+        if not row.get("pane_id") or row.get("tower_runtime"):
+            continue
+        row.setdefault("tmux_host", row.get("host") or tower.local_host)
+        identity = {
+            "tmux_host": row.get("tmux_host"), "host": row.get("host"),
+            "session": row.get("session"), "session_id": row.get("session_id"),
+            "window_id": row.get("window_id") or "@test-" + str(row.get("pane_id")),
+            "window_index": row.get("window_index"), "window_name": row.get("window_name"),
+            "window_created": row.get("window_created"), "remote": row.get("remote"),
+        }
+        ref = window_ref(identity)
+        row["window_ref"] = ref
+        windows.setdefault(ref, {**identity, "window_ref": ref})
+        row.setdefault("target_id", row.get("key") or row.get("pane_id"))
+    membership = tower.work_groups.membership()
+    groups = {group["group_id"]: group for group in tower.work_groups.all()}
+    for row in tower.rows:
+        group = groups.get(membership.get(str(row.get("target_id") or "")))
+        if group:
+            row["work_group_id"] = group["group_id"]
+            row["work_group_name"] = group["display_name"]
+        else:
+            row.pop("work_group_id", None)
+            row.pop("work_group_name", None)
+    tower.window_assets = folder_tree.infer_window_assets(windows.values(), tower.rows, tower.local_host)
+    tower._apply_filter()
+
+
 def test_navigator_windows_are_selectable_rows():
     rows = navigator_rows(
         [
@@ -216,15 +250,17 @@ def test_project_list_is_the_default_and_attention_does_not_reorder_it(tmp_path,
     waiting["attention"] = "approval_required"
     idle = _pane("%7", "1", "agents", window_id="@2", project="Other", status="IDLE")
     tower.rows = [waiting, idle]
-    tower._apply_filter()
-    assert [row["key"] for row in tower.visible_rows] == ["%6", "%7"]
-    assert all(row["kind"] == "pane" for row in tower.visible_rows)
+    _apply_user_work_view(tower)
+    assert [row["pane_id"] for row in tower.visible_rows if row.get("kind") == "pane"] == ["%6", "%7"]
+    assert [row["kind"] for row in tower.visible_rows] == [
+        "other_section", "window_asset", "pane", "window_asset", "pane",
+    ]
 
     tower.toggle_attention()
     assert [row["kind"] for row in tower.visible_rows] == ["pane", "pane"]
     assert [row["key"] for row in tower.visible_rows] == ["%6", "%7"]
     tower.toggle_attention()
-    assert [row["key"] for row in tower.visible_rows] == ["%6", "%7"]
+    assert [row["pane_id"] for row in tower.visible_rows if row.get("kind") == "pane"] == ["%6", "%7"]
 
 
 def test_home_visually_clusters_legacy_ungrouped_tasks_by_project(tmp_path, monkeypatch):
@@ -240,11 +276,14 @@ def test_home_visually_clusters_legacy_ungrouped_tasks_by_project(tmp_path, monk
     first.update(target_id="a", display_name="PM", role="orchestrator")
     second.update(target_id="b", display_name="구현", role="builder")
     tower.rows = [first, second]
-    tower._apply_filter()
+    _apply_user_work_view(tower)
 
-    assert [row["kind"] for row in tower.visible_rows] == ["pane", "pane"]
-    assert all(row.get("_project_cluster") == "SampleProject" for row in tower.visible_rows)
-    assert any(item.get("level") == "project" and item["host"] == "SampleProject" for item in tower.visual)
+    assert [row["kind"] for row in tower.visible_rows] == [
+        "other_section", "window_asset", "pane", "window_asset", "pane",
+    ]
+    assert [row["display_name"] for row in tower.visible_rows if row["kind"] == "window_asset"] == [
+        "old-window-a", "old-window-b",
+    ]
     assert all(row.get("kind") != "work_group" for row in tower.visible_rows)
 
 
@@ -262,8 +301,8 @@ def test_other_tower_runtime_is_not_a_user_task_but_remains_in_terminal_structur
     task.update(target_id="task", tower_runtime=False)
     tower.rows = [runtime, task]
 
-    tower._apply_filter()
-    assert [row["pane_id"] for row in tower.visible_rows] == ["%31"]
+    _apply_user_work_view(tower)
+    assert [row["pane_id"] for row in tower.visible_rows if row.get("pane_id")] == ["%31"]
 
     tower.toggle_navigator()
     assert [row.get("pane_id") for row in tower.visible_rows if row.get("pane_id")] == ["%30", "%31"]
@@ -285,8 +324,8 @@ def test_remote_only_default_uses_user_work_rows_and_physical_tree_is_explicit(t
     tower.rows = [remote]
 
     assert tower.view_mode == tower_module.USER_WORK_VIEW
-    tower._apply_filter()
-    assert [row["kind"] for row in tower.visible_rows] == ["pane"]
+    _apply_user_work_view(tower)
+    assert [row["kind"] for row in tower.visible_rows] == ["other_section", "window_asset", "pane"]
 
     tower.toggle_navigator()
     assert tower.view_mode == tower_module.TERMINAL_STRUCTURE_VIEW
@@ -294,7 +333,7 @@ def test_remote_only_default_uses_user_work_rows_and_physical_tree_is_explicit(t
 
     tower.toggle_navigator()
     assert tower.view_mode == tower_module.USER_WORK_VIEW
-    assert [row["kind"] for row in tower.visible_rows] == ["pane"]
+    assert [row["kind"] for row in tower.visible_rows] == ["other_section", "window_asset", "pane"]
 
 
 def test_collapse_hides_children_and_search_keeps_the_window(tmp_path, monkeypatch):
@@ -439,6 +478,14 @@ def _select_window(tower, window_id):
     raise AssertionError(window_id)
 
 
+def _select_window_asset(tower, window_id):
+    for index, row in enumerate(tower.visible_rows):
+        if row.get("kind") == "window_asset" and row.get("window_id") == window_id:
+            tower.selected = index
+            return row["window_ref"]
+    raise AssertionError(window_id)
+
+
 def test_expand_uses_the_same_window_key_after_refresh(tmp_path, monkeypatch):
     tower = _fold_tower(tmp_path, monkeypatch)
     panes = [
@@ -482,6 +529,7 @@ def test_expand_uses_the_same_window_key_after_refresh(tmp_path, monkeypatch):
 
 def test_search_clear_keeps_fold_and_attention_uses_work_list(tmp_path, monkeypatch):
     tower = _fold_tower(tmp_path, monkeypatch)
+    tower.navigator_mode = False
     panes = [
         _pane("%14", "1", "bash", window_id="@9", project="SamplePortal", host="workstation-b"),
         _pane("%17", "1", "bash", pane_index="1", window_id="@9", project="Other", host="workstation-a"),
@@ -490,21 +538,21 @@ def test_search_clear_keeps_fold_and_attention_uses_work_list(tmp_path, monkeypa
     for pane in panes:
         pane["tmux_host"] = "workstation-a"
     tower.rows = panes
-    tower._apply_filter()
-    stored = _select_window(tower, "@9")
+    _apply_user_work_view(tower)
+    stored = _select_window_asset(tower, "@9")
     tower.collapse_selected()
 
     tower.set_filter("SamplePortal")
     assert "%14" in [row.get("pane_id") for row in tower.visible_rows]
     tower.clear_filter()
-    assert tower.collapsed == {stored}
+    assert tower.folders.window(stored)["collapsed"] is True
     assert "%14" not in [row.get("pane_id") for row in tower.visible_rows]
 
     tower.toggle_attention()
     assert all(row.get("kind") != "window" for row in tower.visible_rows)
     tower.toggle_attention()
-    assert tower.collapsed == {stored}
-    assert [row.get("pane_id") for row in tower.visible_rows] == ["%14", "%17", "%19"]
+    assert tower.folders.window(stored)["collapsed"] is True
+    assert [row.get("pane_id") for row in tower.visible_rows if row.get("pane_id")] == ["%19"]
 
 
 def test_rename_action_on_window_renames_active_tower_work_item(tmp_path, monkeypatch):
@@ -540,7 +588,8 @@ def test_rename_action_on_pane_changes_only_tower_work_name(tmp_path, monkeypatc
     pane["pane_pid"] = "5252"
     tower.rows = [pane]
     tower.navigator_mode = False
-    tower._apply_filter()
+    _apply_user_work_view(tower)
+    tower.selected = next(i for i, row in enumerate(tower.visible_rows) if row.get("kind") == "pane")
     monkeypatch.setattr(tower_module, "prompt_text", lambda *args, **kwargs: "new-name")
     monkeypatch.setattr(tower, "load", lambda: None)
 

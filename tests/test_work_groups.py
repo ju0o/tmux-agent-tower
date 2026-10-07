@@ -11,6 +11,8 @@ from tmux_agent_tower.server.webui import PAGE_HTML
 from tmux_agent_tower.state.work_groups import WorkGroupStore, aggregate
 from tmux_agent_tower.state.worksets import WorksetStore
 from tmux_agent_tower.ui import render, work_groups
+from tmux_agent_tower.state.folders import window_ref
+from tmux_agent_tower.ui import folder_tree
 from tmux_agent_tower.ui import control_view
 from tmux_agent_tower.ui.tower import Tower
 from tmux_agent_tower.ui import structure_menu
@@ -23,8 +25,36 @@ def _row(target, *, name=None, role=None, status="IDLE", attention="none", resul
         "display_name": name or target, "task_name": name or target,
         "project": "ExampleProject", "agent": "Codex", "role": role,
         "status": status, "attention": attention, "result_state": result,
-        "host": "fixture", "remote": False,
+        "host": "fixture", "tmux_host": "fixture", "remote": False,
+        "session": "fixture", "session_id": "$1", "window_id": "@1",
+        "window_index": "0", "window_name": "Main", "window_created": "100",
     }
+
+
+def _apply_tower_tree(tower):
+    assets = {}
+    for row in tower.rows:
+        if not row.get("pane_id") or row.get("tower_runtime"):
+            continue
+        identity = {key: row.get(key) for key in (
+            "tmux_host", "host", "session", "session_id", "window_id",
+            "window_index", "window_name", "window_created", "remote",
+        )}
+        ref = window_ref(identity)
+        row["window_ref"] = ref
+        assets.setdefault(ref, {**identity, "window_ref": ref})
+    membership = tower.work_groups.membership()
+    groups = {group["group_id"]: group for group in tower.work_groups.all()}
+    for row in tower.rows:
+        group = groups.get(membership.get(str(row.get("target_id") or "")))
+        if group:
+            row["work_group_id"] = group["group_id"]
+            row["work_group_name"] = group["display_name"]
+        else:
+            row.pop("work_group_id", None)
+            row.pop("work_group_name", None)
+    tower.window_assets = folder_tree.infer_window_assets(assets.values(), tower.rows, tower.local_host)
+    tower._apply_filter()
 
 
 def test_store_persists_group_name_membership_order_and_stale_labels(tmp_path):
@@ -238,16 +268,19 @@ def test_tower_group_navigation_changes_only_logical_rows(tmp_path, monkeypatch)
     one, two = _row("target-one", role="builder"), _row("target-two", role="qa")
     tower.rows = [one, two]
     group = tower.work_groups.create("ExampleProject · V2", [one["target_id"], two["target_id"]])
-    tower._apply_filter()
-    assert [row["kind"] for row in tower.visible_rows] == ["work_group", "pane", "pane"]
-    tower.selected = 0
-    assert enter_intent(tower.visible_rows[0]) == "group"
-    tower.toggle_work_group(group["group_id"])
-    assert [row["kind"] for row in tower.visible_rows] == ["work_group"]
-    tower.toggle_work_group(group["group_id"])
-    tower.selected = 1
-    assert enter_intent(tower.visible_rows[1]) == "control"
-    assert tower.visible_rows[1]["work_group_name"] == "ExampleProject · V2"
+    _apply_tower_tree(tower)
+    assert [row["kind"] for row in tower.visible_rows] == [
+        "other_section", "window_asset", "pane", "pane",
+    ]
+    assert all(row["work_group_name"] == "ExampleProject · V2"
+               for row in tower.visible_rows if row["kind"] == "pane")
+    tower.selected = 2
+    assert enter_intent(tower.visible_rows[2]) == "control"
+    window = tower.visible_rows[1]
+    tower.toggle_window_asset(window["window_ref"])
+    assert [row["kind"] for row in tower.visible_rows] == ["other_section", "window_asset"]
+    assert tower.work_groups.membership() == {one["target_id"]: group["group_id"],
+                                              two["target_id"]: group["group_id"]}
 
 
 def test_phone_status_payload_keeps_group_order_and_never_exposes_project_path(tmp_path, monkeypatch):
@@ -275,7 +308,9 @@ def test_phone_group_cards_open_existing_member_detail():
     assert 'payload.groups || []' in PAGE_HTML
     assert 'g.member_target_ids || []' in PAGE_HTML
     assert 'openDetail(p.key)' in PAGE_HTML
-    assert 'className = "work-group"' in PAGE_HTML
+    assert 'className = "work-folder"' in PAGE_HTML
+    assert 'className = "work-window"' in PAGE_HTML
+    assert 'appendPaneCard(member, content)' in PAGE_HTML
     assert '"/api/groups/action"' in PAGE_HTML
     assert 'action: "reorder"' in PAGE_HTML
     assert 'action: "layout"' in PAGE_HTML
@@ -438,25 +473,28 @@ def test_work_group_lifecycle_against_isolated_tmux_server(tmp_path, monkeypatch
         tower.rows = pane_rows
         group = tower.work_groups.create("ExampleProject · V2", [row["target_id"] for row in pane_rows], labels={row["target_id"]: row["display_name"] for row in pane_rows})
 
-        # A/B/C: create, collapse summary, expand in the requested order.
-        tower._apply_filter()
-        assert [row["kind"] for row in tower.visible_rows] == ["work_group", "pane", "pane", "pane", "pane", "pane"]
+        # A/B/C: group members remain tasks within the default window tree.
+        _apply_tower_tree(tower)
+        assert [row["kind"] for row in tower.visible_rows] == [
+            "other_section", "window_asset", "pane", "pane", "pane", "pane", "pane",
+        ]
         assert tower.visible_rows[0]["summary_counts"]["attention"] == 1
-        tower.toggle_work_group(group["group_id"])
-        assert len(tower.visible_rows) == 1 and tower.visible_rows[0]["kind"] == "work_group"
-        tower.toggle_work_group(group["group_id"])
+        tower.toggle_window_asset(tower.visible_rows[1]["window_ref"])
+        assert len(tower.visible_rows) == 2 and tower.visible_rows[1]["kind"] == "window_asset"
+        tower.toggle_window_asset(tower.visible_rows[1]["window_ref"])
         expanded = tower.visible_rows
-        assert [row.get("role") for row in expanded[1:]] == [row["role"] for row in pane_rows]
+        assert [row.get("role") for row in expanded[2:]] == [row["role"] for row in pane_rows]
         # D/E: member Enter resolves to the existing control surface; live state rolls into summary.
-        assert enter_intent(expanded[2]) == "control"
+        assert enter_intent(expanded[3]) == "control"
         tower.rows[2]["result_state"] = "ready"
         tower._apply_filter()
-        assert tower.visible_rows[0]["summary_counts"]["result"] == 1
+        window = next(row for row in tower.visible_rows if row["kind"] == "window_asset")
+        assert window["summary_counts"]["result"] == 1
         # F/G/H: membership removal leaves its tmux pane alive; restart preserves data; stale member remains visible.
         removed = pane_rows[0]["target_id"]
         tower.work_groups.remove_members(group["group_id"], [removed])
-        tower._apply_filter()
-        assert any(row.get("target_id") == removed and not row.get("group_member") for row in tower.visible_rows)
+        _apply_tower_tree(tower)
+        assert any(row.get("target_id") == removed and not row.get("work_group_id") for row in tower.visible_rows)
         after_remove = tmux("list-panes", "-s", "-t", "wbs03", "-F", "#{pane_id}:#{pane_pid}:#{window_id}:#{pane_left}:#{pane_top}:#{pane_width}:#{pane_height}").splitlines()
         assert after_remove == before
         reopened = WorkGroupStore(tmp_path / "state" / "work-groups.json")

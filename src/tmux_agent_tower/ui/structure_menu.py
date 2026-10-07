@@ -85,6 +85,8 @@ def run_zero_action(stdscr, tower, action: str) -> None:
         open_workflow_presets(stdscr, tower, STATE_DIR)
     elif action == "group":
         create_work_group(stdscr, tower)
+    elif action == "folder":
+        create_folder(stdscr, tower)
 
 
 def open_create_hub(stdscr, tower) -> None:
@@ -93,6 +95,7 @@ def open_create_hub(stdscr, tower) -> None:
         t("struct.create_title"),
         [
             ("task", t("struct.create_task")),
+            ("folder", t("folder.create")),
             ("group", t("group.create")),
             ("saved", t("struct.create_saved")),
             ("template", t("struct.create_template")),
@@ -105,6 +108,8 @@ def open_create_hub(stdscr, tower) -> None:
         return
     if pick.selected_key == "task":
         start_task(stdscr, tower)
+    elif pick.selected_key == "folder":
+        create_folder(stdscr, tower)
     elif pick.selected_key == "window":
         create_empty_window(stdscr, tower)
     elif pick.selected_key == "pane":
@@ -189,6 +194,18 @@ def open_context_menu(stdscr, tower) -> None:
         return
     row = tower.visible_rows[tower.selected]
     kind = row.get("kind")
+    if kind in {"folder", "other_section"}:
+        try:
+            open_folder_menu(stdscr, tower, row)
+        except (KeyError, OSError, ValueError):
+            show_message_screen(stdscr, t("folder.save_failed"), [])
+        return
+    if kind == "window_asset":
+        try:
+            open_window_asset_menu(stdscr, tower, row)
+        except (KeyError, OSError, ValueError):
+            show_message_screen(stdscr, t("folder.save_failed"), [])
+        return
     if kind == "work_group":
         open_work_group_menu(stdscr, tower, row)
     elif kind == "work_group_stale":
@@ -199,6 +216,122 @@ def open_context_menu(stdscr, tower) -> None:
         run_zero_action(stdscr, tower, row.get("action") or "")
     else:
         open_pane_menu(stdscr, tower, row)
+
+
+def create_folder(stdscr, tower) -> None:
+    name = prompt_text(stdscr, t("folder.name_prompt"))
+    if name is None:
+        return
+    try:
+        tower.folders.create(name)
+    except (OSError, ValueError):
+        show_message_screen(stdscr, t("folder.save_failed"), [])
+
+
+def open_folder_menu(stdscr, tower, row: dict) -> None:
+    folder_id = row.get("folder_id") or ""
+    if row.get("kind") == "other_section":
+        menu = [("create", t("folder.create")), ("cancel", t("menu.cancel"))]
+        pick = run_list_picker(stdscr, t("folder.other"), menu, footer_hint=t("wizard.hint_list"))
+        if pick.selected_key == "create":
+            create_folder(stdscr, tower)
+        return
+    pick = run_list_picker(stdscr, row.get("display_name") or t("folder.title"), [
+        ("rename", t("folder.rename")),
+        ("new_window", t("folder.add_window")),
+        ("move_in", t("folder.move_window_in")),
+        ("order", t("folder.reorder")),
+        ("delete", t("folder.delete")),
+        ("cancel", t("menu.cancel")),
+    ], footer_hint=t("wizard.hint_list"))
+    if pick.cancelled or pick.selected_key in (None, "cancel"):
+        return
+    if pick.selected_key == "rename":
+        name = prompt_text(stdscr, t("folder.rename_prompt"), initial=row.get("display_name") or "")
+        if name:
+            tower.folders.rename(folder_id, name)
+    elif pick.selected_key == "new_window":
+        before = {item.get("window_ref") for item in tower.window_assets}
+        create_empty_window(stdscr, tower)
+        tower.load()
+        created = [item for item in tower.window_assets if item.get("window_ref") not in before]
+        if len(created) == 1:
+            tower.folders.move_window(created[0]["window_ref"], folder_id)
+    elif pick.selected_key == "move_in":
+        choices = [(item["window_ref"], item["display_name"]) for item in tower.window_assets
+                   if item["window_ref"] not in row.get("window_refs", [])]
+        if not choices:
+            show_message_screen(stdscr, t("folder.no_windows"), [])
+            return
+        selected = run_list_picker(stdscr, t("folder.move_window_in"), choices, searchable=True,
+                                   footer_hint=t("wizard.hint_single_search"))
+        if not selected.cancelled and selected.selected_key:
+            tower.folders.move_window(selected.selected_key, folder_id)
+    elif pick.selected_key == "order":
+        order = run_list_picker(stdscr, t("folder.reorder"), [
+            ("up", t("folder.move_up")), ("down", t("folder.move_down")),
+            ("top", t("folder.move_top")), ("bottom", t("folder.move_bottom")),
+        ], footer_hint=t("wizard.hint_list"))
+        if order.selected_key:
+            tower.folders.reorder_folder(folder_id, order.selected_key)
+    elif pick.selected_key == "delete":
+        if _confirm(stdscr, t("folder.delete"), [t("folder.delete_effect")]):
+            tower.folders.delete(folder_id)
+
+
+def open_window_asset_menu(stdscr, tower, row: dict) -> None:
+    pick = run_list_picker(stdscr, row.get("display_name") or t("folder.terminal"), [
+        ("live", t("nav.live_view")),
+        ("rename", t("folder.window_rename")),
+        ("move", t("folder.move_window")),
+        ("order", t("folder.reorder")),
+        ("add", t("folder.add_task")),
+        ("layout", t("folder.layout")),
+        ("more", t("menu.more")),
+        ("cancel", t("menu.cancel")),
+    ], footer_hint=t("wizard.hint_list"))
+    if pick.cancelled or pick.selected_key in (None, "cancel"):
+        return
+    if pick.selected_key == "live":
+        from .live_view import open_window_live_view
+
+        open_window_live_view(stdscr, tower, row.get("window_ref") or "")
+    elif pick.selected_key == "rename":
+        tower.rename_selected(stdscr)
+    elif pick.selected_key == "move":
+        items = [("__unfiled__", t("folder.other"))]
+        items.extend((folder["folder_id"], folder["display_name"]) for folder in tower.folders.all()
+                     if folder["folder_id"] != row.get("folder_id"))
+        items.append(("new", t("folder.create")))
+        destination = run_list_picker(stdscr, t("folder.move_window"), items, footer_hint=t("wizard.hint_list"))
+        if destination.selected_key == "new":
+            before = {folder["folder_id"] for folder in tower.folders.all()}
+            create_folder(stdscr, tower)
+            created = next((folder for folder in tower.folders.all()
+                            if folder["folder_id"] not in before), None)
+            if created is None:
+                return
+            destination_id = created["folder_id"]
+        elif destination.cancelled:
+            return
+        else:
+            destination_id = None if destination.selected_key == "__unfiled__" else destination.selected_key
+        tower.folders.move_window(row["window_ref"], destination_id)
+    elif pick.selected_key == "order":
+        if not row.get("folder_id"):
+            return
+        order = run_list_picker(stdscr, t("folder.reorder"), [
+            ("up", t("folder.move_up")), ("down", t("folder.move_down")),
+            ("top", t("folder.move_top")), ("bottom", t("folder.move_bottom")),
+        ], footer_hint=t("wizard.hint_list"))
+        if order.selected_key:
+            tower.folders.reorder_window(row["window_ref"], order.selected_key)
+    elif pick.selected_key == "add":
+        add_pane(stdscr, tower, row.get("window_id") or "")
+    elif pick.selected_key == "layout":
+        choose_layout(stdscr, tower, row.get("window_id") or "")
+    elif pick.selected_key == "more":
+        open_window_control(stdscr, tower, row.get("window_id") or "")
 
 
 def open_pane_menu(stdscr, tower, row: dict) -> str:
@@ -217,6 +350,11 @@ def open_pane_menu(stdscr, tower, row: dict) -> str:
         ("layout", t("layout.change")),
         ("more", t("menu.more")),
     ]
+    work_groups = getattr(tower, "work_groups", None)
+    membership = work_groups.membership() if work_groups is not None else {}
+    group_id = membership.get(str(row.get("target_id") or ""))
+    if group_id:
+        items.insert(-1, ("work_group", t("group.label")))
     if row.get("remote"):
         items.append(("role", t("role.change")))
     items.append(("cancel", t("menu.cancel")))
@@ -253,6 +391,8 @@ def open_pane_menu(stdscr, tower, row: dict) -> str:
         move_work(stdscr, tower, row)
     elif pick.selected_key == "layout":
         open_target_layout(stdscr, tower, row)
+    elif pick.selected_key == "work_group":
+        open_work_group_menu(stdscr, tower, {"group_id": group_id})
     elif pick.selected_key == "more":
         more_items = [
             ("saved", t("struct.create_saved")),

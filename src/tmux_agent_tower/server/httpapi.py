@@ -168,6 +168,14 @@ def build_status_payload(tower: Tower) -> dict:
                 "summary_counts": aggregate(members),
             })
 
+    folder_store = getattr(tower, "folders", None)
+    workspace = folder_store.workspace(
+        getattr(tower, "window_assets", []),
+        [row for row in tower.rows if row.get("pane_id") and not row.get("tower_runtime")],
+    ) if folder_store is not None else {
+        "schema_version": 1, "folders": [], "windows": [], "unfiled_windows": [], "tasks": [],
+    }
+
     try:
         phone_worksets = phone_summary(WorksetStore().list())
         saved_work = [row for row in phone_worksets if row["kind"] == "saved_work"]
@@ -180,6 +188,7 @@ def build_status_payload(tower: Tower) -> dict:
         "ok": True,
         "panes": panes,
         "groups": groups,
+        "workspace": workspace,
         "saved_work": saved_work,
         "work_templates": work_templates,
         "worksets_error": worksets_error,
@@ -301,6 +310,17 @@ class TowerRemoteHandler(BaseHTTPRequestHandler):
                 self._send_json(503, source_session_missing_payload(self.server.session))  # type: ignore[attr-defined]
                 return
             self._send_json(200, build_status_payload(self._tower()), no_store=True)
+            return
+        if self.path == "/api/workspace":
+            if not self._require_auth():
+                return
+            if not self.server.source_session_alive():  # type: ignore[attr-defined]
+                self._send_json(503, source_session_missing_payload(self.server.session))  # type: ignore[attr-defined]
+                return
+            payload = build_status_payload(self._tower())
+            self._send_json(200, {"ok": True, "workspace": payload["workspace"],
+                                  "generated_at": payload["generated_at"],
+                                  "version": payload["version"]}, no_store=True)
             return
 
         route = self._pane_route(self.path)

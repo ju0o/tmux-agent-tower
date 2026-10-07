@@ -8,13 +8,13 @@ src/tmux_agent_tower/
 ├── detection/      status engine, project auto-discovery, process helpers
 ├── tmux/           tmux binary wrappers: read, navigate, and
 │                   id-targeted structure changes (local TUI only)
-├── state/          visit tracking, identity overrides, Work Groups, worksets
+├── state/          visits, identity overrides, folders, Work Groups, worksets
 ├── remote/         minimal SSH-based multi-host prototype (read-only)
 ├── launcher/       config, discovery, read-only browse, spawn
 │                   (browse never creates a pane -- see docs/ROADMAP.md)
 ├── i18n/           translator layer (ko/en catalogs); UI text only, never
 │                   business logic
-├── ui/             the curses TUI, Work Group list, browser, and menus
+├── ui/             the curses TUI, folder/work tree, browser, and menus
 ├── notify.py       opt-in, off-by-default status-transition notifications
 │                   (notify-send, falling back to tmux display-message)
 └── main.py         `tower` CLI entry point
@@ -36,17 +36,40 @@ both machines: one directory per listing, no tmux until create is
 confirmed. Keeping that as its own package makes the read-only vs.
 write-capable boundary obvious at the directory level.
 
+## Folders and work screens
+
+The default home projects a shared workspace tree: **Folder → tmux Window asset →
+task/Agent**. A Folder is a Tower label and membership list, not a filesystem
+directory, tmux session/window, or Work Group. A window asset keeps an opaque
+stable reference derived from its tmux host, session, window identity, and
+creation marker; its user-facing name is stored separately from tmux's title.
+Tasks continue to use their existing stable target IDs and status/result model.
+
+`state/folders.py` persists folder membership, order, collapse state, and
+user-facing window names in `~/.cache/tmux-agent-tower/folders.json`. `FolderStore`
+operations are logical only: moving a window between folders, renaming, folding,
+or deleting a folder never invokes a tmux structure command. Deleting a folder
+leaves its windows unfiled. Unknown or stale window references are retained and
+shown as unavailable rather than being discarded. Unfiled live windows appear
+under **기타 / Other**.
+
+`FolderStore.workspace()` is the normalized read projection used by both the
+TUI and the authenticated `/api/workspace` endpoint. The projection contains
+folder/window membership and order, task identity, status, attention, result
+state, and aggregate counts; it omits filesystem paths, pane IDs, process IDs,
+and captured terminal text. This is the stable Tower Core shape intended for a
+future Juact Explorer, Cards, or Canvas renderer. The phone uses the same folder,
+window, and task projection in a vertical accordion.
+
 ## Work Groups
 
 `state/work_groups.py` stores explicit membership by stable `target_id`, plus
 the display name, member order, optional project label, and last-known member
-labels. A fresh Tower launch always opens the user-work view: saved groups
-appear above member tasks, while ungrouped local or remote tasks remain
-top-level. It does not fall back to a host/window/pane tree when only remote
-tasks are available. Live status, attention, ready results, idle tasks, and
-unavailable members are summarized on the group row. The terminal-structure
-view remains available from `Space` → `더보기` → `터미널 구조 보기`; it is a
-separate advanced view and never changes the default launch mode.
+labels. A Work Group describes a team/goal; it is independent of the Folder →
+Window tree. Work Group membership is still displayed with its tasks and its
+own Live/status summary. The terminal-structure view remains available from
+`Space` → `더보기` → `터미널 구조 보기`; it is a separate advanced view and
+never changes the default launch mode.
 
 Group membership, ordering, renaming, and dissolution write only the local
 Work Group state. They do not call tmux structure operations, move or rename

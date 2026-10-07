@@ -23,14 +23,22 @@ def test_parse_snapshot_empty_output_is_unknown():
 
 
 def test_parse_snapshot_valid_line():
-    line = "\x1f".join(["sess", "$1", "@1", "0", "win", "0", "%1", "title", "codex", "/home/user", "55", "0"])
+    line = "\x1f".join(["sess", "$1", "@1", "0", "win", "123456", "0", "%1", "title", "codex", "/home/user", "55", "0"])
     result = collector.parse_remote_snapshot("HOST", line)
     assert result["status"] == collector.HOST_STATUS_ONLINE
     assert len(result["panes"]) == 1
     assert result["panes"][0]["pane_id"] == "%1"
     assert result["panes"][0]["session_id"] == "$1"
     assert result["panes"][0]["window_id"] == "@1"
+    assert result["panes"][0]["window_created"] == "123456"
     assert result["panes"][0]["pane_pid"] == "55"
+
+
+def test_parse_snapshot_accepts_older_peer_without_window_creation_marker():
+    line = "\x1f".join(["sess", "$1", "@1", "0", "win", "0", "%1", "title", "codex", "/home/user", "55", "0"])
+    result = collector.parse_remote_snapshot("HOST", line)
+    assert result["panes"][0]["window_created"] == ""
+    assert result["panes"][0]["pane_id"] == "%1"
 
 
 def test_parse_snapshot_malformed_line_is_skipped():

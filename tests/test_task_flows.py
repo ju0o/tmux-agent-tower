@@ -121,7 +121,7 @@ def test_create_hub_keeps_advanced_entries_under_more(monkeypatch):
     structure_menu.open_create_hub(None, object())
 
     keys = [key for key, _label in captured["items"]]
-    assert keys == ["task", "group", "saved", "template", "more", "cancel"]
+    assert keys == ["task", "folder", "group", "saved", "template", "more", "cancel"]
 
 
 def test_task_menu_separates_result_and_screen_copy(monkeypatch):
@@ -129,7 +129,7 @@ def test_task_menu_separates_result_and_screen_copy(monkeypatch):
     from tmux_agent_tower.ui import control_view
 
     row = {"kind": "pane", "key": "%9", "pane_id": "%9", "target_id": "target-9", "project": "Tower"}
-    tower = SimpleNamespace(work_groups=SimpleNamespace(membership=lambda: set()))
+    tower = SimpleNamespace(work_groups=SimpleNamespace(membership=lambda: {}))
     picks = iter(("cancel", "more", "screen_copy"))
     menus = []
 

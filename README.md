@@ -46,6 +46,10 @@ TMUX AGENT TOWER       Current access: This laptop · Copy: This laptop · Auto
 * Work Groups keep related tasks together. Group rows summarize work in
   progress, attention, and new results; ungrouped tasks remain visible on
   their own. Task rows put the role, Agent, and status first.
+* The default home organizes work as **Folder → work screen → task**.
+  Folder names, work-screen names, ordering, and collapse state persist in
+  Tower without changing tmux windows or panes. Unfiled windows appear under
+  **Other**. Work Groups remain a separate way to describe an Agent team.
 * A compact selected-task summary shows its name, Agent, role, status,
   project, and execution location. Internal terminal identifiers are in
   the advanced terminal view.
@@ -160,13 +164,13 @@ command, not another TUI, so it's safe to bind to a key.
 | Key | Action |
 |---|---|
 | `↑` / `↓` (or `j`/`k`) | Move selection |
-| `Enter` | Fold/expand a Work Group, or open the selected task |
-| `Space` | Open actions for the selected Work Group or task |
-| `+` | Start a task or group, open saved work, or use a template |
+| `Enter` | Fold/expand a folder or work screen, or open a task |
+| `Space` | Open actions for the selected folder, work screen, or task |
+| `+` | Start a task, create a folder, open saved work, or use a template |
 | `S` | Open **Saved work**, with **Continue saved work** and **Work templates** together |
 | `L` | Open Live; a selected Work Group opens as one view |
 | `C` | Open settings |
-| `/` | Search task name, group, project, Agent, or role; `Esc` clears the search |
+| `/` | Search folder, work screen, task, project, Agent, or role; `Esc` clears the search |
 | `Y` | Copy the selected task's latest complete result |
 | `G` | Open the selected task in its real terminal |
 | `Esc` | Go back one level |
@@ -295,19 +299,18 @@ the next time you press it. `tower keys restore` removes only that block
 and puts the recorded `w` command back. `tower --focus` still only
 navigates; it never starts a new TUI.
 
-The default home groups work by Work Group and task. Enter folds or
-opens a group; Enter on a task opens its conversation. Ungrouped tasks
-remain visible at the top level. The physical host/window/pane view is
-available from **More → Terminal structure**. It remains useful for
-advanced terminal management, but it is not the default home. In a task
-conversation, `Y` copies the complete latest result; it never copies only
-the visible screen.
+The default home shows **Folder → work screen → task**. Enter folds or opens a
+folder/work screen; Enter on a task opens its conversation. Windows without a
+folder appear under **Other**. Work Groups remain a separate logical Agent-team
+membership and are shown with their tasks. The physical host/window/pane view
+is available from **More → Terminal structure**. In a task conversation, `Y`
+copies the complete latest result; it never copies only the visible screen.
 
-`+` opens the common start menu: one task, a Work Group, Saved work, or a
-template. Workspace and terminal structure actions are under **More**. `S`
+`+` opens the common start menu: one task, a folder, a Work Group, Saved work,
+or a template. Workspace and terminal structure actions are under **More**. `S`
 opens Saved work and its templates together. Space opens actions for the
-selected group or task. If Tower has no work yet, the same start choices are
-shown in the list.
+selected folder, work screen, or task. If Tower has no work yet, the same
+start choices are shown in the list.
 
 Every structure write uses the window id or pane id tmux returned.
 A window name is only a label, so two windows with the same name stay

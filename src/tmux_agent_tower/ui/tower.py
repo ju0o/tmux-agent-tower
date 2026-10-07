@@ -1,8 +1,8 @@
 """Curses TUI for the user's work list and advanced terminal structure.
 
-The default view is Work Groups and tasks. Enter opens the persistent
-Conversation Surface; the host/window/pane navigator is an explicit
-advanced view. Quitting this TUI leaves the optional phone service running.
+The default view is Folder → work screen → task. Enter opens the persistent
+Conversation Surface; the host/window/pane navigator is an explicit advanced
+view. Quitting this TUI leaves the optional phone service running.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from ..launcher.config import AGENT_LAUNCH_ORDER, load_config
 from .. import notify
 from ..remote.collector import fetch_remote, HOST_STATUS_ONLINE
 from ..state.bindings import ProjectBindingStore
+from ..state.folders import FolderStore, window_ref
 from ..state.overrides import ROLE_IDS, OverrideStore
 from ..state.work_groups import WorkGroupStore
 from ..detection.project import git_project_name
@@ -37,7 +38,7 @@ from ..tmux import discovery
 from ..tmux import registration
 from ..control.actions import enter_intent, update_identity
 from . import render
-from . import work_groups as work_group_ui
+from . import folder_tree
 from .widgets import is_backspace, is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
 
 REFRESH_SECONDS = 2.0
@@ -350,6 +351,8 @@ class Tower:
         self.overrides = OverrideStore(STATE_DIR / "overrides.json")
         self.bindings = ProjectBindingStore(STATE_DIR / "project-bindings.json")
         self.work_groups = WorkGroupStore(STATE_DIR / "work-groups.json")
+        self.folders = FolderStore(STATE_DIR / "folders.json")
+        self.window_assets: List[Dict] = []
         # The TUI owns one engine for its lifetime. Remote passes the
         # server's engine in so hysteresis survives across HTTP polls.
         self.status_engine = status_engine or StatusEngine()
@@ -374,6 +377,7 @@ class Tower:
         self.view_mode = USER_WORK_VIEW      # terminal structure is an explicit secondary view
         self.collapsed: set = set()          # window row keys hidden in the UI only
         self.collapsed_work_groups: set = set()
+        self.collapsed_other = False
         self.notice = ""
         self.selected = 0                    # index into visible_rows
         self.last_refresh = 0.0
@@ -797,6 +801,7 @@ class Tower:
                         "window_id": pane.get("window_id") or "",
                         "window_index": pane.get("window_index"),
                         "window_name": pane.get("window_name") or "",
+                        "window_created": pane.get("window_created") or "",
                         "pane_index": pane.get("pane_index"),
                         "pane_id": pane.get("pane_id"),
                         "pane_pid": pane.get("pane_pid") or "",
@@ -830,7 +835,37 @@ class Tower:
 
         now = time.monotonic()
         self.access_context = observe_access_client()[0].access_context
+        windows = discovery.list_windows(self.session)
+        own_window_id = discovery.window_for_pane(self.own_pane_id)
+        for window in windows:
+            window["tmux_host"] = self.local_host
+            window["window_ref"] = window_ref(window)
+        local_by_id = {(str(row.get("session") or ""), str(row.get("window_id") or "")): row for row in windows}
         self.rows = self._local_rows() + self._remote_rows(now)
+        live_windows = {row["window_ref"]: row for row in windows}
+        for row in self.rows:
+            if not row.get("pane_id") or row.get("placeholder"):
+                continue
+            if not row.get("remote"):
+                asset = local_by_id.get((str(row.get("session") or ""), str(row.get("window_id") or "")))
+                if asset:
+                    row.update({key: asset.get(key) for key in ("session_id", "window_created", "window_ref")})
+                else:
+                    row["tmux_host"] = self.local_host
+                    row["window_ref"] = window_ref(row)
+            else:
+                row["window_ref"] = window_ref(row)
+            ref = row.get("window_ref")
+            if ref and ref not in live_windows:
+                live_windows[ref] = {
+                    key: row.get(key) for key in (
+                        "tmux_host", "host", "session", "session_id", "window_id",
+                        "window_index", "window_name", "window_created", "window_ref", "remote",
+                    )
+                }
+        task_rows = [row for row in self.rows if row.get("pane_id") and not row.get("tower_runtime")]
+        live_windows = folder_tree.visible_windows(live_windows.values(), self.rows, own_window_id)
+        self.window_assets = folder_tree.infer_window_assets(live_windows, task_rows, self.local_host)
         groups = self.work_groups.all()
         group_by_target = {target: group for group in groups for target in group["member_target_ids"]}
         for row in self.rows:
@@ -862,7 +897,8 @@ class Tower:
         panes = [r for r in self.rows if r.get("pane_id")]
         work_panes = [r for r in panes if not r.get("tower_runtime")]
         groups = self.work_groups.all()
-        if not self.filter_text and self.view_mode != TERMINAL_STRUCTURE_VIEW and not work_panes and not groups:
+        if (not self.filter_text and self.view_mode != TERMINAL_STRUCTURE_VIEW
+                and not work_panes and not groups and not self.folders.all()):
             self.visible_rows = zero_state_rows()
         elif self.view_mode == TERMINAL_STRUCTURE_VIEW:
             self.visible_rows = navigator_rows(filtered, set() if self.filter_text else self.collapsed)
@@ -871,8 +907,8 @@ class Tower:
                 matching = [r for r in work_panes if render.row_matches_filter(r, self.filter_text)]
                 self.visible_rows = render.sort_by_attention(matching)
             else:
-                self.visible_rows = work_group_ui.build_rows(
-                    groups, work_panes, self.collapsed_work_groups, self.filter_text
+                self.visible_rows = folder_tree.build_rows(
+                    self.folders, self.window_assets, work_panes, self.filter_text, self.collapsed_other
                 )
 
         if not self.visible_rows:
@@ -963,14 +999,57 @@ class Tower:
             self.collapsed_work_groups.add(group_id)
         self._apply_filter(f"group:{group_id}")
 
+    def toggle_folder(self, folder_id: str) -> None:
+        if folder_id == "__unfiled__":
+            self.collapsed_other = not self.collapsed_other
+        else:
+            try:
+                self.folders.toggle_folder(folder_id)
+            except (KeyError, OSError):
+                self.notice = t("folder.save_failed")
+        self._apply_filter(f"folder:{folder_id}")
+
+    def toggle_window_asset(self, ref: str) -> None:
+        row = next((item for item in self.window_assets if item.get("window_ref") == ref), None)
+        if row is None:
+            return
+        try:
+            self.folders.update_window(ref, collapsed=not bool(self.folders.window(ref).get("collapsed", False)))
+        except (ValueError, OSError):
+            self.notice = t("folder.save_failed")
+        self._apply_filter("windowasset:" + ref)
+
     def collapse_selected(self) -> None:
         """Hide a window's panes. tmux is not changed."""
 
         row = self.visible_rows[self.selected] if self.visible_rows else None
         if not row:
             return
+        if row.get("kind") == "folder":
+            if row.get("folder_id") == "__unfiled__":
+                self.collapsed_other = True
+            else:
+                try:
+                    folder = next(item for item in self.folders.all() if item["folder_id"] == row.get("folder_id"))
+                    if not folder.get("collapsed"):
+                        self.folders.toggle_folder(folder["folder_id"])
+                except (KeyError, StopIteration, OSError):
+                    self.notice = t("folder.save_failed")
+            self._apply_filter(row.get("key"))
+            return
+        if row.get("kind") == "other_section":
+            self.collapsed_other = True
+            self._apply_filter(row.get("key"))
+            return
         if row.get("kind") == "work_group":
             self.collapsed_work_groups.add(row.get("group_id"))
+            self._apply_filter(row.get("key"))
+            return
+        if row.get("kind") == "window_asset":
+            try:
+                self.folders.update_window(row["window_ref"], collapsed=True)
+            except (KeyError, OSError, ValueError):
+                self.notice = t("folder.save_failed")
             self._apply_filter(row.get("key"))
             return
         key = row.get("key") if row.get("kind") == "window" else row.get("tree_window")
@@ -984,6 +1063,30 @@ class Tower:
 
         row = self.visible_rows[self.selected] if self.visible_rows else None
         if not row:
+            return
+        if row.get("kind") == "folder":
+            if row.get("folder_id") == "__unfiled__":
+                self.collapsed_other = False
+            else:
+                try:
+                    folder = next(item for item in self.folders.all() if item["folder_id"] == row.get("folder_id"))
+                    if folder.get("collapsed"):
+                        self.folders.toggle_folder(folder["folder_id"])
+                except (KeyError, StopIteration, OSError):
+                    pass
+            self._apply_filter(row.get("key"))
+            return
+        if row.get("kind") == "other_section":
+            self.collapsed_other = False
+            self._apply_filter(row.get("key"))
+            return
+        if row.get("kind") == "window_asset":
+            try:
+                if self.folders.window(row["window_ref"]).get("collapsed"):
+                    self.folders.update_window(row["window_ref"], collapsed=False)
+            except (KeyError, OSError, ValueError):
+                pass
+            self._apply_filter(row.get("key"))
             return
         if row.get("kind") == "work_group":
             self.collapsed_work_groups.discard(row.get("group_id"))
@@ -1034,6 +1137,26 @@ class Tower:
         if not self.visible_rows:
             return
         row = self.visible_rows[self.selected]
+        if row.get("kind") == "folder":
+            if row.get("folder_id") == "__unfiled__":
+                return
+            name = prompt_text(stdscr, t("folder.rename_prompt"), initial=row.get("display_name") or "")
+            if name and name.strip():
+                try:
+                    self.folders.rename(row["folder_id"], name)
+                except (KeyError, OSError, ValueError):
+                    self.notice = t("folder.save_failed")
+            self.load()
+            return
+        if row.get("kind") == "window_asset":
+            name = prompt_text(stdscr, t("folder.window_rename_prompt"), initial=row.get("display_name") or "")
+            if name and name.strip():
+                try:
+                    self.folders.update_window(row["window_ref"], display_name=name)
+                except (OSError, ValueError):
+                    self.notice = t("folder.save_failed")
+            self.load()
+            return
         if row.get("kind") == "work_group":
             current = row.get("display_name") or ""
             name = prompt_text(stdscr, t("group.rename_prompt"), initial=current)
@@ -1191,8 +1314,10 @@ class Tower:
         docstring's note on ``visible_rows`` vs. ``rows``.
         """
 
-        rows = self.visible_rows if host is None else [r for r in self.visible_rows if r["host"] == host]
-        return {name: sum(1 for r in rows if r["status"] == name) for name in STATUS_ORDER}
+        rows = [r for r in self.visible_rows if r.get("pane_id")]
+        if host is not None:
+            rows = [r for r in rows if r.get("host") == host]
+        return {name: sum(1 for r in rows if r.get("status") == name) for name in STATUS_ORDER}
 
 
 def setup_colors():
@@ -1323,6 +1448,14 @@ def _build_detail_fields(tower: Tower, row: Dict, advanced: bool = False) -> Lis
 
 def _build_selected_summary(tower: Tower, row: Dict) -> List[str]:
     """Short, user-facing summary for the default Work view."""
+    if row.get("kind") in {"folder", "other_section"}:
+        return [row.get("display_name") or "", row.get("summary") or t("group.empty")]
+    if row.get("kind") == "window_asset":
+        return [
+            row.get("display_name") or t("folder.terminal"),
+            t("folder.window_tasks").format(n=len(row.get("task_target_ids") or [])),
+            row.get("summary") or t("group.empty"),
+        ]
     if row.get("kind") == "work_group":
         return [
             row.get("display_name") or "",
@@ -1401,7 +1534,7 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
         row_index = item["row_index"]
         physical.append({"kind": "primary", "row": row, "row_index": row_index})
 
-        if narrow and row.get("kind") == "work_group":
+        if narrow and row.get("kind") in {"folder", "other_section", "window_asset"}:
             physical.append({"kind": "group_summary", "row": row, "row_index": row_index})
         elif narrow and row.get("kind") in {"pane", "work_group_stale"}:
             physical.append({"kind": "agent_status", "row": row, "row_index": row_index})
@@ -1553,7 +1686,9 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             project_budget = max(8, width - prefix_width - state_reserve - agent_reserve - 4)
             text = render.truncate_to_width(project_text, project_budget)
 
-            safe_add(stdscr, y, 0, prefix, base_attr if is_selected else (curses.A_BOLD if row.get("kind") == "work_group" else 0))
+            safe_add(stdscr, y, 0, prefix, base_attr if is_selected else (
+                curses.A_BOLD if row.get("kind") in {"folder", "other_section", "window_asset"} else 0
+            ))
             safe_add(stdscr, y, prefix_width, text, base_attr)
 
             if agent_text:
@@ -1561,7 +1696,7 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
                 safe_add(stdscr, y, agent_x, agent_text, base_attr)
             state_x = width - state_width - 2
             if state_text and state_x > prefix_width + 1:
-                if row.get("kind") in {"window", "work_group"}:
+                if row.get("kind") in {"window", "folder", "other_section", "window_asset", "work_group"}:
                     status_attr_here = base_attr if is_selected else curses.A_DIM
                 else:
                     status_attr_here = base_attr if is_selected else status_attr(row.get("status") or "")
@@ -1743,6 +1878,11 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             intent = enter_intent(row)
             if intent == "group" and row:
                 tower.toggle_work_group(row.get("group_id") or "")
+            elif intent == "toggle" and row:
+                if row.get("kind") in {"folder", "other_section"}:
+                    tower.toggle_folder(row.get("folder_id") or "__unfiled__")
+                elif row.get("kind") == "window_asset":
+                    tower.toggle_window_asset(row.get("window_ref") or "")
             elif intent == "control":
                 pane_key = tower.control_key()
                 if pane_key:
@@ -1823,10 +1963,21 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
 
         if matches_letter(key, "l"):
             row = tower.visible_rows[tower.selected] if tower.visible_rows else None
-            if row and row.get("kind") == "work_group":
+            if row and row.get("kind") in {"folder", "other_section"}:
+                from .live_view import open_folder_live_view
+
+                open_folder_live_view(stdscr, tower, row)
+            elif row and row.get("kind") == "work_group":
                 from .live_view import open_group_live_view
 
-                open_group_live_view(stdscr, tower, row)
+                store = getattr(tower, "work_groups", None)
+                group = next((item for item in store.all()
+                              if item.get("group_id") == row.get("group_id")), row) if store else row
+                open_group_live_view(stdscr, tower, group)
+            elif row and row.get("kind") == "window_asset":
+                from .live_view import open_window_live_view
+
+                open_window_live_view(stdscr, tower, row.get("window_ref") or "")
             elif row and row.get("kind") == "pane" and row.get("key"):
                 from .live_view import open_live_view
 
