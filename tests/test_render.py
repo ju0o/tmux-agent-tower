@@ -111,6 +111,19 @@ def test_project_priority_falls_back_to_no_name_label():
     assert name == "(no name)"
 
 
+def test_title_identity_uses_legacy_project_suffix_and_drops_account_suffix():
+    assert render.title_identity("Resume the task | SampleProject", "workstation-a") == (
+        "SampleProject", "Resume the task", None,
+    )
+    assert render.title_identity("Review checkout flow | devuser42", "workstation-a") == (
+        None, "Review checkout flow", None,
+    )
+    assert render.title_identity("OC | SampleProject widget UI", "workstation-a") == (
+        "SampleProject", "widget UI", None,
+    )
+    assert render.title_identity("(이름 없음)", "workstation-a") == (None, None, None)
+
+
 def test_project_priority_generic_basename_is_low_confidence():
     name = render.resolve_display_project(
         custom=None, git_name=None, title=None,
@@ -135,6 +148,22 @@ def test_title_secondary_line_hidden_when_duplicate_of_project():
 def test_title_secondary_line_hidden_when_not_meaningful():
     assert render.title_secondary_line("JuHome", "", "workstation-a") is None
     assert render.title_secondary_line("JuHome", "workstation-a", "workstation-a") is None
+
+
+def test_default_row_keeps_task_agent_role_together_and_hides_empty_labels():
+    from tmux_agent_tower.i18n import t
+
+    parts = render.list_row_parts(
+        {"kind": "pane", "display_name": "작업 이어받기", "project": "(이름 없음)",
+         "agent": "Codex", "role": "builder", "status": "WORKING"},
+        100,
+        t,
+    )
+    assert parts["project"] == "작업 이어받기"
+    assert parts["task"] == ""
+    assert parts["agent"] == "구현 · Codex"
+    assert "(이름 없음)" not in " ".join(parts.values())
+    assert "역할 없음" not in " ".join(parts.values())
 
 
 # -- row_matches_filter ----------------------------------------------
@@ -180,7 +209,8 @@ def test_task_row_puts_role_before_project_context():
         120, lambda key: {"role.qa": "확인", "state.idle": "대기"}[key],
     )
     assert parts["project"] == "API 점검"
-    assert parts["task"] == "확인 · SamplePortal"
+    assert parts["task"] == "SamplePortal"
+    assert parts["agent"] == "확인 · Claude"
 
 
 # -- format_detail_panel ----------------------------------------------
@@ -311,8 +341,8 @@ def test_role_appears_concisely_without_replacing_task_or_agent():
     parts = render.list_row_parts(row, 100, lambda key: labels.get(key, key))
 
     assert parts["project"] == "로그인 수정"
-    assert parts["task"] == "구현 · SamplePortal"
-    assert parts["agent"] == "Codex"
+    assert parts["task"] == "SamplePortal"
+    assert parts["agent"] == "구현 · Codex"
     assert render.row_line_count(row, narrow=True) == 2
 
 
@@ -320,7 +350,8 @@ def test_role_on_a_task_without_a_distinct_task_name_gets_its_own_line():
     row = {"kind": "pane", "project": "SamplePortal", "task_name": "SamplePortal", "role": "qa"}
     parts = render.list_row_parts(row, 58, lambda key: {"role.qa": "확인"}.get(key, key))
     assert parts["project"] == "SamplePortal"
-    assert parts["task"] == "확인"
+    assert parts["task"] == ""
+    assert parts["agent"] == ""
     assert render.row_line_count(row, narrow=True) == 2
 
 

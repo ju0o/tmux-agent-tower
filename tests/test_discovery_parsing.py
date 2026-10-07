@@ -102,6 +102,23 @@ def test_valid_pane_parsed_correctly(monkeypatch):
     assert row["pane_active"] is True
 
 
+def test_tower_runtime_is_detected_in_pane_process_tree(monkeypatch):
+    fs = discovery.FIELD_SEP
+    line = fs.join(["sess", "@9", "0", "Tower", "2", "%9", "workstation-a", "python3", "/work/sample", "100", "0", "1"])
+    monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)
+    monkeypatch.setattr(discovery.process_detection, "cmdline_by_pid", lambda: {
+        "100": "bash", "101": "/usr/bin/python3 -m tmux_agent_tower.main",
+    })
+    monkeypatch.setattr(discovery.process_detection, "ppid_by_pid", lambda: {"101": "100"})
+    monkeypatch.setattr(discovery.capture, "capture_pane", lambda pane_id, lines=30: [])
+    monkeypatch.setattr(discovery, "discover_project", lambda path: "project")
+    monkeypatch.setattr(discovery, "git_project_name", lambda path: None)
+
+    row = discovery.list_panes("sess")[0]
+
+    assert row["tower_runtime"] is True
+
+
 def test_tmux_34_octal_separator_is_parsed(monkeypatch):
     line = r"sess\037@9\0370\037workstation-a\0372\037%9\037My Title\037codex\037/home/user\037555\0370\0371"
     monkeypatch.setattr(discovery.capture, "run_tmux", lambda args: line)

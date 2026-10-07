@@ -460,10 +460,11 @@ class Tower:
         """
 
         auto_agent, auto_agent_source = identify_agent(command, title, cmdline, lines)
+        title_project, title_task, title_role = render.title_identity(title, host)
         auto_project, auto_project_source = render.resolve_project_identity(
             None,
             git_project,
-            title,
+            title_project or (None if title_task else title),
             basename,
             host,
             no_name,
@@ -477,17 +478,10 @@ class Tower:
             auto_agent, auto_agent_source, self.overrides.get_agent(key, session, pane_pid)
         )
         saved_task_name = self.overrides.get_task_name(key, session, pane_pid)
-        role = self.overrides.get_role(key, session, pane_pid)
-        suggested_task_name = render.suggest_task_name(
-            project,
-            role,
-            agent,
-            title,
-            host,
-            no_name,
-            lambda value: t(f"role.{value}"),
-            t("task.terminal"),
-            t("task.unnamed"),
+        role = self.overrides.get_role(key, session, pane_pid) or title_role
+        suggested_task_name = title_task or render.suggest_task_name(
+            project, role, agent, title, host, no_name,
+            lambda value: t(f"role.{value}"), t("task.terminal"), t("task.unnamed"),
         )
         task_name = saved_task_name or suggested_task_name
         name_origin = self.overrides.get_task_name_origin(key, session, pane_pid)
@@ -505,6 +499,10 @@ class Tower:
             "auto_agent": auto_agent,
             "agent_source": agent_source,
             "auto_agent_source": auto_agent_source,
+            "tower_runtime": (
+                Path(command or "").name.casefold() in {"tower", "tmux-agent-tower"}
+                or "tmux_agent_tower.main" in (cmdline or "").casefold()
+            ),
         }
 
     def _resolve_ssh(self, token: str) -> str:
@@ -538,11 +536,18 @@ class Tower:
                 override_host=self.overrides.get_execution_host(key, session_name, pane_pid) or "",
             )
             via_ssh = topology["transport"] == "ssh"
-            effective_title = pane["title"]  # local title edits are pushed to real tmux -- see edit_selected
+            effective_title = pane.get("title") or ""
+            if not render.looks_meaningful_title(effective_title, _raw_hostname()):
+                effective_title = pane.get("window_name") or effective_title
+            if via_ssh and effective_title.casefold() in {
+                str(topology.get("transport_target") or "").casefold(),
+                str(topology.get("execution_host") or "").casefold(),
+            }:
+                effective_title = ""
             identity = self._identity(
                 key,
                 pane["command"],
-                "" if via_ssh else effective_title,
+                effective_title,
                 pane.get("cmdline") or "",
                 pane.get("lines") or (),
                 None if via_ssh else pane.get("git_project"),
@@ -625,6 +630,7 @@ class Tower:
                     "auto_agent": identity["auto_agent"],
                     "agent_source": identity["agent_source"],
                     "auto_agent_source": identity["auto_agent_source"],
+                    "tower_runtime": bool(pane.get("tower_runtime") or identity["tower_runtime"]),
                     "title_line": title_line,
                     "activity_text": activity_text,
                     "duration_seconds": duration_seconds,
@@ -776,6 +782,7 @@ class Tower:
                         "auto_agent": identity["auto_agent"],
                         "agent_source": identity["agent_source"],
                         "auto_agent_source": identity["auto_agent_source"],
+                        "tower_runtime": identity["tower_runtime"],
                         "title_line": title_line,
                         "activity_text": activity_text,
                         "duration_seconds": duration_seconds,
@@ -853,18 +860,19 @@ class Tower:
         filtered = [r for r in self.rows if render.row_matches_filter(r, self.filter_text)]
 
         panes = [r for r in self.rows if r.get("pane_id")]
+        work_panes = [r for r in panes if not r.get("tower_runtime")]
         groups = self.work_groups.all()
-        if not self.filter_text and not panes and not groups:
+        if not self.filter_text and self.view_mode != TERMINAL_STRUCTURE_VIEW and not work_panes and not groups:
             self.visible_rows = zero_state_rows()
         elif self.view_mode == TERMINAL_STRUCTURE_VIEW:
             self.visible_rows = navigator_rows(filtered, set() if self.filter_text else self.collapsed)
         else:
             if self.attention_mode:
-                matching = [r for r in panes if render.row_matches_filter(r, self.filter_text)]
+                matching = [r for r in work_panes if render.row_matches_filter(r, self.filter_text)]
                 self.visible_rows = render.sort_by_attention(matching)
             else:
                 self.visible_rows = work_group_ui.build_rows(
-                    groups, panes, self.collapsed_work_groups, self.filter_text
+                    groups, work_panes, self.collapsed_work_groups, self.filter_text
                 )
 
         if not self.visible_rows:
@@ -914,10 +922,15 @@ class Tower:
             ]
             return
 
-        self.visual = [{"type": "header", "host": t("list.title")}] + [
-            {"type": "data", "row": row, "row_index": idx}
-            for idx, row in enumerate(self.visible_rows)
-        ]
+        visual = [{"type": "header", "host": t("list.title")}]
+        clustered = None
+        for idx, row in enumerate(self.visible_rows):
+            project = row.get("_project_cluster")
+            if project and project != clustered:
+                visual.append({"type": "header", "host": str(project), "level": "project"})
+            clustered = project
+            visual.append({"type": "data", "row": row, "row_index": idx})
+        self.visual = visual
 
     def toggle_attention(self) -> None:
         self.attention_mode = not self.attention_mode
@@ -1223,7 +1236,12 @@ def _status_label(status: str) -> str:
 
 
 def _project_text(row: Dict) -> str:
-    return row["project"] if row.get("project") is not None else t(row.get("placeholder", "remote.unreachable"))
+    project = row.get("project")
+    if project and project != t("project.no_name"):
+        return str(project)
+    if row.get("placeholder"):
+        return t(row["placeholder"])
+    return ""
 
 
 def _duration_text(tower: Tower, row: Dict) -> str:
@@ -1312,21 +1330,25 @@ def _build_selected_summary(tower: Tower, row: Dict) -> List[str]:
             row.get("summary") or t("group.empty"),
         ]
 
-    name = row.get("display_name") or row.get("task_name") or _project_text(row)
-    role = t(f'role.{row["role"]}') if row.get("role") in ROLE_IDS else t("role.unassigned")
+    project = _project_text(row)
+    name = row.get("display_name") or row.get("task_name") or project or t("task.terminal")
+    role = t(f'role.{row["role"]}') if row.get("role") in ROLE_IDS else ""
     agent = row.get("agent") or t("task.terminal")
+    identity = [label for label in (role, agent) if label]
+    if role and role.casefold() in str(name).casefold():
+        identity.remove(role)
     badges = " · ".join(_badge_text(symbol, key) for symbol, key in render.detail_badges(row))
     duration = _duration_text(tower, row)
     if duration and row.get("status") == "WORKING":
         badges = f"{badges} · {duration}"
-    project = _project_text(row)
-    execution_host = row.get("execution_host") or row.get("host") or t("state.unknown")
-    return [
-        str(name),
-        f"{agent} · {role}",
-        badges,
-        f'{t("detail.project")} {project} · {t("detail.execution_host")} {execution_host}',
-    ]
+    execution_host = row.get("execution_host") or row.get("host") or ""
+    details = []
+    if project:
+        details.append(f'{t("detail.project")} {project}')
+    if execution_host and execution_host.casefold() not in {"unknown", t("state.unknown").casefold()}:
+        details.append(f'{t("detail.execution_host")} {execution_host}')
+    identity_line = " · ".join(identity + ([badges] if badges else []))
+    return [str(name), identity_line] + ([" · ".join(details)] if details else [])
 
 
 def _home_footer_lines(tower: Tower, filtering: bool, width: int) -> List[str]:
@@ -1402,13 +1424,15 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
     safe_add(stdscr, 0, 2, title, curses.A_BOLD)
     from .remote_menu import badge_text
 
-    badge = badge_text(remote_state)
+    view_mode = getattr(tower, "view_mode", USER_WORK_VIEW)
+    badge = badge_text(remote_state) if view_mode == TERMINAL_STRUCTURE_VIEW else ""
     badge_x = 2 + render.display_width(title) + 3
-    safe_add(stdscr, 0, badge_x, badge, curses.A_DIM)
+    if badge:
+        safe_add(stdscr, 0, badge_x, badge, curses.A_DIM)
 
     host_line = render.format_watch_header(render.watch_counts(tower.visible_rows), t)
     if host_line and not narrow:
-        min_x = badge_x + render.display_width(badge) + 2
+        min_x = badge_x + render.display_width(badge) + (2 if badge else 0)
         x = max(min_x, width - render.display_width(host_line) - 2)
         if x + render.display_width(host_line) < width:
             safe_add(stdscr, 0, x, host_line, curses.A_BOLD)
@@ -1490,9 +1514,6 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
 
     visible_physical = physical[top : top + max_rows]
 
-    agent_x = max(34, width - 34)
-    status_x = max(50, width - 16)
-
     for offset, p in enumerate(visible_physical):
         y = start_y + offset
 
@@ -1503,22 +1524,23 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
                 safe_add(stdscr, y, 0, label + "┄" * max(0, width - render.display_width(label) - 1), curses.A_DIM)
                 continue
             label = f'── {p["host"]} '
-            safe_add(stdscr, y, 0, label + "─" * max(0, width - len(label) - 1), curses.A_BOLD)
+            safe_add(stdscr, y, 0, label + "─" * max(0, width - render.display_width(label) - 1), curses.A_BOLD)
             continue
 
         row = p["row"]
         is_selected = p["row_index"] == tower.selected
 
-        base_attr = curses.A_REVERSE
-        if is_selected and curses.has_colors():
+        user_view = view_mode == USER_WORK_VIEW
+        base_attr = (curses.A_BOLD if is_selected else 0) if user_view else curses.A_REVERSE
+        if not user_view and is_selected and curses.has_colors():
             base_attr = curses.color_pair(6) | curses.A_BOLD
 
-        if is_selected:
+        if is_selected and not user_view:
             safe_add(stdscr, y, 0, " " * max(1, width - 1), base_attr)
 
         if p["kind"] == "primary":
             parts = render.list_row_parts(row, width, t, _duration_text(tower, row))
-            prefix = parts["guide"] or (" " if not is_selected else "")
+            prefix = ("› " if is_selected else "  ") + (parts["guide"] or "") if user_view else (parts["guide"] or " ")
             project_text = parts["project"] if row.get("kind") != "zero" else _project_text(row)
             if parts.get("task") and (narrow or row.get("kind") != "work_group"):
                 project_text = f'{project_text} · {parts["task"]}'
@@ -1526,17 +1548,18 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
             agent_text = parts["agent"]
             state_width = render.display_width(state_text)
             prefix_width = render.display_width(prefix)
-            project_budget = max(8, width - prefix_width - state_width - 4)
-            if not narrow and agent_text:
-                project_budget = max(10, agent_x - prefix_width - 2)
+            state_reserve = state_width + 2 if state_text else 0
+            agent_reserve = render.display_width(agent_text) + 2 if agent_text else 0
+            project_budget = max(8, width - prefix_width - state_reserve - agent_reserve - 4)
             text = render.truncate_to_width(project_text, project_budget)
 
-            safe_add(stdscr, y, 0, prefix, base_attr if is_selected else curses.A_BOLD)
-            safe_add(stdscr, y, prefix_width, text, base_attr if is_selected else 0)
+            safe_add(stdscr, y, 0, prefix, base_attr if is_selected else (curses.A_BOLD if row.get("kind") == "work_group" else 0))
+            safe_add(stdscr, y, prefix_width, text, base_attr)
 
             if agent_text:
-                safe_add(stdscr, y, max(prefix_width + render.display_width(text) + 2, agent_x), agent_text[:14], base_attr)
-            state_x = max(prefix_width + render.display_width(text) + 2, width - state_width - 2)
+                agent_x = prefix_width + render.display_width(text) + 2
+                safe_add(stdscr, y, agent_x, agent_text, base_attr)
+            state_x = width - state_width - 2
             if state_text and state_x > prefix_width + 1:
                 if row.get("kind") in {"window", "work_group"}:
                     status_attr_here = base_attr if is_selected else curses.A_DIM
@@ -1568,7 +1591,7 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
     # -- detail panel ------------------------------------------------------
 
     if detail_lines and visible_physical:
-        divider_y = start_y + len(visible_physical)
+        divider_y = footer_y - detail_block
         safe_add(stdscr, divider_y, 0, "─" * max(0, width - 1), curses.A_DIM)
         safe_add(stdscr, divider_y + 1, 2, t("detail.title"), curses.A_BOLD)
         for i, line in enumerate(detail_lines):

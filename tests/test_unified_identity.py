@@ -25,6 +25,37 @@ def test_auto_name_uses_project_role_agent_and_terminal_fallbacks():
     assert suggest("(이름 없음)", None, "Shell", "%15", "workstation-b", "(이름 없음)", label, "터미널", "새 작업") == "터미널"
 
 
+def test_legacy_titles_infer_project_task_and_role_without_persisting():
+    assert render.title_identity("Fix checkout flow | SampleProject", "workstation-a") == (
+        "SampleProject", "Fix checkout flow", None,
+    )
+    assert render.title_identity("SampleProject | PM", "workstation-a") == ("SampleProject", None, "orchestrator")
+    assert render.title_identity("Review checkout flow | devuser42", "workstation-a") == (
+        None, "Review checkout flow", None,
+    )
+    assert render.title_identity("workstation-a", "workstation-a") == (None, None, None)
+
+
+def test_legacy_ssh_title_becomes_task_name_and_role(tmp_path):
+    tower = Tower.__new__(Tower)
+    tower.overrides = OverrideStore(tmp_path / "overrides.json")
+    identity = tower._identity(
+        "%8", "ssh", "Fix checkout flow | SampleProject", "ssh example-host", (),
+        None, None, "workstation-a", "(이름 없음)", session="0", pane_pid="12",
+    )
+    assert identity["project"] == "SampleProject"
+    assert identity["display_name"] == "Fix checkout flow"
+    assert identity["role"] is None
+
+    role = tower._identity(
+        "%9", "ssh", "SampleProject | PM", "ssh example-host", (), None, None, "workstation-a",
+        "(이름 없음)", session="0", pane_pid="13",
+    )
+    assert role["project"] == "SampleProject"
+    assert role["display_name"] == "SampleProject · 조율"
+    assert role["role"] == "orchestrator"
+
+
 def test_auto_role_name_tracks_role_and_legacy_name_is_a_user_name(tmp_path):
     tower = Tower.__new__(Tower)
     tower.overrides = OverrideStore(tmp_path / "overrides.json")
@@ -42,6 +73,22 @@ def test_auto_role_name_tracks_role_and_legacy_name_is_a_user_name(tmp_path):
     reopened = OverrideStore(tmp_path / "overrides.json")
     assert reopened.get_task_name("%1", "0", "123") == "기능 구현"
     assert reopened.get_task_name_origin("%1", "0", "123") == "user"
+
+
+def test_tower_runtime_identity_is_detected_without_window_name_matching(tmp_path):
+    tower = Tower.__new__(Tower)
+    tower.overrides = OverrideStore(tmp_path / "overrides.json")
+    identity = tower._identity(
+        "%1", "python3", "python3", "python3 -m tmux_agent_tower.main", (),
+        None, None, "workstation-a", "(이름 없음)", session="0", pane_pid="123",
+    )
+    assert identity["tower_runtime"] is True
+
+    regular = tower._identity(
+        "%2", "bash", "Tower setup shell", "bash", (), None, None,
+        "workstation-a", "(이름 없음)", session="0", pane_pid="124",
+    )
+    assert regular["tower_runtime"] is False
 
 
 def test_name_fallback_never_uses_physical_ids():
@@ -76,6 +123,21 @@ def test_default_task_details_hide_tmux_names_and_ids():
         SimpleNamespace(config={"show_activity": False}), row
     )]
     assert labels == ["작업 이름", "프로젝트", "에이전트", "역할", "상태", "확인할 일", "결과", "실행 위치"]
+
+
+def test_default_selected_summary_omits_empty_project_and_role():
+    from tmux_agent_tower.ui import tower as tower_module
+
+    lines = tower_module._build_selected_summary(
+        SimpleNamespace(config={"show_status_duration": False}),
+        {
+            "display_name": "터미널", "project": "(이름 없음)", "agent": "Shell",
+            "role": None, "status": "IDLE", "attention": "none", "result_state": "none",
+            "execution_host": "UNKNOWN",
+        },
+    )
+    assert lines == ["터미널", "Shell · ○ 대기"]
+    assert not any("이름 없음" in line or "역할 없음" in line for line in lines)
 
 
 def test_project_rebind_changes_path_and_preserves_result_provider(tmp_path):

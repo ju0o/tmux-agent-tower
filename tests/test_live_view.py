@@ -289,7 +289,9 @@ def test_default_home_draws_user_identity_without_physical_inspector_or_legacy_w
     text = " ".join(item[2] for item in screen.writes)
 
     assert "SamplePortal 개선" in text and "API 확인" in text
-    assert "Codex · 구현" in text
+    assert "구현 · Codex" in text
+    assert any(item[2].startswith("› ") for item in screen.writes)
+    assert not any(item[2] == " " * 99 for item in screen.writes)
     assert "실행 위치 workstation-a" in text
     assert "새 결과" in text
     for internal in ("Pane ID", "Window ID", "Session", "%42", "@4", "A 우선순위", "M 휴대폰", "Ctrl+b w"):

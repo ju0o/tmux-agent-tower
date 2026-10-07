@@ -227,6 +227,48 @@ def test_project_list_is_the_default_and_attention_does_not_reorder_it(tmp_path,
     assert [row["key"] for row in tower.visible_rows] == ["%6", "%7"]
 
 
+def test_home_visually_clusters_legacy_ungrouped_tasks_by_project(tmp_path, monkeypatch):
+    from tmux_agent_tower.ui import tower as tower_module
+
+    monkeypatch.setattr(tower_module, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(tower_module, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(tower_module, "HOST_FILE", tmp_path / "config" / "host")
+    monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
+    tower = tower_module.Tower("0")
+    first = _pane("%20", "0", "old-window-a", window_id="@20", project="SampleProject")
+    second = _pane("%21", "1", "old-window-b", window_id="@21", project="SampleProject")
+    first.update(target_id="a", display_name="PM", role="orchestrator")
+    second.update(target_id="b", display_name="구현", role="builder")
+    tower.rows = [first, second]
+    tower._apply_filter()
+
+    assert [row["kind"] for row in tower.visible_rows] == ["pane", "pane"]
+    assert all(row.get("_project_cluster") == "SampleProject" for row in tower.visible_rows)
+    assert any(item.get("level") == "project" and item["host"] == "SampleProject" for item in tower.visual)
+    assert all(row.get("kind") != "work_group" for row in tower.visible_rows)
+
+
+def test_other_tower_runtime_is_not_a_user_task_but_remains_in_terminal_structure(tmp_path, monkeypatch):
+    from tmux_agent_tower.ui import tower as tower_module
+
+    monkeypatch.setattr(tower_module, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(tower_module, "CONFIG_DIR", tmp_path / "config")
+    monkeypatch.setattr(tower_module, "HOST_FILE", tmp_path / "config" / "host")
+    monkeypatch.setattr(tower_module, "REMOTE_HOSTS_FILE", tmp_path / "config" / "remote-hosts.txt")
+    tower = tower_module.Tower("0")
+    runtime = _pane("%30", "0", "tower-window", window_id="@30", project="Tower")
+    runtime.update(target_id="tower", tower_runtime=True, agent="Shell")
+    task = _pane("%31", "0", "task-window", window_id="@30", project="SampleProject")
+    task.update(target_id="task", tower_runtime=False)
+    tower.rows = [runtime, task]
+
+    tower._apply_filter()
+    assert [row["pane_id"] for row in tower.visible_rows] == ["%31"]
+
+    tower.toggle_navigator()
+    assert [row.get("pane_id") for row in tower.visible_rows if row.get("pane_id")] == ["%30", "%31"]
+
+
 def test_remote_only_default_uses_user_work_rows_and_physical_tree_is_explicit(tmp_path, monkeypatch):
     from tmux_agent_tower.ui import tower as tower_module
 

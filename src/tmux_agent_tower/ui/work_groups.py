@@ -76,9 +76,28 @@ def build_rows(groups: Sequence[dict], panes: Iterable[dict], collapsed: Set[str
             member["guide"] = "  " + ("└─ " if index == len(visible_members) - 1 else "├─ ")
             output.append(member)
 
-    output.extend(
+    ungrouped = [
         row for row in panes
         if (not row.get("target_id") or row.get("target_id") not in membership)
         and render.row_matches_filter(row, query)
-    )
+    ]
+    buckets: Dict[str, List[dict]] = {}
+    order: List[str] = []
+    for index, row in enumerate(ungrouped):
+        project = str(row.get("project") or "").strip()
+        if not project or project == t("project.no_name"):
+            key = f"row:{index}"
+        else:
+            key = f"project:{project.casefold()}"
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(row)
+
+    for key in order:
+        members = buckets[key]
+        if key.startswith("project:") and len(members) > 1:
+            output.extend({**row, "_project_cluster": row["project"]} for row in members)
+        else:
+            output.extend(members)
     return output

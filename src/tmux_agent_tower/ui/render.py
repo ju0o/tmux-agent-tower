@@ -8,6 +8,7 @@ screen. Nothing here imports ``curses``.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -267,7 +268,10 @@ def looks_meaningful_title(title: Optional[str], local_host: str) -> bool:
 
     stripped = title.strip()
 
-    if not stripped or stripped == "(unnamed)":
+    if not stripped or stripped.casefold() in {"(unnamed)", "(no name)", "(이름 없음)"}:
+        return False
+
+    if stripped.casefold() in {"bash", "zsh", "sh", "fish", "shell", "terminal", "powershell", "cmd"}:
         return False
 
     if local_host and stripped.lower() == local_host.strip().lower():
@@ -277,6 +281,67 @@ def looks_meaningful_title(title: Optional[str], local_host: str) -> bool:
         return False
 
     return True
+
+
+_TITLE_ROLES = {
+    "pm": "orchestrator", "orchestrator": "orchestrator", "조율": "orchestrator",
+    "planner": "planner", "계획": "planner",
+    "builder": "builder", "구현": "builder",
+    "reviewer": "reviewer", "검수": "reviewer",
+    "qa": "qa", "확인": "qa",
+    "dogfood": "dogfood", "실사용": "dogfood",
+    "e2e": "e2e", "전체 흐름": "e2e",
+}
+
+
+def title_identity(title: Optional[str], local_host: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Infer ``(project, task, role)`` from a human title without saving it.
+
+    A right-hand project slug after ``|`` is a useful legacy signal. User
+    handles and agent labels are not treated as projects. Unknown titles stay
+    task names, so existing work never degrades to an unnamed terminal.
+    """
+
+    if not looks_meaningful_title(title, local_host) or title_is_agent_label(title):
+        return None, None, None
+
+    value = title.strip()
+    while value and value[0] in "✳✻✽∗*· ":
+        value = value[1:].lstrip()
+    if " | " not in value:
+        return None, value, None
+
+    left, right = (part.strip() for part in value.rsplit(" | ", 1))
+    if not left or not right:
+        return None, value, None
+
+    role = _TITLE_ROLES.get(right.casefold())
+    if role:
+        project_like = "-" in left or any(a.islower() and b.isupper() for a, b in zip(left, left[1:]))
+        return (left, None, role) if project_like else (None, left, role)
+
+    # Compact leading labels such as "OC | SampleProject ..." are commonly an
+    # agent abbreviation, followed by the actual project/task title.
+    if len(left) <= 3 and left.replace(".", "").isupper():
+        words = right.split(maxsplit=1)
+        first = words[0]
+        project_like = "-" in first or any(a.islower() and b.isupper() for a, b in zip(first, first[1:]))
+        if project_like:
+            return first, words[1] if len(words) > 1 else None, None
+        return None, right, None
+
+    if title_is_agent_label(right):
+        return None, left, None
+
+    project_like = "-" in right or any(a.islower() and b.isupper() for a, b in zip(right, right[1:]))
+    if project_like:
+        return right, left, None
+
+    # A lower-case account-like suffix is decoration, not project identity.
+    if re.fullmatch(r"[a-z][a-z0-9_]{2,}", right):
+        return None, left, None
+
+    return None, value, None
 
 
 def resolve_project_identity(
@@ -518,20 +583,22 @@ def list_row_parts(row: Dict, width: int, badge_text: Callable[[str], str], dura
     badge = f"{symbol} {badge_text(key)}"
     if duration and not narrow:
         badge = f"{badge} · {duration}"
-    project = row.get("display_name") or row.get("task_name") or row.get("project") or ""
-    task = []
-    source_project = row.get("project") or ""
-    if row.get("role") in ROLE_IDS:
-        role = badge_text(f'role.{row["role"]}')
-        if role.casefold() not in project.casefold():
-            task.append(role)
-    if source_project and source_project not in project:
-        task.append(source_project)
+    project_name = row.get("project") or ""
+    if project_name == t("project.no_name"):
+        project_name = ""
+    project = row.get("display_name") or row.get("task_name") or project_name or t("task.terminal")
+    task_parts = []
+    role = badge_text(f'role.{row["role"]}') if row.get("role") in ROLE_IDS else ""
+    if project_name and project_name.casefold() not in project.casefold():
+        task_parts.append(project_name)
+    agent = (row.get("agent") or "").strip()
+    if role and role.casefold() not in project.casefold():
+        agent = f"{role} · {agent}" if agent else role
     return {
         "guide": guide,
         "project": project,
-        "task": " · ".join(task),
-        "agent": truncate_to_width(row.get("agent") or "", 14) if not narrow else "",
+        "task": " · ".join(task_parts),
+        "agent": truncate_to_width(agent, 24) if not narrow else "",
         "badge": badge if not narrow else "",
     }
 

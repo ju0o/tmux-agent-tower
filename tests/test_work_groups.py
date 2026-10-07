@@ -128,6 +128,21 @@ def test_group_rows_aggregate_attention_results_and_stale_members():
     assert enter_intent(members[-1]) == "ignore"
 
 
+def test_ungrouped_legacy_tasks_cluster_visually_by_project_without_saving_groups():
+    rows = [
+        _row("a", name="SampleProject · 조율", role="orchestrator", pane="%1"),
+        _row("b", name="SampleProject 구현", role="builder", pane="%2"),
+        _row("c", name="독립 작업", pane="%3"),
+    ]
+    rows[0]["project"] = "SampleProject"
+    rows[1]["project"] = "SampleProject"
+    rows[2]["project"] = "(이름 없음)"
+    output = work_groups.build_rows([], rows, set())
+    assert [row["key"] for row in output] == ["%1", "%2", "%3"]
+    assert [row.get("_project_cluster") for row in output] == ["SampleProject", "SampleProject", None]
+    assert all(row.get("kind") != "work_group" for row in output)
+
+
 def test_group_result_count_uses_only_complete_tracker_state():
     from tmux_agent_tower.adapters.base import ResultCandidate
     from tmux_agent_tower.detection.result import ResultTracker

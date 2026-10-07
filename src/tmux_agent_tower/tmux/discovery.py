@@ -6,6 +6,7 @@ process table. It never renames, kills, or sends input to anything.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Dict, List
 
@@ -35,6 +36,36 @@ _PANE_FORMAT = FIELD_SEP.join(
 )
 
 _EXPECTED_FIELDS = _PANE_FORMAT.count(FIELD_SEP) + 1
+
+
+def _has_tower_process(pane_pid: str, cmdline_map: Dict[str, str], ppid_map: Dict[str, str]) -> bool:
+    children: Dict[str, List[str]] = {}
+    for pid, parent in ppid_map.items():
+        children.setdefault(parent, []).append(pid)
+
+    stack = [str(pane_pid)]
+    seen = set()
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        args = cmdline_map.get(pid, "")
+        try:
+            parts = shlex.split(args)
+        except ValueError:
+            parts = args.split()
+        if parts:
+            executable = Path(parts[0]).name.casefold()
+            script = Path(parts[1]).name.casefold() if len(parts) > 1 else ""
+            if executable in {"tower", "tmux-agent-tower"} or script in {"tower", "tmux-agent-tower"}:
+                return True
+            if "-m" in parts:
+                module_index = parts.index("-m") + 1
+                if module_index < len(parts) and parts[module_index].casefold() == "tmux_agent_tower.main":
+                    return True
+        stack.extend(children.get(pid, []))
+    return False
 
 
 def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30) -> List[Dict]:
@@ -105,6 +136,7 @@ def list_panes(session: str, exclude_pane_id: str = "", capture_lines: int = 30)
                 "title": title or "(unnamed)",
                 "command": command,
                 "cmdline": evidence_cmdline(pane_pid, command, cmdline_map, ppid_map),
+                "tower_runtime": _has_tower_process(pane_pid, cmdline_map, ppid_map),
                 "agent_cwd": agent_cwd,
                 "ssh_target": ssh_target,
                 "ssh_stale": ssh_stale,
