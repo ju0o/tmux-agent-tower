@@ -21,16 +21,24 @@ def test_codex_idle(fixture_lines):
 def test_codex_waiting(fixture_lines):
     adapter = resolve_adapter("codex", "Example task title")
     ctx = _ctx(fixture_lines, "codex-waiting.txt", command="codex")
-    assert adapter.classify(ctx).status == "WAITING"
+    assert adapter.classify(ctx).status is None
+    assert adapter.detect_attention(ctx) == "approval_required"
+    assert adapter.approve(ctx) == "1"
+    assert adapter.reject(ctx) == "3"
 
 
 def test_codex_first_run_trust_prompt_is_waiting(fixture_lines):
     # Real dogfood finding (2026-09-30 P4 launcher testing): a first-run
     # Codex pane sat at "Trust this folder?" and was misreported as IDLE
     # because no generic waiting pattern matched that exact phrasing.
+    # Approval is its own axis. The footer says "enter continue"; the digit
+    # does not select the row. Option 2 is Back, so there is no reject key.
     adapter = resolve_adapter("codex", "")
     ctx = _ctx(fixture_lines, "codex-trust-prompt.txt", command="codex")
-    assert adapter.classify(ctx).status == "WAITING"
+    assert adapter.classify(ctx).status is None
+    assert adapter.detect_attention(ctx) == "approval_required"
+    assert adapter.approve(ctx) == "Enter"
+    assert adapter.reject(ctx) is None
 
 
 def test_codex_spinner_title_is_working(fixture_lines):
@@ -56,7 +64,10 @@ def test_claude_idle_prompt_not_treated_as_working(fixture_lines):
 def test_claude_waiting(fixture_lines):
     adapter = resolve_adapter("claude", "some title")
     ctx = _ctx(fixture_lines, "claude-waiting.txt", command="claude")
-    assert adapter.classify(ctx).status == "WAITING"
+    assert adapter.classify(ctx).status is None
+    assert adapter.detect_attention(ctx) == "approval_required"
+    assert adapter.approve(ctx) == "1"
+    assert adapter.reject(ctx) == "3"
 
 
 def test_grok_working(fixture_lines):
@@ -89,7 +100,10 @@ def test_cursor_followup_is_idle(fixture_lines):
 def test_cursor_waiting(fixture_lines):
     adapter = resolve_adapter("agent", "some title", cmdline="/x/cursor-agent")
     ctx = _ctx(fixture_lines, "cursor-waiting.txt", command="agent")
-    assert adapter.classify(ctx).status == "WAITING"
+    assert adapter.classify(ctx).status is None
+    assert adapter.detect_attention(ctx) == "approval_required"
+    assert adapter.approve(ctx) is None
+    assert adapter.reject(ctx) is None
 
 
 def test_opencode_working(fixture_lines):
@@ -105,13 +119,13 @@ def test_opencode_idle(fixture_lines):
 
 
 def test_opencode_waiting(fixture_lines):
-    # NOTE: this fixture is a synthesized generic prompt, not a live
-    # OpenCode capture -- its own approval UI was never observed (see
-    # adapters/opencode.py's module docstring). This only exercises the
-    # generic waiting-pattern fallback that every unmatched adapter shares.
+    # The approval widget was never captured live. Detection matches the
+    # synthesized fixture, and approve() stays None so Tower does not guess y.
     adapter = resolve_adapter("opencode", "some title")
     ctx = _ctx(fixture_lines, "opencode-waiting.txt", command="opencode")
-    assert adapter.classify(ctx).status == "WAITING"
+    assert adapter.classify(ctx).status is None
+    assert adapter.detect_attention(ctx) == "approval_required"
+    assert adapter.approve(ctx) is None
 
 
 def test_shell_idle_prompt(fixture_lines):

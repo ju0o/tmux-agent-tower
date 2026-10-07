@@ -1,4 +1,13 @@
-from tmux_agent_tower.tmux import registration
+from tmux_agent_tower.tmux import capture, registration
+
+
+def test_current_session_uses_the_process_pane_not_the_attached_client(monkeypatch):
+    seen = []
+    monkeypatch.setenv("TMUX_PANE", "%13")
+    monkeypatch.setattr(capture, "run_tmux", lambda args, **_kwargs: seen.append(args) or "tower-wbs01e-e2e")
+
+    assert capture.current_session() == "tower-wbs01e-e2e"
+    assert seen == [["display-message", "-p", "-t", "%13", "#{session_name}"]]
 
 
 class FakeTmuxOptions:
@@ -21,6 +30,12 @@ class FakeTmuxOptions:
 
     def pane_exists(self, pane_id):
         return pane_id in self.alive_panes
+
+    def pane_is_live_in_session(self, pane_id, session):
+        if pane_id not in self.alive_panes or pane_id in getattr(self, "dead_panes", set()):
+            return False
+        owner = getattr(self, "pane_sessions", {}).get(pane_id)
+        return owner is None or owner == session
 
     def run_tmux(self, args, capture=True):
         if args[0] in ("select-window", "select-pane"):
@@ -93,6 +108,82 @@ def test_a_window_named_control_that_isnt_registered_is_never_focused(monkeypatc
 
     registration.register("sess", "%2")
     assert registration.resolve_active_pane("sess") == "%2"
+
+
+def test_pane_in_another_session_is_cleared_and_not_used(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    fake.pane_sessions = {"%14": "other"}
+    monkeypatch.setattr(registration, "capture", fake)
+
+    registration.register("sess", "%14")
+    assert registration.resolve_active_pane("sess") is None
+    assert fake.get_session_option("sess", registration.PANE_OPTION) == ""
+
+
+def test_dead_registered_pane_is_cleared(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    fake.dead_panes = {"%14"}
+    monkeypatch.setattr(registration, "capture", fake)
+
+    registration.register("sess", "%14")
+    assert registration.resolve_active_pane("sess") is None
+    assert fake.get_session_option("sess", registration.PANE_OPTION) == ""
+
+
+def test_dead_pid_is_not_the_current_tower(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    monkeypatch.setattr(registration, "capture", fake)
+    monkeypatch.setattr(registration, "pid_alive", lambda pid: False)
+
+    registration.register("sess", "%14", pid="4242", source="/old/tower/__init__.py")
+    assert registration.resolve_active_pane("sess") is None
+    assert fake.get_session_option("sess", registration.PANE_OPTION) == ""
+    assert fake.get_session_option("sess", registration.PID_OPTION) == ""
+
+
+def test_pane_id_reused_by_another_process_is_rejected(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    monkeypatch.setattr(registration, "capture", fake)
+    monkeypatch.setattr(registration, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(registration, "_pane_shell_pid", lambda pane_id: "77")
+    monkeypatch.setattr(registration, "process_belongs_to_pane", lambda pid, shell: False)
+
+    registration.register("sess", "%14", pid="55", source="/old/tmux-control")
+    assert registration.resolve_active_pane("sess") is None
+    assert fake.get_session_option("sess", registration.SOURCE_OPTION) == ""
+
+
+def test_matching_pid_is_the_current_tower(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    monkeypatch.setattr(registration, "capture", fake)
+    monkeypatch.setattr(registration, "pid_alive", lambda pid: pid == "55")
+    monkeypatch.setattr(registration, "_pane_shell_pid", lambda pane_id: "77")
+    monkeypatch.setattr(registration, "process_belongs_to_pane", lambda pid, shell: pid == "55" and shell == "77")
+
+    registration.register("sess", "%14", pid="55", source="/current/tmux_agent_tower/__init__.py")
+    assert registration.resolve_active_pane("sess") == "%14"
+    assert fake.get_session_option("sess", registration.SOURCE_OPTION).endswith("__init__.py")
+
+
+def test_legacy_registration_without_pid_still_focuses_a_live_pane(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14"})
+    monkeypatch.setattr(registration, "capture", fake)
+
+    registration.register("sess", "%14")
+    assert fake.get_session_option("sess", registration.PID_OPTION) == ""
+    assert registration.resolve_active_pane("sess") == "%14"
+
+
+def test_restart_replaces_the_previous_identity(monkeypatch):
+    fake = FakeTmuxOptions(alive_panes={"%14", "%19"})
+    monkeypatch.setattr(registration, "capture", fake)
+
+    registration.register("sess", "%14", pid="1", source="/old")
+    registration.unregister_if_self("sess", "%14")
+    registration.register("sess", "%19", pid="2", source="/new")
+    assert fake.get_session_option("sess", registration.PANE_OPTION) == "%19"
+    assert fake.get_session_option("sess", registration.PID_OPTION) == "2"
+    assert fake.get_session_option("sess", registration.SOURCE_OPTION) == "/new"
 
 
 def test_focus_pane_selects_window_then_pane(monkeypatch):

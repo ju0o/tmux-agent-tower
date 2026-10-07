@@ -67,3 +67,8 @@ def test_prompt_text_escape_returns_none():
 def test_prompt_text_backspace_removes_last_char():
     fake = FakeStdscr(list("ab") + ["\x7f", "\n"])
     assert widgets.prompt_text(fake, "Label: ") == "a"
+
+
+def test_prompt_text_still_submits_on_the_first_newline():
+    fake = FakeStdscr(list("ab") + ["\n", "c", "\n"])
+    assert widgets.prompt_text(fake, "Label: ") == "ab"

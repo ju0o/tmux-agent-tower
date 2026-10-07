@@ -1,3 +1,3 @@
-user@host:/home/example/project$ ls
+user@host:/home/user/project$ ls
 file1.txt  file2.txt
-user@host:/home/example/project$
+user@host:/home/user/project$

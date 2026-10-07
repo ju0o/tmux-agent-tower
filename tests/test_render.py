@@ -4,7 +4,7 @@ from tmux_agent_tower.ui import render
 def _label(status):
     return {
         "WORKING": "작업 중",
-        "WAITING": "입력 대기",
+        "WAITING": "대기",
         "IDLE": "대기",
         "UNKNOWN": "확인 불가",
         "DEAD": "종료됨",
@@ -19,7 +19,7 @@ def test_host_summary_hides_zero_counts():
     summary = render.format_host_summary(counts, _label)
     assert "작업 중 3" in summary
     assert "대기 4" in summary
-    assert "입력 대기" not in summary
+    assert summary.count("대기") == 1
     assert "확인 불가" not in summary
     assert "종료됨" not in summary
 
@@ -34,28 +34,28 @@ def test_host_summary_preserves_status_order():
     summary = render.format_host_summary(counts, _label)
     order = [render.STATUS_ORDER.index(s) for s in render.STATUS_ORDER]
     assert order == sorted(order)  # sanity: STATUS_ORDER itself is fixed
-    assert summary.index("작업 중") < summary.index("입력 대기") < summary.index("대기")
+    assert summary.index("작업 중") < summary.index("대기")
 
 
 # -- looks_meaningful_title ----------------------------------------------
 
 
 def test_meaningful_title_rejects_empty():
-    assert not render.looks_meaningful_title("", "MAINPC")
-    assert not render.looks_meaningful_title(None, "MAINPC")
+    assert not render.looks_meaningful_title("", "workstation-a")
+    assert not render.looks_meaningful_title(None, "workstation-a")
 
 
 def test_meaningful_title_rejects_unnamed_placeholder():
-    assert not render.looks_meaningful_title("(unnamed)", "MAINPC")
+    assert not render.looks_meaningful_title("(unnamed)", "workstation-a")
 
 
 def test_meaningful_title_rejects_bare_hostname():
-    assert not render.looks_meaningful_title("MAINPC", "MAINPC")
-    assert not render.looks_meaningful_title("mainpc", "MAINPC")  # case-insensitive
+    assert not render.looks_meaningful_title("workstation-a", "workstation-a")
+    assert not render.looks_meaningful_title("workstation-a", "workstation-a")  # case-insensitive
 
 
 def test_meaningful_title_accepts_real_title():
-    assert render.looks_meaningful_title("JuHome Dev", "MAINPC")
+    assert render.looks_meaningful_title("JuHome Dev", "workstation-a")
 
 
 # -- resolve_display_project ----------------------------------------------
@@ -64,7 +64,7 @@ def test_meaningful_title_accepts_real_title():
 def test_project_priority_custom_wins_over_everything():
     name = render.resolve_display_project(
         custom="Custom", git_name="git-name", title="Some Title",
-        basename="basename", local_host="MAINPC", no_name_label="(no name)",
+        basename="basename", local_host="workstation-a", no_name_label="(no name)",
     )
     assert name == "Custom"
 
@@ -72,7 +72,7 @@ def test_project_priority_custom_wins_over_everything():
 def test_project_priority_git_name_wins_over_title_and_basename():
     name = render.resolve_display_project(
         custom=None, git_name="my-repo", title="Some Title",
-        basename="basename", local_host="MAINPC", no_name_label="(no name)",
+        basename="basename", local_host="workstation-a", no_name_label="(no name)",
     )
     assert name == "my-repo"
 
@@ -82,7 +82,7 @@ def test_project_priority_low_confidence_git_name_is_skipped():
     # trusted over a meaningful title.
     name = render.resolve_display_project(
         custom=None, git_name="f", title="JuHome Dev",
-        basename="f", local_host="MAINPC", no_name_label="(no name)",
+        basename="f", local_host="workstation-a", no_name_label="(no name)",
     )
     assert name == "JuHome Dev"
 
@@ -90,7 +90,7 @@ def test_project_priority_low_confidence_git_name_is_skipped():
 def test_project_priority_meaningful_title_wins_over_low_confidence_basename():
     name = render.resolve_display_project(
         custom=None, git_name=None, title="Prepare P14 direct pilot",
-        basename="f", local_host="MAINPC", no_name_label="(no name)",
+        basename="f", local_host="workstation-a", no_name_label="(no name)",
     )
     assert name == "Prepare P14 direct pilot"
 
@@ -98,7 +98,7 @@ def test_project_priority_meaningful_title_wins_over_low_confidence_basename():
 def test_project_priority_basename_used_when_no_better_option():
     name = render.resolve_display_project(
         custom=None, git_name=None, title=None,
-        basename="AI-Agent-Marketplace", local_host="MAINPC", no_name_label="(no name)",
+        basename="AI-Agent-Marketplace", local_host="workstation-a", no_name_label="(no name)",
     )
     assert name == "AI-Agent-Marketplace"
 
@@ -106,7 +106,7 @@ def test_project_priority_basename_used_when_no_better_option():
 def test_project_priority_falls_back_to_no_name_label():
     name = render.resolve_display_project(
         custom=None, git_name=None, title="(unnamed)",
-        basename="f", local_host="MAINPC", no_name_label="(no name)",
+        basename="f", local_host="workstation-a", no_name_label="(no name)",
     )
     assert name == "(no name)"
 
@@ -114,7 +114,7 @@ def test_project_priority_falls_back_to_no_name_label():
 def test_project_priority_generic_basename_is_low_confidence():
     name = render.resolve_display_project(
         custom=None, git_name=None, title=None,
-        basename="mnt", local_host="MAINPC", no_name_label="(no name)",
+        basename="mnt", local_host="workstation-a", no_name_label="(no name)",
     )
     assert name == "(no name)"
 
@@ -123,18 +123,18 @@ def test_project_priority_generic_basename_is_low_confidence():
 
 
 def test_title_secondary_line_shown_when_meaningful_and_different():
-    line = render.title_secondary_line("JuHome", "JuHome Dev", "MAINPC")
+    line = render.title_secondary_line("JuHome", "JuHome Dev", "workstation-a")
     assert line == "JuHome Dev"
 
 
 def test_title_secondary_line_hidden_when_duplicate_of_project():
-    assert render.title_secondary_line("JuHome", "JuHome", "MAINPC") is None
-    assert render.title_secondary_line("JuHome", "juhome", "MAINPC") is None  # case-insensitive
+    assert render.title_secondary_line("JuHome", "JuHome", "workstation-a") is None
+    assert render.title_secondary_line("JuHome", "juhome", "workstation-a") is None  # case-insensitive
 
 
 def test_title_secondary_line_hidden_when_not_meaningful():
-    assert render.title_secondary_line("JuHome", "", "MAINPC") is None
-    assert render.title_secondary_line("JuHome", "MAINPC", "MAINPC") is None
+    assert render.title_secondary_line("JuHome", "", "workstation-a") is None
+    assert render.title_secondary_line("JuHome", "workstation-a", "workstation-a") is None
 
 
 # -- row_matches_filter ----------------------------------------------
@@ -155,16 +155,32 @@ def test_filter_matches_agent():
     assert render.row_matches_filter(row, "claude")
 
 
-def test_filter_matches_title_and_path_and_host():
-    row = {"project": "x", "title_line": "Marketplace | Codex", "path": "/mnt/f/proj", "host": "ASUS"}
-    assert render.row_matches_filter(row, "marketplace")
-    assert render.row_matches_filter(row, "/mnt/f")
-    assert render.row_matches_filter(row, "asus")
+def test_filter_matches_task_role_and_group_but_hides_internal_location():
+    row = {
+        "project": "Tower", "display_name": "Remote 복사 개선", "role": "builder",
+        "work_group_name": "RC 준비", "path": "/mnt/private", "host": "workstation-b",
+        "window_name": "hidden-window",
+    }
+    assert render.row_matches_filter(row, "remote")
+    assert render.row_matches_filter(row, "구현")
+    assert render.row_matches_filter(row, "rc 준비")
+    assert not render.row_matches_filter(row, "/mnt/private")
+    assert not render.row_matches_filter(row, "workstation-b")
+    assert not render.row_matches_filter(row, "hidden-window")
 
 
 def test_filter_no_match_returns_false():
     row = {"project": "JuHome", "agent": "Claude"}
     assert not render.row_matches_filter(row, "nonexistent")
+
+
+def test_task_row_puts_role_before_project_context():
+    parts = render.list_row_parts(
+        {"kind": "pane", "display_name": "API 점검", "project": "SamplePortal", "role": "qa", "agent": "Claude", "status": "IDLE"},
+        120, lambda key: {"role.qa": "확인", "state.idle": "대기"}[key],
+    )
+    assert parts["project"] == "API 점검"
+    assert parts["task"] == "확인 · SamplePortal"
 
 
 # -- format_detail_panel ----------------------------------------------
@@ -188,11 +204,11 @@ def test_detail_panel_aligns_mixed_korean_and_english_labels_by_display_width():
     # Regression: plain len() undercounts Korean (double-width) chars, so
     # "프로젝트" (len 4) and "Host" (len 4) looked equal-width to len() but
     # are not on screen -- caught live as visibly misaligned columns.
-    lines = render.format_detail_panel([("프로젝트", "JuHome"), ("Host", "MAINPC")])
+    lines = render.format_detail_panel([("프로젝트", "JuHome"), ("Host", "workstation-a")])
     # "프로젝트" is 8 display columns, "Host" is 4 -- Host's line needs 4
     # extra spaces of padding to line up with 프로젝트's line.
     assert lines[0] == "프로젝트  JuHome"
-    assert lines[1] == "Host      MAINPC"
+    assert lines[1] == "Host      workstation-a"
 
 
 # -- display_width / truncate_to_width ----------------------------------
@@ -209,6 +225,21 @@ def test_display_width_korean_is_double():
 def test_display_width_mixed():
     # "Pane " (5 ASCII cols) + "이" (2) + "름" (2) = 9
     assert render.display_width("Pane 이름") == 9
+
+
+def test_narrow_help_wraps_complete_korean_key_hints():
+    hints = [
+        "↑↓ 이동", "Enter 열기", "Space 메뉴", "+ 새 작업", "/ 검색",
+        "Y 결과 복사", "G 실제 터미널", "Esc 뒤로", "? 도움말",
+    ]
+    lines = render.wrap_items(hints, 45)
+
+    assert len(lines) > 1
+    assert all(render.display_width(line) <= 45 for line in lines)
+    assert "Space 메뉴" in " ".join(lines)
+    assert "Y 결과 복사" in " ".join(lines)
+    assert "? 도움말" in " ".join(lines)
+    assert all("…" not in line for line in lines)
 
 
 def test_truncate_to_width_ascii_no_truncation_needed():
@@ -252,16 +283,45 @@ def test_row_line_count_wide_no_title():
     assert render.row_line_count({"title_line": None}, narrow=False) == 1
 
 
-def test_row_line_count_wide_with_title():
-    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=False) == 2
+def test_row_line_count_title_stays_off_the_list():
+    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=False) == 1
+    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=True) == 2
 
 
-def test_row_line_count_narrow_no_title():
-    assert render.row_line_count({"title_line": None}, narrow=True) == 2
+def test_row_line_count_narrow_is_project_and_state_only():
+    assert render.row_line_count({"title_line": None, "activity_text": "테스트 실행 중"}, narrow=True) == 2
 
 
-def test_row_line_count_narrow_with_title():
-    assert render.row_line_count({"title_line": "JuHome Dev"}, narrow=True) == 3
+def test_narrow_row_uses_one_task_name_then_agent_and_status():
+    row = {"project": "SamplePortal", "task_name": "로그인 수정", "activity_text": None}
+    assert render.row_line_count(row, narrow=True) == 2
+    assert render.list_row_parts(
+        {"kind": "pane", **row, "agent": "Codex", "status": "WORKING"},
+        58,
+        lambda _key: "작업 중",
+    ) == {"guide": "", "project": "로그인 수정", "task": "SamplePortal", "agent": "", "badge": ""}
+
+
+def test_role_appears_concisely_without_replacing_task_or_agent():
+    labels = {"role.builder": "구현", "role.assigned": "역할: {role}"}
+    row = {
+        "kind": "pane", "project": "SamplePortal", "task_name": "로그인 수정",
+        "role": "builder", "agent": "Codex", "status": "WORKING",
+    }
+    parts = render.list_row_parts(row, 100, lambda key: labels.get(key, key))
+
+    assert parts["project"] == "로그인 수정"
+    assert parts["task"] == "구현 · SamplePortal"
+    assert parts["agent"] == "Codex"
+    assert render.row_line_count(row, narrow=True) == 2
+
+
+def test_role_on_a_task_without_a_distinct_task_name_gets_its_own_line():
+    row = {"kind": "pane", "project": "SamplePortal", "task_name": "SamplePortal", "role": "qa"}
+    parts = render.list_row_parts(row, 58, lambda key: {"role.qa": "확인"}.get(key, key))
+    assert parts["project"] == "SamplePortal"
+    assert parts["task"] == "확인"
+    assert render.row_line_count(row, narrow=True) == 2
 
 
 def test_agent_status_line_format():
@@ -278,7 +338,7 @@ def test_row_line_count_with_activity():
 
 def test_row_line_count_with_title_and_activity():
     row = {"title_line": "JuHome Dev", "activity_text": "테스트 실행 중"}
-    assert render.row_line_count(row, narrow=False) == 3
+    assert render.row_line_count(row, narrow=False) == 2
 
 
 def test_row_line_count_empty_activity_does_not_add_a_line():
@@ -290,26 +350,26 @@ def test_row_line_count_empty_activity_does_not_add_a_line():
 
 
 def test_format_duration_seconds():
-    assert render.format_duration(0) == "0s"
-    assert render.format_duration(45) == "45s"
-    assert render.format_duration(59) == "59s"
+    assert render.format_duration(0) == "0초"
+    assert render.format_duration(45) == "45초"
+    assert render.format_duration(59) == "59초"
 
 
 def test_format_duration_minutes():
-    assert render.format_duration(60) == "1m"
-    assert render.format_duration(90) == "1m"
-    assert render.format_duration(12 * 60) == "12m"
-    assert render.format_duration(59 * 60 + 59) == "59m"
+    assert render.format_duration(60) == "1분"
+    assert render.format_duration(90) == "1분"
+    assert render.format_duration(12 * 60) == "12분"
+    assert render.format_duration(59 * 60 + 59) == "59분"
 
 
 def test_format_duration_hours():
-    assert render.format_duration(3600) == "1h"
-    assert render.format_duration(3600 + 30 * 60) == "1h 30m"
-    assert render.format_duration(7200) == "2h"
+    assert render.format_duration(3600) == "1시간"
+    assert render.format_duration(3600 + 30 * 60) == "1시간 30분"
+    assert render.format_duration(7200) == "2시간"
 
 
 def test_format_duration_never_negative():
-    assert render.format_duration(-5) == "0s"
+    assert render.format_duration(-5) == "0초"
 
 
 # -- sort_by_attention ----------------------------------------------
@@ -324,7 +384,7 @@ def test_sort_by_attention_priority_order():
         {"key": "unknown", "status": "UNKNOWN"},
     ]
     sorted_rows = render.sort_by_attention(rows)
-    assert [r["key"] for r in sorted_rows] == ["waiting", "unknown", "dead", "working", "idle"]
+    assert [r["key"] for r in sorted_rows] == ["waiting", "unknown", "working", "idle", "dead"]
 
 
 def test_sort_by_attention_is_stable_within_same_status():

@@ -11,5 +11,5 @@
 
 › g
 
-  GPT-6-Luna medium · /home/example/project · Example task title
+  GPT-6-Luna medium · /home/user/project · Example task title
   tab to queue message
