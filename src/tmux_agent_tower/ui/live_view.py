@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import curses
+import time
 
 from ..control.actions import get_pane_screen
 from ..i18n import t
 from ..state.worksets import LAYOUTS
+from .perf_trace import draw as trace_draw
 from .render import display_width, truncate_to_width, use_narrow_layout
 from .widgets import is_escape, read_key, run_list_picker, safe_add
 
@@ -77,7 +79,6 @@ def open_live_view(stdscr, tower, selected_key: str | None = None) -> None:
 
 def open_group_live_view(stdscr, tower, group: dict) -> None:
     """Reuse the normal live surface, scoped and ordered by one Work Group."""
-    tower.load()
     if not group.get("member_order"):
         store = getattr(tower, "work_groups", None)
         if store:
@@ -107,7 +108,6 @@ def open_group_live_view(stdscr, tower, group: dict) -> None:
 
 
 def open_window_live_view(stdscr, tower, ref: str) -> None:
-    tower.load()
     keys = [row["key"] for row in tower.rows
             if row.get("pane_id") and not row.get("tower_runtime") and row.get("window_ref") == ref]
     if not keys:
@@ -119,7 +119,6 @@ def open_window_live_view(stdscr, tower, ref: str) -> None:
 
 
 def open_folder_live_view(stdscr, tower, folder: dict) -> None:
-    tower.load()
     tasks = [row for row in tower.rows if row.get("pane_id") and not row.get("tower_runtime")]
     workspace = tower.folders.workspace(tower.window_assets, tasks)
     if folder.get("kind") == "other_section":
@@ -147,32 +146,56 @@ def _show_live_view(stdscr, tower, selected_keys, layout: str) -> None:
     identities = {key: _pane_identity(initial_rows.get(key)) for key in selected_keys}
     focused = 0
     scroll_offsets = {key: 0 for key in selected_keys}
-    stdscr.timeout(int(REFRESH_SECONDS * 1000))
+    async_refresh = callable(getattr(tower, "start_background_refresh", None))
+    keypad = getattr(stdscr, "keypad", None)
+    if keypad:
+        keypad(True)
+    stdscr.timeout(25)
+    if async_refresh:
+        _start_refresh(tower)
+    last_refresh = time.monotonic()
+    needs_draw = True
     try:
         while True:
-            tower.load()
-            rows = {row.get("key"): row for row in tower.rows}
-            current_rows = []
-            for key in selected_keys:
-                row = rows.get(key)
-                if identities.get(key) is None or _pane_identity(row) != identities[key]:
-                    original = initial_rows.get(key)
-                    row = {**(original or {"key": key, "display_name": t("group.stale_member")}), "_live_stale": True}
-                current_rows.append(row)
-            capacity = layout_slots(layout)
-            if layout == "focus":
-                visible_indices = [focused]
-                local_focus = 0
+            if async_refresh:
+                if _apply_refresh(tower):
+                    needs_draw = True
             else:
-                page_start = (focused // capacity) * capacity
-                visible_indices = list(range(page_start, min(len(selected_keys), page_start + capacity)))
-                local_focus = focused - page_start
-            slots = [current_rows[index] for index in visible_indices]
-            page_info = (focused + 1, len(selected_keys)) if len(selected_keys) > capacity or layout == "focus" and len(selected_keys) > 1 else None
-            _draw(stdscr, tower, slots, local_focus, layout, scroll_offsets, page_info)
+                tower.load()
+                needs_draw = True
+            now = time.monotonic()
+            if now - last_refresh >= REFRESH_SECONDS:
+                _start_refresh(tower)
+                last_refresh = now
+            if needs_draw:
+                rows = {row.get("key"): row for row in tower.rows}
+                current_rows = []
+                for key in selected_keys:
+                    row = rows.get(key)
+                    if identities.get(key) is None or _pane_identity(row) != identities[key]:
+                        original = initial_rows.get(key)
+                        row = {**(original or {"key": key, "display_name": t("group.stale_member")}), "_live_stale": True}
+                    current_rows.append(row)
+                capacity = layout_slots(layout)
+                if layout == "focus":
+                    visible_indices = [focused]
+                    local_focus = 0
+                else:
+                    page_start = (focused // capacity) * capacity
+                    visible_indices = list(range(page_start, min(len(selected_keys), page_start + capacity)))
+                    local_focus = focused - page_start
+                slots = [current_rows[index] for index in visible_indices]
+                page_info = (focused + 1, len(selected_keys)) if len(selected_keys) > capacity or layout == "focus" and len(selected_keys) > 1 else None
+                _draw(stdscr, tower, slots, local_focus, layout, scroll_offsets, page_info)
+                needs_draw = False
+            stdscr.timeout(25)
             key = read_key(stdscr)
-            if key == -1 or key == curses.KEY_RESIZE:
+            if key == -1:
                 continue
+            if key == curses.KEY_RESIZE:
+                needs_draw = True
+                continue
+            needs_draw = True
             if is_escape(key) or key in ("q", "Q"):
                 return
             if key in (curses.KEY_UP, curses.KEY_LEFT) and layout != "focus":
@@ -237,6 +260,7 @@ def _pane_identity(row):
     return values + (bool(row.get("remote")), str(row.get("transport_target") or ""))
 
 
+@trace_draw("live")
 def _draw(stdscr, tower, slots, focused: int, layout: str, scroll_offsets=None, page_info=None) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
@@ -345,6 +369,8 @@ def _live_lines(tower, row: dict) -> list:
         return [t("live.unavailable")]
     if row.get("status") == "DEAD":
         return [t("live.ended")]
+    if "live_lines" in row:
+        return row.get("live_lines") or [t("live.unavailable")]
     ok, reason, payload = get_pane_screen(
         tower.session,
         row.get("key") or "",
@@ -358,6 +384,19 @@ def _live_lines(tower, row: dict) -> list:
     if reason == "not_found":
         return [t("live.ended")]
     return [t("live.unavailable")]
+
+
+def _start_refresh(tower) -> bool:
+    start = getattr(tower, "start_background_refresh", None)
+    if callable(start):
+        return bool(start())
+    tower.load()
+    return True
+
+
+def _apply_refresh(tower) -> bool:
+    apply = getattr(tower, "apply_background_refresh", None)
+    return bool(apply()) if callable(apply) else False
 
 
 def _execution(row: dict):

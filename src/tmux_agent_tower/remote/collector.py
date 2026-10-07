@@ -56,6 +56,7 @@ def _run_ssh(host_alias: str, script: str, timeout: float) -> subprocess.Complet
             host_alias,
             script,
         ],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=timeout + 1.0,

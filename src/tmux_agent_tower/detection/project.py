@@ -28,6 +28,7 @@ def _git_toplevel(path: str, timeout: float = 1.5) -> Optional[str]:
     try:
         result = subprocess.run(
             ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,

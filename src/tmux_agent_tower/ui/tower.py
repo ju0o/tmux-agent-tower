@@ -8,9 +8,11 @@ view. Quitting this TUI leaves the optional phone service running.
 from __future__ import annotations
 
 import curses
+import copy
 import hashlib
 import os
 import time
+from threading import Event, Thread
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -39,6 +41,7 @@ from ..tmux import registration
 from ..control.actions import enter_intent, update_identity
 from . import render
 from . import folder_tree
+from .perf_trace import draw as trace_draw, event, refresh as trace_refresh
 from .widgets import is_backspace, is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
 
 REFRESH_SECONDS = 2.0
@@ -384,6 +387,10 @@ class Tower:
         self.filter_text = ""
         self._remote_cache: Dict[str, Dict] = {}
         self._remote_last_fetch: Dict[str, float] = {}
+        self._refresh_thread = None
+        self._refresh_ready = None
+        self._refresh_snapshot = None
+        self.remote_state = None
 
     # -- data ---------------------------------------------------------
 
@@ -636,6 +643,7 @@ class Tower:
                     "auto_agent_source": identity["auto_agent_source"],
                     "tower_runtime": bool(pane.get("tower_runtime") or identity["tower_runtime"]),
                     "title_line": title_line,
+                    "live_lines": list(pane.get("lines") or ()),
                     "activity_text": activity_text,
                     "duration_seconds": duration_seconds,
                     "pane_title": effective_title,
@@ -828,7 +836,8 @@ class Tower:
 
         return out
 
-    def load(self) -> None:
+    @trace_refresh
+    def load(self, *, update_group_labels: bool = True) -> None:
         previous_key = None
         if self.visible_rows and 0 <= self.selected < len(self.visible_rows):
             previous_key = self.visible_rows[self.selected]["key"]
@@ -873,6 +882,85 @@ class Tower:
             if group:
                 row["work_group_id"] = group["group_id"]
                 row["work_group_name"] = group["display_name"]
+        if update_group_labels:
+            try:
+                self.work_groups.update_labels({
+                    str(row["target_id"]): str(row.get("display_name") or row.get("task_name") or row.get("project") or t("group.stale_member"))
+                    for row in self.rows if row.get("target_id")
+                })
+            except OSError:
+                pass
+        self._apply_filter(previous_key)
+        selected_kind = self.visible_rows[self.selected].get("kind", "") if self.visible_rows else ""
+        event(
+            "PROJECTION_READY", rows=len(self.visible_rows),
+            row_kinds=[row.get("kind", "") for row in self.visible_rows],
+            selected_index=self.selected, selected_kind=selected_kind,
+            selected_collapsed=bool(self.visible_rows and self.visible_rows[self.selected].get("collapsed")),
+        )
+
+    def start_background_refresh(self) -> bool:
+        """Refresh a private Tower snapshot; the curses thread never waits."""
+        if self._refresh_thread and self._refresh_thread.is_alive():
+            return False
+        if self._refresh_ready is not None and not self._refresh_ready.is_set():
+            return False
+
+        snapshot = copy.copy(self)
+        for name in ("status_engine", "notifier", "visits", "overrides", "bindings", "work_groups", "folders", "_host_registry"):
+            setattr(snapshot, name, copy.deepcopy(getattr(self, name)))
+        snapshot.results = (
+            ResultTracker(self.results.state_path)
+            if self.results is not None and self.results.state_path is not None
+            else copy.deepcopy(self.results)
+        )
+        snapshot.rows = [dict(row) for row in self.rows]
+        snapshot.visible_rows = list(self.visible_rows)
+        snapshot.visual = list(self.visual)
+        snapshot.window_assets = [dict(row) for row in self.window_assets]
+        snapshot._remote_cache = copy.deepcopy(self._remote_cache)
+        snapshot._remote_last_fetch = dict(self._remote_last_fetch)
+        self._refresh_snapshot = None
+        self._refresh_ready = Event()
+        ready = self._refresh_ready
+
+        def refresh() -> None:
+            try:
+                snapshot.load(update_group_labels=False)
+                try:
+                    from ..server import service
+
+                    snapshot.remote_state = service.status().state
+                except Exception:
+                    snapshot.remote_state = "error"
+                self._refresh_snapshot = snapshot
+            except Exception as exc:
+                event("DATA_REFRESH_FAILED", error=type(exc).__name__)
+            finally:
+                ready.set()
+
+        self.last_refresh = time.monotonic()
+        self._refresh_thread = Thread(target=refresh, name="tower-data-refresh", daemon=True)
+        event("DATA_REFRESH_SCHEDULED")
+        self._refresh_thread.start()
+        return True
+
+    def apply_background_refresh(self) -> bool:
+        """Adopt completed data on the UI thread, preserving its current selection."""
+        ready = self._refresh_ready
+        if ready is None or not ready.is_set():
+            return False
+        self._refresh_ready = None
+        snapshot_data = self._refresh_snapshot
+        self._refresh_snapshot = None
+        if snapshot_data is None:
+            return False
+
+        snapshot = snapshot_data
+        current_key = self.visible_rows[self.selected].get("key") if self.visible_rows and self.selected < len(self.visible_rows) else None
+        for name in ("access_context", "rows", "window_assets", "status_engine", "notifier", "_host_registry", "_remote_cache", "_remote_last_fetch", "remote_state"):
+            setattr(self, name, getattr(snapshot, name))
+        self._apply_filter(current_key)
         try:
             self.work_groups.update_labels({
                 str(row["target_id"]): str(row.get("display_name") or row.get("task_name") or row.get("project") or t("group.stale_member"))
@@ -880,7 +968,8 @@ class Tower:
             })
         except OSError:
             pass
-        self._apply_filter(previous_key)
+        event("DATA_REFRESH_APPLIED")
+        return True
 
     def _apply_filter(self, previous_key: Optional[str] = None) -> None:
         """Recomputes ``visible_rows``/``visual`` from ``rows`` + the
@@ -1104,11 +1193,15 @@ class Tower:
         if not self.visible_rows:
             return
         self.selected = (self.selected - 1) % len(self.visible_rows)
+        row = self.visible_rows[self.selected]
+        event("SELECTION_UPDATED", index=self.selected, kind=row.get("kind", ""), collapsed=bool(row.get("collapsed")))
 
     def move_down(self) -> None:
         if not self.visible_rows:
             return
         self.selected = (self.selected + 1) % len(self.visible_rows)
+        row = self.visible_rows[self.selected]
+        event("SELECTION_UPDATED", index=self.selected, kind=row.get("kind", ""), collapsed=bool(row.get("collapsed")))
 
     def control_key(self) -> Optional[str]:
         """Enter. Opens control for the selected row. Does not move tmux.
@@ -1544,6 +1637,7 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
     return physical
 
 
+@trace_draw("home")
 def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "stopped") -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
@@ -1744,7 +1838,8 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
 def main(stdscr, session: Optional[str] = None) -> None:
     setup_colors()
     stdscr.keypad(True)
-    stdscr.timeout(200)
+    _set_input_delay()
+    stdscr.timeout(25)
     curses.noecho()
     curses.cbreak()
     _disable_xon_flow_control()
@@ -1803,17 +1898,23 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
         pass
     remote_state = _remote_state()
     draw(stdscr, tower, remote_state=remote_state)
+    needs_draw = False
 
     while True:
+        if _apply_background_refresh(tower):
+            remote_state = tower.remote_state or remote_state
+            needs_draw = True
         now = time.monotonic()
 
         if not filtering and now - tower.last_refresh >= REFRESH_SECONDS:
-            tower.load()
-            tower.last_refresh = now
-            remote_state = _remote_state()
+            _request_background_refresh(tower)
+
+        if needs_draw:
             draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
+            needs_draw = False
 
         try:
+            stdscr.timeout(25)
             key = read_key(stdscr)
         except KeyboardInterrupt:
             break
@@ -1876,6 +1977,8 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
         if is_enter(key):
             row = tower.visible_rows[tower.selected] if tower.visible_rows else None
             intent = enter_intent(row)
+            if intent == "control":
+                event("VIEW_STATE_CHANGED", view="conversation")
             if intent == "group" and row:
                 tower.toggle_work_group(row.get("group_id") or "")
             elif intent == "toggle" and row:
@@ -1897,17 +2000,16 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
                 from .structure_menu import run_zero_action
 
                 run_zero_action(stdscr, tower, row.get("action") or "")
-            tower.load()
-            tower.last_refresh = time.monotonic()
+            _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if key == " ":
+            event("VIEW_STATE_CHANGED", view="menu")
             from .structure_menu import open_context_menu
 
             open_context_menu(stdscr, tower)
-            tower.load()
-            tower.last_refresh = time.monotonic()
+            _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 
@@ -1915,8 +2017,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             from .structure_menu import open_create_hub
 
             open_create_hub(stdscr, tower)
-            tower.load()
-            tower.last_refresh = time.monotonic()
+            _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 
@@ -1924,7 +2025,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             from .worksets import open_saved_collection
 
             open_saved_collection(stdscr, tower, STATE_DIR)
-            tower.load()
+            _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 
@@ -1986,8 +2087,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
                 from .live_view import open_live_view
 
                 open_live_view(stdscr, tower)
-            tower.load()
-            tower.last_refresh = time.monotonic()
+            _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 
@@ -1997,10 +2097,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if matches_letter(key, "r"):
-            tower.load()
-            tower.last_refresh = time.monotonic()
-            remote_state = _remote_state()
-            draw(stdscr, tower, remote_state=remote_state)
+            _request_background_refresh(tower)
             continue
 
         if matches_letter(key, "a"):
@@ -2032,8 +2129,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             from .structure_menu import open_create_hub
 
             open_create_hub(stdscr, tower)
-            tower.load()
-            tower.last_refresh = time.monotonic()
+            _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 
@@ -2041,8 +2137,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             from .structure_menu import open_create_hub
 
             open_create_hub(stdscr, tower)
-            tower.load()
-            tower.last_refresh = time.monotonic()
+            _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 
@@ -2064,3 +2159,26 @@ def run() -> None:
         curses.wrapper(main)
     except KeyboardInterrupt:
         pass
+
+
+def _set_input_delay() -> None:
+    setter = getattr(curses, "set_escdelay", None)
+    if setter:
+        try:
+            setter(25)
+        except curses.error:
+            pass
+
+
+def _request_background_refresh(tower) -> bool:
+    start = getattr(tower, "start_background_refresh", None)
+    if callable(start):
+        return bool(start())
+    tower.load()
+    tower.last_refresh = time.monotonic()
+    return True
+
+
+def _apply_background_refresh(tower) -> bool:
+    apply = getattr(tower, "apply_background_refresh", None)
+    return bool(apply()) if callable(apply) else False

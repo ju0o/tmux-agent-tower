@@ -38,6 +38,7 @@ from ..i18n import t
 from ..state.overrides import ROLE_IDS
 from . import render
 from .prompt_composer import Composer, _handle, _set_bracketed_paste, _take, layout_text, scroll_to_cursor
+from .perf_trace import draw as trace_draw, event
 from .widgets import is_escape, read_key, run_list_picker, safe_add
 
 # Inside the 0.5–1s band. Recent screen only; the list stays underneath
@@ -62,22 +63,50 @@ def open_control_view(stdscr, tower, pane_key: str, *, show_result_on_open: bool
     if draft:
         composer.text, composer.cursor = draft
     composer_scroll = 0
+    first_draw = True
+    last_refresh = time.monotonic()
+    needs_draw = True
+    async_refresh = callable(getattr(tower, "start_background_refresh", None))
+    keypad = getattr(stdscr, "keypad", None)
+    if keypad:
+        keypad(True)
+    _set_input_delay()
+    if async_refresh:
+        _start_refresh(tower)
     if show_result_on_open:
         notice, show_result = _show_result(tower, pane_key)
     _set_bracketed_paste(True)
-    stdscr.timeout(int(CONTROL_REFRESH_SECONDS * 1000))
+    stdscr.timeout(25)
     try:
+        room = 1
         while True:
-            tower.load()
+            if async_refresh:
+                if _apply_refresh(tower):
+                    needs_draw = True
+            else:
+                tower.load()
+                needs_draw = True
             row = next((item for item in tower.rows if item.get("key") == pane_key), None)
             if row is None or row.get("placeholder"):
                 tower.notice = "stale"
                 return
-            room = _draw(stdscr, tower, row, notice, show_result, follow, scroll, show_advanced, composer, composer_scroll)
-            notice = ""
+            now = time.monotonic()
+            if now - last_refresh >= CONTROL_REFRESH_SECONDS:
+                _start_refresh(tower)
+                last_refresh = now
+            if needs_draw:
+                room = _draw(stdscr, tower, row, notice, show_result, follow, scroll, show_advanced, composer, composer_scroll)
+                if first_draw:
+                    event("FIRST_DRAW", view="conversation")
+                    first_draw = False
+                notice = ""
+                needs_draw = False
+            stdscr.timeout(25)
             key = read_key(stdscr)
             if key == -1 or key == curses.KEY_RESIZE:
+                needs_draw = key == curses.KEY_RESIZE
                 continue
+            needs_draw = True
             interaction = row.get("interaction") or {}
             # ESC may begin a bracketed paste marker. Let the existing
             # Composer parser consume that sequence before treating a lone
@@ -93,11 +122,13 @@ def open_control_view(stdscr, tower, pane_key: str, *, show_result_on_open: bool
                         composer = Composer(max_chars=MAX_PROMPT_CHARS)
                         composer_scroll = 0
                         notice = t("control.answer_sent") if answer else t("control.prompt_sent")
+                        _start_refresh(tower)
                     else:
                         composer.closed = None
                         notice = t("control.prompt_unconfirmed") if outcome.ok else t("control.prompt_failed")
                 continue
             if is_escape(key):
+                event("VIEW_STATE_CHANGED", view="home")
                 return
             if _control_shortcut(key, "y"):
                 notice = _copy_result(tower, pane_key, stdscr)
@@ -180,6 +211,7 @@ def open_control_view(stdscr, tower, pane_key: str, *, show_result_on_open: bool
                 composer = Composer(max_chars=MAX_PROMPT_CHARS)
                 composer_scroll = 0
                 notice = t("control.answer_sent") if answer else t("control.prompt_sent")
+                _start_refresh(tower)
             else:
                 composer.closed = None
                 notice = (t("control.prompt_unconfirmed") if outcome.ok else t("control.prompt_failed"))
@@ -199,6 +231,7 @@ def _select(tower, pane_key: str) -> None:
             return
 
 
+@trace_draw("conversation")
 def _draw(stdscr, tower, row: dict, notice: str, show_result: bool, follow: bool = True, scroll: int = 0, show_advanced: bool = False, composer=None, composer_scroll: int = 0) -> int:
     """Paint the control view. Returns how many live lines fit, for paging."""
 
@@ -341,7 +374,7 @@ def _feed_composer(stdscr, composer: Composer, key) -> None:
         if next_key == -1:
             break
         _handle(stdscr, queued, composer, next_key, time.monotonic())
-    stdscr.timeout(int(CONTROL_REFRESH_SECONDS * 1000))
+    stdscr.timeout(25)
 
 
 def _submit_composer(tower, pane_key: str, row: dict, composer: Composer):
@@ -425,10 +458,34 @@ def _live_lines(tower, row: dict) -> list:
         return [t("control.remote_live")]
     if row.get("status") == "DEAD":
         return [t("control.dead_live")]
+    if "live_lines" in row:
+        return row.get("live_lines") or [t("control.empty_live")]
     ok, reason, payload = get_pane_screen(tower.session, row.get("key") or "", tower.own_pane_id)
     if not ok:
         return [reason or "not_found"]
     return payload.get("lines") or [t("control.empty_live")]
+
+
+def _set_input_delay() -> None:
+    setter = getattr(curses, "set_escdelay", None)
+    if setter:
+        try:
+            setter(25)
+        except curses.error:
+            pass
+
+
+def _start_refresh(tower) -> bool:
+    start = getattr(tower, "start_background_refresh", None)
+    if callable(start):
+        return bool(start())
+    tower.load()
+    return True
+
+
+def _apply_refresh(tower) -> bool:
+    apply = getattr(tower, "apply_background_refresh", None)
+    return bool(apply()) if callable(apply) else False
 
 
 def _attention_label(row: dict) -> str:

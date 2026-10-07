@@ -23,6 +23,7 @@ def openssh_hostname(destination: str, timeout: float = 2.0) -> str:
     try:
         result = subprocess.run(
             ["ssh", "-G", "-o", "BatchMode=yes", token],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,

@@ -88,6 +88,17 @@ the Result identity and ownership record are rebound to the new window. A
 window with an unowned pane, stale process, or another tmux host is rejected.
 Phone controls only change logical membership, order, and layout.
 
+## TUI refresh and input
+
+The Home, Conversation, and Live loops poll keyboard input every 25 ms. A
+single background worker refreshes tmux, process, SSH, status, and Result
+observations into a private Tower snapshot; the curses thread adopts that
+snapshot between key events and reuses the current workspace projection while
+the selection moves. Conversation and Live render the latest captured pane
+lines carried by that snapshot instead of running `capture-pane` during every
+draw. Refresh subprocesses receive no terminal stdin, so they cannot consume
+keys intended for curses.
+
 Workset launches record local managed-resource identity (session, pane, PID,
 window, host, and launch ID) in the Work Group store. Existing or manually
 created panes without that record remain protected as user-owned. Physical

@@ -19,6 +19,7 @@ def run_tmux(args: Sequence[str], capture: bool = True, timeout: float = DEFAULT
     try:
         result = subprocess.run(
             ["tmux", *args],
+            stdin=subprocess.DEVNULL,
             text=True,
             capture_output=capture,
             timeout=timeout,

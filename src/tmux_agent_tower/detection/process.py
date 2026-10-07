@@ -18,6 +18,7 @@ def process_snapshot(timeout: float = 2.0) -> Dict[str, Dict[str, str]]:
     try:
         result = subprocess.run(
             ["ps", "-eo", "pid=,ppid=,args="],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -46,6 +47,7 @@ def cmdline_by_pid(timeout: float = 2.0) -> Dict[str, str]:
     try:
         result = subprocess.run(
             ["ps", "-eo", "pid=,args="],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
