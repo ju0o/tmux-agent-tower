@@ -296,7 +296,7 @@ def test_default_home_draws_user_identity_without_physical_inspector_or_legacy_w
     assert "새 결과" in text
     for internal in ("Pane ID", "Window ID", "Session", "%42", "@4", "A 우선순위", "M 휴대폰", "Ctrl+b w"):
         assert internal not in text
-    for key in ("Enter 열기", "Space 메뉴", "+ 새 작업", "S 저장된 작업", "L 실시간 보기", "/ 검색", "Y 결과 복사", "Esc 뒤로", "? 도움말"):
+    for key in ("Enter 열기", "Space 메뉴", "+ 새 작업", "S 저장한 구성", "L 실시간 보기", "/ 찾기·명령", "Y 결과 복사", "Esc 뒤로", "? 도움말"):
         assert key in text
 
 

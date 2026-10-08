@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Tuple
 
 # Braille spinner frames used by several Node/Ink-based CLIs (Codex, and
 # others built on similar spinner libraries).
@@ -58,6 +58,8 @@ class PaneContext:
     title: str
     command: str
     lines: Sequence[str] = field(default_factory=tuple)
+    pane_pid: str = ""
+    turn_watermark: Optional[Tuple[str, int]] = None
 
     def tail(self, n: int = 15) -> str:
         return "\n".join(self.lines[-n:])

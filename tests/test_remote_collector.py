@@ -34,6 +34,11 @@ def test_parse_snapshot_valid_line():
     assert result["panes"][0]["pane_pid"] == "55"
 
 
+def test_remote_snapshot_script_passes_a_real_field_separator_to_tmux():
+    assert "SEP=$(printf '\\037')" in collector._REMOTE_SNAPSHOT_SCRIPT
+    assert '"#{session_name}${SEP}#{session_id}' in collector._REMOTE_SNAPSHOT_SCRIPT
+
+
 def test_parse_snapshot_accepts_older_peer_without_window_creation_marker():
     line = "\x1f".join(["sess", "$1", "@1", "0", "win", "0", "%1", "title", "codex", "/home/user", "55", "0"])
     result = collector.parse_remote_snapshot("HOST", line)

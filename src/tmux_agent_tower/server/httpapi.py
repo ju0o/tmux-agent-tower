@@ -194,10 +194,11 @@ def build_status_payload(tower: Tower) -> dict:
         "worksets_error": worksets_error,
         "execution_targets": [
             {"id": "auto", "name": "자동"},
-            {"id": getattr(tower, "local_host", ""), "name": getattr(tower, "local_host", "")},
+            {"id": getattr(tower, "local_host", ""), "name": "이 컴퓨터", "transport": "local"},
             *[{
                 "id": str(row.get("alias") or ""),
-                "name": str(row.get("name") or row.get("alias") or ""),
+                "name": str(row.get("display_name") or row.get("name") or row.get("alias") or ""),
+                "transport": "ssh",
             } for row in getattr(tower, "remote_hosts", []) if row.get("alias")],
         ],
         "session": tower.session,

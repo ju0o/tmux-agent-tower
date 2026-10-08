@@ -21,8 +21,8 @@ TMUX AGENT TOWER       Current access: This laptop · Copy: This laptop · Auto
 ▶ Tower · Remote improvement
    ● 2 working · ! 1 needs attention · ✓ 1 new result
 
-↑↓ Move  Enter Open  Space Menu  + New task  S Saved work  L Live  C Settings
-/ Search  Y Copy result  G Open terminal  Esc Back  ? Help
+↑↓ Move  Enter Open  Space Menu  + New task  S Saved setup  L Live  C Settings
+/ Find and commands  Y Copy result  G Open terminal  Esc Back  ? Help
 ```
 
 ## What it is (and isn't)
@@ -68,8 +68,11 @@ TMUX AGENT TOWER       Current access: This laptop · Copy: This laptop · Auto
   `capture-pane` and does not change tmux layout. Focus, split, grid,
   main-and-side, the 42×14 fallback, and the 160×45 layout were exercised in
   an isolated tmux session.
-* `/` live-filters tasks by task name, Work Group, project, Agent, or role;
-  `Esc` clears it.
+* `/` opens one search and command palette. Search tasks, Work Groups,
+  projects, Agent names, folders, and screens, or choose a matching command:
+  create a task, add or view SSH environments, open Live, saved setups,
+  templates, settings, or advanced workflows. Use `↑`/`↓` to move, `Enter`
+  to open, and `Esc` to close.
 * Project name is auto-discovered with a real priority chain: your own
   override, then the enclosing git repo's name, then a meaningful pane
   title, then the directory name -- a meaningless single-letter or
@@ -166,11 +169,11 @@ command, not another TUI, so it's safe to bind to a key.
 | `↑` / `↓` (or `j`/`k`) | Move selection |
 | `Enter` | Fold/expand a folder or work screen, or open a task |
 | `Space` | Open actions for the selected folder, work screen, or task |
-| `+` | Start a task, create a folder, open saved work, or use a template |
-| `S` | Open **Saved work**, with **Continue saved work** and **Work templates** together |
+| `+` | Start a task with environment → project → Agent |
+| `S` | Open a saved setup or template |
 | `L` | Open Live; a selected Work Group opens as one view |
 | `C` | Open settings |
-| `/` | Search folder, work screen, task, project, Agent, or role; `Esc` clears the search |
+| `/` | Find work, folders, screens, and Agents, or run a command |
 | `Y` | Copy the selected task's latest complete result |
 | `G` | Open the selected task in its real terminal |
 | `Esc` | Go back one level |
@@ -179,9 +182,8 @@ command, not another TUI, so it's safe to bind to a key.
 
 ### Task identity and advanced details
 
-The main UI uses one task name. Tower suggests a name from the project and
-role, or the Agent when no role is assigned (for example, `ExampleProject · Build`
-or `ExampleProject · Codex`). The task menu's **Rename** action sets a name that
+The main UI uses one task name. Quick Start names a task from the project and
+Agent (for example, `ExampleProject · Codex`). The task menu's **Rename** action sets a name that
 persists across refreshes. Duplicate task names are allowed.
 
 The task menu separates identity settings from moving and layout actions.
@@ -206,17 +208,15 @@ terminal layout or moving a pane is a distinct confirmed action, currently
 limited to fresh, Tower-managed local panes in windows with no unrelated panes.
 Phone controls change logical membership and layout only.
 
-### Saved Work and Work Templates
+### Saved setup and templates
 
-Choose **Save** from a Work Group menu to save the current setup as **Saved
-Work** or as a **Work Template**. Saved Work remembers the project paths,
-member names, roles, Agents, order, execution preferences, and logical layout.
-A template keeps the roles, default Agents, order, and layout while leaving out
+Choose **Save** from a Work Group menu to save the current setup. A **Saved
+setup** reopens a project and Agent setup you used before. A **template** reuses
+an Agent and role setup in another project while leaving out
 concrete project paths and personal execution hosts, so it can be reused for a
 different project.
 
-Open **Saved work** with `S` or from `+`; **Continue saved work** and
-**Work templates** appear under that single entry. A template can use a
+Open saved setups and templates with `S`. A template can use a
 different project path and Agent per role.
 Missing paths or unavailable local Agents fail before launch. Each launch uses
 new Tower-created resources and makes one logical Work Group; stored layouts
@@ -228,7 +228,7 @@ atomic and private to the current user. Corrupt or newer-format data is kept
 untouched. The older `workspace-presets.json` remains for existing Workflow
 integration and is separate from Work Group based Saved Work and templates.
 
-### Additional work creation (More)
+### Advanced work creation
 
 Asks where to work, then opens that host's workspace browser: recent
 paths, a search under the configured roots, a folder tree, or a path you
@@ -238,7 +238,7 @@ and the folders above it stay on screen. Enter expands. Space chooses
 the workspace.
 Next you pick an agent, where it should live (a new window, a pane in
 the current window, or an existing window), and a layout, then create.
-This flow is under `+` → **More**. The old `N` and `W` keys open the same
+This flow is under the advanced create menu, reachable with `N` or `W`. The keys open the same
 new-work chooser for keyboard compatibility. A remote host uses the same screens. Listing, path checks, and search are
 read-only SSH, one directory at a time, and they do not install Tower
 there. tmux runs only after you confirm. The new panes are `cd`'d into
@@ -250,10 +250,10 @@ closes, or reconfigures anything that existed before it ran -- see
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for why that distinction matters and
 what's still deliberately unbuilt (the "Action Layer").
 
-### Workflow order
+### Workflow order (Advanced)
 
-`+` → **More** → **Work order** previews role recipes and creates a step-by-step
-run from a separately selected saved workspace. A workspace preset describes
+**Advanced settings → Workflows** previews role recipes and creates a step-by-step
+run from a separately selected saved setup. A saved setup describes
 the host, paths, and available agents; a workflow definition contains only its
 name and ordered roles. The built-ins are Quick Fix (Builder → QA), Feature
 Development (Planner → Builder → Reviewer → QA), and Focused Improvement
@@ -306,9 +306,9 @@ membership and are shown with their tasks. The physical host/window/pane view
 is available from **More → Terminal structure**. In a task conversation, `Y`
 copies the complete latest result; it never copies only the visible screen.
 
-`+` opens the common start menu: one task, a folder, a Work Group, Saved work,
-or a template. Workspace and terminal structure actions are under **More**. `S`
-opens Saved work and its templates together. Space opens actions for the
+`+` starts a task with environment, project, and Agent. `N` and `W` open the
+advanced create menu for folders, Work Groups, multi-project launches, and
+terminal structure. `S` opens saved setups and templates together. Space opens actions for the
 selected folder, work screen, or task. If Tower has no work yet, the same
 start choices are shown in the list.
 
@@ -362,8 +362,9 @@ check.
 
 ### A second host
 
-Add a line to `~/.config/tmux-agent-tower/remote-hosts.txt`, referencing an
-SSH alias you've already set up in `~/.ssh/config`:
+Use **Settings → Connections → Execution environments → Add SSH environment**
+to save a display name and an SSH alias (or `user@host`). Existing entries in
+`~/.config/tmux-agent-tower/remote-hosts.txt` remain supported:
 
 ```
 remote-workstation:Remote workstation
@@ -372,15 +373,17 @@ remote-workstation:Remote workstation
 The Tower will then show that host's panes too (title/command-based
 status only -- see limitations below), refreshed less frequently than the
 local host, and marked `UNKNOWN`/offline gracefully if it's unreachable.
-Nothing is installed on the remote host. The unified new-work chooser can
-open that host the same way as this machine.
+Nothing is installed on the remote host. New task runs use environment →
+project → Agent and start the process on the selected remote host. An offline
+profile requires an explicit retry or another environment; Tower never falls
+back to local execution.
 Directory listings, path checks, and project search are read-only SSH.
 One directory is fetched at a time and cached. If the host does not
 answer, Tower says it cannot connect and the local session keeps
 working. Search stays inside the usual project directories, with a
 depth and result cap.
 
-### From your phone (experimental, this branch only)
+### From your phone (experimental; included in v0.3.0-rc1)
 
 Inside Tower, press `M` and choose **Start phone remote**. Tower prints
 an `https://…ts.net` address and a pairing code on screen. Save that
@@ -398,9 +401,10 @@ the security model and the list of what this deliberately does not do.
 
 ### First task and language
 
-An empty Tower home offers **Start your first task**, **Open saved work**,
-and **Use a work template**. Starting a task asks for its name, project,
-and an available Agent, then opens its conversation. When the current
+An empty Tower home offers **Start your first task**, **Open saved setup**,
+and **Use a work template**. Starting a task asks for an environment, project,
+and available Agent, then opens its conversation. Tower chooses the task name
+automatically. When the current
 folder looks like a project, Tower offers it as the first choice. No
 remote connection or clipboard setup is required; copy destination starts
 on automatic.

@@ -114,7 +114,7 @@ def test_scratch_session_lifecycle_end_to_end(private_tmux, isolated):
         remote = [p for p in body["panes"] if p["remote"]]
         assert len(local) >= 1
         assert all(p["host"] == "local-fixture" for p in local)
-        assert remote and remote[0]["host"] == "REMOTE-FIXTURE"
+        assert remote and remote[0]["host"] == "remote-fixture"
 
         # service.status() agrees while the session exists
         service._write_json(service._runtime_path(), {

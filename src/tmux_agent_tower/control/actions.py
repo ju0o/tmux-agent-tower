@@ -14,7 +14,7 @@ import json
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Optional, Tuple
 
 from ..adapters.base import ResultCandidate
@@ -391,6 +391,12 @@ def pane_title_and_command(pane_id: str) -> Optional[Tuple[str, str]]:
     return title.strip(), command.strip()
 
 
+def pane_process_id(pane_id: str) -> str:
+    return tmux_capture.run_tmux(
+        ["display-message", "-p", "-t", pane_id, "#{pane_pid}"]
+    ).strip()
+
+
 def _observe(pane_id: str, *, lines: int = 40):
     """Adapter and screen for one pane right now. None if it is gone."""
 
@@ -402,8 +408,14 @@ def _observe(pane_id: str, *, lines: int = 40):
         return None
     title, command = found
     captured = tmux_capture.capture_pane(pane_id, lines=lines)
-    ctx = PaneContext(title=title, command=command, lines=tuple(captured))
-    return resolve_adapter(command, title, ""), ctx
+    ctx = PaneContext(
+        title=title, command=command, lines=tuple(captured), pane_pid=pane_process_id(pane_id),
+    )
+    adapter = resolve_adapter(command, title, "")
+    watermark = getattr(adapter, "turn_watermark", None)
+    if callable(watermark):
+        ctx = replace(ctx, turn_watermark=watermark(ctx))
+    return adapter, ctx
 
 
 def confirm_submission(
@@ -504,6 +516,36 @@ def get_result(tower, pane_key: str) -> Tuple[bool, str, dict]:
         provider = _RecoveryProvider(lambda target: _recover_remote_result(target.remote_provider_row()))
         candidate = provider.get_latest_complete_result(target)
         return True, "", _candidate_payload(candidate) if candidate else provider.observation
+    if target.transport == "ssh" and target.agent == "Grok":
+        from ..detection.sshdest import ssh_connection_for_pane
+
+        connection = ssh_connection_for_pane(target.tower_pane_pid, target.transport_target)
+        if connection is None:
+            return True, "", _remote_grok_failure("REMOTE_PROVIDER_UNBOUND")
+        target = replace(
+            target,
+            provider_type="remote_grok",
+            provider_endpoint=target.transport_target,
+            ssh_client_pid=connection["ssh_client_pid"],
+            ssh_connection=(
+                connection["client_ip"], connection["client_port"],
+                connection["server_ip"], connection["server_port"],
+            ),
+            ssh_local_socket=tuple(connection.get("local_socket") or ()),
+            ssh_connection_mode=str(connection.get("connection_mode") or "direct"),
+        )
+        provider = _RecoveryProvider(
+            lambda resolved: _recover_ssh_grok_result(resolved.remote_provider_row())
+        )
+        candidate = provider.get_latest_complete_result(target)
+        if candidate is None:
+            return True, "", provider.observation or _remote_grok_failure("REMOTE_PROVIDER_UNBOUND")
+        payload = _candidate_payload(candidate, provider.observation.get("state") or "ready")
+        payload.update({key: value for key, value in provider.observation.items() if key.startswith("remote_") or key in {
+            "grok_pid", "session_id", "turn_number", "native_length", "native_utf8_bytes", "native_sha256",
+            "local_ssh_pid", "ssh_connection", "ssh_local_socket", "ssh_connection_mode",
+        }})
+        return True, "", payload
     identity = pane_result_identity(row)
     tracker = getattr(tower, "results", None)
     if tracker is None:
@@ -573,6 +615,8 @@ def _candidate_payload(candidate, state: str = "ready") -> dict:
         "fingerprint": candidate.fingerprint,
         "generated_at": candidate.timestamp,
         "complete": candidate.complete,
+        "turn_complete": candidate.turn_complete,
+        "body_complete": candidate.body_complete,
         "turn_complete": candidate.turn_complete,
         "body_complete": candidate.body_complete,
         "source": candidate.source,
@@ -676,6 +720,83 @@ def _recover_remote_result(row: dict) -> dict:
     }
 
 
+def _remote_grok_failure(source: str) -> dict:
+    return {
+        "state": "none", "text": "", "fingerprint": "", "generated_at": 0.0,
+        "complete": False, "turn_complete": False, "body_complete": False, "source": source,
+    }
+
+
+def _recover_ssh_grok_result(row: dict) -> dict:
+    """Read the newest complete Grok export from this exact SSH socket."""
+
+    from ..remote.collector import fetch_remote_grok_result
+
+    endpoint = str(row.get("result_provider_endpoint") or "")
+    connection = tuple(row.get("ssh_connection") or ())
+    if (
+        row.get("result_provider_type") != "remote_grok"
+        or not endpoint
+        or not str(row.get("ssh_client_pid") or "").isdecimal()
+        or len(connection) != 4
+    ):
+        return _remote_grok_failure("REMOTE_PROVIDER_UNBOUND")
+    requested = {
+        "ssh_client_pid": str(row["ssh_client_pid"]),
+        "client_ip": connection[0], "client_port": connection[1],
+        "server_ip": connection[2], "server_port": connection[3],
+    }
+    result = fetch_remote_grok_result(endpoint, requested)
+    if not isinstance(result, dict):
+        return _remote_grok_failure("REMOTE_PROVIDER_UNAVAILABLE")
+    status = str(result.get("status") or "REMOTE_PROVIDER_UNBOUND")
+    if status != "ok":
+        return _remote_grok_failure(status)
+    if result.get("ssh_connection") != list(connection):
+        return _remote_grok_failure("REMOTE_PROVIDER_UNBOUND")
+    session_id = str(result.get("session_id") or "")
+    remote_session_pid = str(result.get("remote_session_pid") or "")
+    remote_sshd_pid = str(result.get("remote_sshd_pid") or "")
+    grok_pid = str(result.get("grok_pid") or "")
+    turn_number = result.get("turn_number")
+    text = result.get("text")
+    if (
+        not re.fullmatch(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", session_id)
+        or not all(value.isdecimal() for value in (remote_session_pid, remote_sshd_pid, grok_pid))
+        or not isinstance(turn_number, int)
+        or turn_number < 0
+        or result.get("turn_complete") is not True
+        or result.get("body_complete") is not True
+        or not isinstance(text, str)
+        or not text
+    ):
+        return _remote_grok_failure("REMOTE_RESULT_INCOMPLETE")
+    body = text.encode("utf-8")
+    native_hash = hashlib.sha256(body).hexdigest()
+    if (
+        len(text) != result.get("native_length")
+        or len(body) != result.get("native_utf8_bytes")
+        or native_hash != result.get("native_sha256")
+    ):
+        return _remote_grok_failure("REMOTE_RESULT_INCOMPLETE")
+    turn_identity = ":".join((
+        str(row.get("ssh_client_pid") or ""), *connection, remote_session_pid,
+        remote_sshd_pid, grok_pid, session_id, str(turn_number), native_hash,
+    ))
+    now = time.time()
+    return {
+        "state": "ready", "text": text, "fingerprint": native_hash,
+        "generated_at": now, "complete": True, "turn_complete": True, "body_complete": True,
+        "source": "remote_grok", "turn_identity": turn_identity, "timestamp": now, "confidence": "high",
+        "remote_session_pid": remote_session_pid, "remote_sshd_pid": remote_sshd_pid,
+        "grok_pid": grok_pid, "session_id": session_id, "turn_number": turn_number,
+        "native_length": len(text), "native_utf8_bytes": len(body), "native_sha256": native_hash,
+        "local_ssh_pid": str(row["ssh_client_pid"]), "ssh_connection": connection,
+        "ssh_local_socket": tuple(row.get("ssh_local_socket") or ()),
+        "ssh_connection_mode": str(row.get("ssh_connection_mode") or "direct"),
+    }
+
+
 def _recover_registered_remote_result(row: dict) -> Optional[dict]:
     """Use a remote provider only with an exact, pane-bound registration."""
 
@@ -739,7 +860,9 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
     from ..detection.topology import resolve_runtime
 
     _name, _source, adapter = resolve_runtime(command, title, "", lines)
-    ctx = PaneContext(title=title, command=command, lines=tuple(lines))
+    ctx = PaneContext(
+        title=title, command=command, lines=tuple(lines), pane_pid=pane_process_id(pane_id),
+    )
     if adapter.classify(ctx).status == "WORKING":
         snap = tracker.observe(pane_key, "WORKING", None, identity=identity)
         return {

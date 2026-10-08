@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0-rc2
+
+- Grok remote Result uses exact SSH session binding and a complete native export.
+- Generic execution environments, the three-step Quick Start, and `/` command search.
+- Remote binding fixtures use documentation-only addresses and generic host names.
+
 ## v0.3.0-rc1
 
 - Work Groups organize related tasks, while task identity remains independent

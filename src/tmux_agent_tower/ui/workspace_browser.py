@@ -6,6 +6,8 @@ Browse reads directories only. tmux is used after the user confirms create.
 from __future__ import annotations
 
 import curses
+import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -50,6 +52,7 @@ from .widgets import (
 )
 
 CREATE_AGENT_ORDER = ["Codex", "Claude", "Cursor", "OpenCode", "Grok", "Shell"]
+QUICK_AGENT_ORDER = ["Codex", "Claude", "Grok", "OpenCode", "Cursor"]
 
 WINDOW_LAYOUT = {
     "auto": "tiled",
@@ -781,73 +784,33 @@ def run_workspace_create(
 ) -> None:
     """Create from the selected host, workspace, Agent, and optional task role."""
 
-    task_name = ""
     if task_flow:
-        task_name = (prompt_text(stdscr, t("wizard.task_name")) or "").strip()
-    picks = None
-    if task_flow:
-        current = current_project_entry()
-        if current is not None:
-            choice = run_list_picker(
-                stdscr,
-                t("wizard.current_folder_title"),
-                [
-                    ("current", t("wizard.current_folder").format(name=current.name)),
-                    ("other", t("wizard.other_project")),
-                    ("cancel", t("menu.cancel")),
-                ],
-                footer_hint=t("wizard.hint_list"),
-                preamble=[current.path],
-            )
-            if choice.cancelled or choice.selected_key in (None, "cancel"):
-                return
-            if choice.selected_key == "current":
-                picks = [WorkspacePick(tower.local_host, tower.local_host, False, current)]
-    if picks is None:
-        picks = pick_workspaces(stdscr, tower, state_dir, multi=multi, open_tree=open_tree)
+        _run_quick_start(stdscr, tower, state_dir)
+        return
+
+    picks = pick_workspaces(stdscr, tower, state_dir, multi=multi, open_tree=open_tree)
     if not picks:
         return
     preamble = _path_preamble(picks)
-    if task_flow:
-        preamble = preamble[1:]
-    if task_name:
-        preamble.insert(0, f'{t("detail.task_name")}: {task_name}')
     agent = _pick_agent(stdscr, preamble, remote=picks[0].is_remote)
     if not agent:
         return
-    role = ""
-    if task_flow:
-        role = _pick_role(stdscr, preamble + [agent])
-        if role is None:
-            return
-    role_label = t(f"role.{role}") if role else t("role.unassigned")
-    role_context = []
-    if task_flow:
-        role_context = [t("role.assigned").format(role=role_label) if role else role_label]
-    if task_flow:
-        placement, placement_label = "new", t("struct.place_group")
-        layout_choice, layout_label = "auto", t("browser.layout_auto")
-    else:
-        placed = _pick_placement(
-            stdscr,
-            picks[0].is_remote,
-            preamble + [agent] + role_context,
-            bound_window,
-            task_flow=False,
-        )
-        if placed is None:
-            return
-        placement, placement_label = placed
-        laid = _pick_layout(stdscr, preamble + [agent] + role_context + [placement_label], placement)
-        if laid is None:
-            return
-        layout_choice, layout_label = laid
+    placed = _pick_placement(
+        stdscr, picks[0].is_remote, preamble + [agent], bound_window, task_flow=False,
+    )
+    if placed is None:
+        return
+    placement, placement_label = placed
+    laid = _pick_layout(stdscr, preamble + [agent, placement_label], placement)
+    if laid is None:
+        return
+    layout_choice, layout_label = laid
     confirm = run_list_picker(
         stdscr,
         t("browser.confirm_title"),
         [("create", t("browser.confirm_create")), ("cancel", t("menu.cancel"))],
         footer_hint=t("wizard.hint_list"),
-        preamble=preamble + [agent] + role_context + [placement_label, layout_label],
+        preamble=preamble + [agent, placement_label, layout_label],
     )
     if confirm.cancelled or confirm.selected_key != "create":
         return
@@ -897,33 +860,6 @@ def run_workspace_create(
         message = t("wizard.project_missing") if "작업공간을 확인할 수 없습니다" in str(exc) else t("wizard.launch_failed")
         show_message_screen(stdscr, t("browser.failed"), [message])
         return
-    if task_flow:
-        for result in results:
-            if not result.pane_id or not result.pane_pid or not result.session:
-                continue
-            pane_key = f"{picks[0].host_key}:{result.pane_id}" if picks[0].is_remote else result.pane_id
-            tower.overrides.drop_if_stale(pane_key, result.session, result.pane_pid)
-            if task_name:
-                tower.overrides.set_task_name(pane_key, task_name, result.session, result.pane_pid)
-            if role:
-                tower.overrides.set_role(pane_key, role, result.session, result.pane_pid)
-            else:
-                tower.overrides.clear_field(pane_key, "role")
-    if task_flow and picks and not picks[0].is_remote:
-        started = next((result for result in results if result.ok and result.pane_id), None)
-        if started is not None:
-            tower.load()
-            pane_key = started.pane_id
-            for index, row in enumerate(tower.visible_rows):
-                if row.get("key") == pane_key:
-                    tower.selected = index
-                    break
-            from .control_view import open_control_view
-
-            open_control_view(stdscr, tower, pane_key)
-            tower.load()
-            return
-
     lines = []
     for result in results:
         if result.ok:
@@ -931,6 +867,177 @@ def run_workspace_create(
         else:
             lines.append(t("wizard.launch_failed"))
     show_message_screen(stdscr, t("wizard.result_title"), lines)
+
+
+def _pick_task_environment(stdscr, tower) -> Optional[Tuple[str, str, bool]]:
+    from ..state.environments import ssh_target_available
+    from .settings_menu import open_environment_profiles
+
+    while True:
+        choices = [("local", t("environment.local"), False)]
+        choices.extend(
+            (row["alias"], row.get("display_name") or row.get("name") or row["alias"], True)
+            for row in getattr(tower, "remote_hosts", []) if row.get("alias")
+        )
+        items = [(key, f"{label} · SSH" if remote else label) for key, label, remote in choices]
+        items.extend([("add", t("environment.add")), ("cancel", t("menu.cancel"))])
+        pick = run_list_picker(stdscr, t("environment.step1"), items, footer_hint=t("wizard.hint_list"))
+        if pick.cancelled or pick.selected_key in (None, "cancel"):
+            return None
+        if pick.selected_key == "add":
+            open_environment_profiles(stdscr, tower)
+            continue
+        selected = next((row for row in choices if row[0] == pick.selected_key), None)
+        if selected is None:
+            continue
+        key, label, remote = selected
+        if not remote:
+            return tower.local_host, label, False
+        while not ssh_target_available(key):
+            retry = run_list_picker(
+                stdscr, t("environment.offline"),
+                [("retry", t("environment.retry")), ("other", t("environment.other"))],
+                preamble=[t("environment.offline_message").format(name=label)],
+                footer_hint=t("wizard.hint_list"),
+            )
+            if retry.cancelled or retry.selected_key != "retry":
+                break
+        else:
+            return key, label, True
+
+
+def _pick_task_project(
+    stdscr, state_dir: Path, host_key: str, host_label: str, is_remote: bool,
+) -> Optional[WorkspacePick]:
+    current = None if is_remote else current_project_entry()
+    recent_paths = load_recent(state_dir, host_key)
+    while True:
+        items = []
+        if current is not None:
+            items.append(("current", t("wizard.current_folder", name=current.name)))
+        if recent_paths:
+            items.append(("recent", t("environment.recent")))
+        items.extend([("other", t("wizard.other_project")), ("cancel", t("menu.cancel"))])
+        preamble = [host_label]
+        pick = run_list_picker(
+            stdscr, t("environment.step2"), items,
+            footer_hint=t("wizard.hint_list"), preamble=preamble,
+        )
+        if pick.cancelled or pick.selected_key in (None, "cancel"):
+            return None
+        if pick.selected_key == "current" and current is not None:
+            return WorkspacePick(host_key, host_label, is_remote, current)
+        if pick.selected_key == "recent":
+            entries = _recent_entries(host_key, host_label, is_remote, state_dir, stdscr) or []
+            if entries:
+                action, entry = _pick_from_entries(
+                    stdscr, t("environment.recent"), entries, searchable=True,
+                    preamble=[host_label],
+                )
+                if action == "picked" and entry is not None:
+                    return WorkspacePick(host_key, host_label, is_remote, entry)
+            else:
+                show_message_screen(stdscr, t("environment.recent"), [t("browser.empty_recent")])
+            continue
+        if pick.selected_key == "other":
+            roots = load_config()["project_roots"]
+            result = _tree(stdscr, host_key, host_label, is_remote, state_dir, roots, TreeBook(), {})
+            if result.kind == "entry" and result.entry is not None:
+                return WorkspacePick(host_key, host_label, is_remote, result.entry)
+            if result.kind == "host":
+                return None
+
+
+def _available_remote_agents(host: str, agents_cfg: dict) -> Optional[set]:
+    checks = []
+    for index, label in enumerate(QUICK_AGENT_ORDER):
+        try:
+            binary = shlex.split(agents_cfg.get(label) or "")[0]
+        except (ValueError, IndexError):
+            continue
+        checks.append((index, label, binary))
+    script = "\n".join([
+        *(f"command -v {shlex.quote(binary)} >/dev/null 2>&1 && printf '{index}\\n'"
+          for index, _label, binary in checks),
+        "true",
+    ])
+    try:
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, script],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    available = {int(value) for value in (result.stdout or "").splitlines() if value.isdecimal()}
+    return {label for index, label, _binary in checks if index in available}
+
+
+def _run_quick_start(stdscr, tower, state_dir: Path) -> None:
+    environment = _pick_task_environment(stdscr, tower)
+    if environment is None:
+        return
+    host_key, host_label, is_remote = environment
+    pick = _pick_task_project(stdscr, state_dir, host_key, host_label, is_remote)
+    if pick is None:
+        return
+
+    agents_cfg = load_config()["agents"]
+    if is_remote:
+        available = _available_remote_agents(host_key, agents_cfg)
+        if available is None:
+            show_message_screen(
+                stdscr, t("environment.offline"),
+                [t("environment.offline_message").format(name=host_label)],
+            )
+            return
+    else:
+        available = {name for name in QUICK_AGENT_ORDER if resolve_agent_command(name, agents_cfg)}
+    items = [(name, name) for name in QUICK_AGENT_ORDER if name in available]
+    if not items:
+        show_message_screen(stdscr, t("environment.step3"), [t("wizard.no_agents_available")])
+        return
+    chosen = run_list_picker(
+        stdscr, t("environment.step3"), items,
+        preamble=[pick.entry.name], footer_hint=t("wizard.hint_list"),
+    )
+    if chosen.cancelled or not chosen.selected_key:
+        return
+    agent = str(chosen.selected_key)
+    task_name = f"{pick.entry.name} · {agent}"
+    plan = LaunchPlan(
+        host_key=pick.host_key,
+        host_label=pick.host_label if is_remote else tower.local_host,
+        is_remote=is_remote,
+        workspaces=(WorkspaceRef(pick.entry.name, pick.entry.path),),
+        agents=(agent,),
+        layout=WINDOW_LAYOUT["auto"],
+        placement="new",
+        pane_direction="auto",
+    )
+    try:
+        results = execute_launch_plan(
+            plan, session=tower.session, state_dir=state_dir,
+            agents_cfg=agents_cfg, overrides=tower.overrides,
+        )
+    except LaunchPlanError:
+        show_message_screen(stdscr, t("browser.failed"), [t("wizard.launch_failed")])
+        return
+    for result in results:
+        if not result.ok or not result.pane_id or not result.pane_pid or not result.session:
+            continue
+        pane_key = f"{host_key}:{result.pane_id}" if is_remote else result.pane_id
+        tower.overrides.drop_if_stale(pane_key, result.session, result.pane_pid)
+        tower.overrides.set_task_name(pane_key, task_name, result.session, result.pane_pid)
+        tower.overrides.clear_field(pane_key, "role")
+    tower.load()
+    lines = [
+        f'{result.target.project_name} · {agent}  ·  '
+        f'{t("wizard.started") if result.ok else t("wizard.launch_failed")}'
+        for result in results
+    ]
+    show_message_screen(stdscr, t("wizard.result_title"), lines or [t("wizard.launch_failed")])
 
 
 def current_project_entry(path: Optional[Path] = None) -> Optional[ProjectEntry]:

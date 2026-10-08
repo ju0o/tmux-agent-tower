@@ -24,6 +24,11 @@ class ResultTarget:
     provider_pane_id: str
     provider_pid: str
     provider_liveness: str
+    transport_target: str = ""
+    ssh_client_pid: str = ""
+    ssh_connection: tuple = ()
+    ssh_local_socket: tuple = ()
+    ssh_connection_mode: str = "direct"
     agent: str = ""
     command: str = ""
     title: str = ""
@@ -58,6 +63,7 @@ class ResultTarget:
             provider_pane_id=provider_pane,
             provider_pid=provider_pid,
             provider_liveness=str(row.get("result_provider_liveness") or "unknown"),
+            transport_target=str(row.get("transport_target") or row.get("execution_host") or row.get("host") or ""),
             agent=str(row.get("agent") or row.get("auto_agent") or ""),
             command=str(row.get("command") or ""),
             title=str(row.get("pane_title") or ""),
@@ -72,6 +78,11 @@ class ResultTarget:
             "result_provider_pane_id": self.provider_pane_id,
             "result_provider_pane_pid": self.provider_pid,
             "result_provider_liveness": self.provider_liveness,
+            "transport_target": self.transport_target,
+            "ssh_client_pid": self.ssh_client_pid,
+            "ssh_connection": self.ssh_connection,
+            "ssh_local_socket": self.ssh_local_socket,
+            "ssh_connection_mode": self.ssh_connection_mode,
             "pane_title": self.title,
             "command": self.command,
             "cmdline": self.cmdline,

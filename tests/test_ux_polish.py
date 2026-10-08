@@ -94,8 +94,8 @@ def test_primary_korean_menus_hide_tmux_and_transport_terms():
 
 def test_phone_saved_work_and_templates_share_one_named_entry():
     html = webui.PAGE_HTML
-    assert '<h2>저장된 작업</h2><p>하던 작업</p>' in html
-    assert '<p>작업 템플릿</p>' in html
+    assert '<h2>저장한 구성</h2><p>전에 하던 프로젝트와 Agent 구성을 다시 엽니다.</p>' in html
+    assert '<p>템플릿</p>' in html
 
 
 def test_wide_primary_row_shows_project_agent_and_state_without_internal_ids():

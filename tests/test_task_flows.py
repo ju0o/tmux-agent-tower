@@ -6,38 +6,31 @@ from tmux_agent_tower.ui import structure_menu, workspace_browser
 from tmux_agent_tower.ui.widgets import PickResult
 
 
-def test_create_task_asks_plain_flow_and_keeps_task_name_separate(tmp_path, monkeypatch):
+def test_quick_start_uses_environment_project_agent_and_automatic_task_identity(tmp_path, monkeypatch):
     from tmux_agent_tower.launcher.browse import ProjectEntry
 
     overrides = OverrideStore(tmp_path / "overrides.json")
     tower = type("TowerStub", (), {})()
     tower.session = "main"
+    tower.local_host = "workstation-a"
+    tower.remote_hosts = []
     tower.selected = 0
     tower.visible_rows = [{"kind": "pane", "window_id": "@current"}]
     tower.rows = []
     tower.overrides = overrides
     tower.load = lambda: None
-    pick = workspace_browser.WorkspacePick(
-        "workstation-a", "내 컴퓨터", False, ProjectEntry("SamplePortal", "/work/SamplePortal", True)
-    )
+    entry = ProjectEntry("SamplePortal", "/work/SamplePortal", True)
+    pick = workspace_browser.WorkspacePick("workstation-a", "이 컴퓨터", False, entry)
     seen = {}
     flow = []
-
-    monkeypatch.setattr(workspace_browser, "prompt_text", lambda _s, title: seen.setdefault("name_prompt", title) and "로그인 버그 수정")
-    monkeypatch.setattr(workspace_browser, "current_project_entry", lambda: None)
-    monkeypatch.setattr(workspace_browser, "pick_workspaces", lambda *a, **k: [pick])
-    monkeypatch.setattr(workspace_browser, "_pick_agent", lambda *a, **k: flow.append("agent") or "Codex")
-    monkeypatch.setattr(workspace_browser, "_pick_role", lambda *a, **k: flow.append("role") or "builder")
-    monkeypatch.setattr(
-        workspace_browser,
-        "_pick_placement",
-        lambda *a, **k: pytest.fail("quick task uses safe default placement"),
-    )
-    monkeypatch.setattr(workspace_browser, "_pick_layout", lambda *a, **k: pytest.fail("quick task uses auto layout"))
+    monkeypatch.setattr(workspace_browser, "_pick_task_environment", lambda *_: flow.append("environment") or ("workstation-a", "이 컴퓨터", False))
+    monkeypatch.setattr(workspace_browser, "_pick_task_project", lambda *_: flow.append("project") or pick)
+    monkeypatch.setattr(workspace_browser, "load_config", lambda: {"agents": {"Codex": "codex"}})
+    monkeypatch.setattr(workspace_browser, "resolve_agent_command", lambda *_: "codex")
     monkeypatch.setattr(
         workspace_browser,
         "run_list_picker",
-        lambda *a, **k: PickResult(selected_key="create"),
+        lambda _s, title, items, **kwargs: flow.append(("agent", title, items)) or PickResult(selected_key="Codex"),
     )
 
     def launch(plan, **kwargs):
@@ -47,15 +40,15 @@ def test_create_task_asks_plain_flow_and_keeps_task_name_separate(tmp_path, monk
         return [SpawnResult(target, True, "시작됨", "%51", "main", "5151")]
 
     monkeypatch.setattr(workspace_browser, "execute_launch_plan", launch)
-    opened = []
-    from tmux_agent_tower.ui import control_view
-    monkeypatch.setattr(control_view, "open_control_view", lambda _s, _t, key: opened.append(key))
+    monkeypatch.setattr(workspace_browser, "show_message_screen", lambda *_a, **_k: None)
 
     workspace_browser.run_workspace_create(
         None, tower, tmp_path, multi=False, open_tree=True, task_flow=True
     )
 
-    assert "name_prompt" in seen
+    assert flow[:2] == ["environment", "project"]
+    assert flow[2][0] == "agent"
+    assert flow[2][1] == workspace_browser.t("environment.step3")
     assert seen["plan"].host_key == "workstation-a"
     assert [(workspace.name, workspace.path) for workspace in seen["plan"].workspaces] == [
         ("SamplePortal", "/work/SamplePortal")
@@ -63,10 +56,8 @@ def test_create_task_asks_plain_flow_and_keeps_task_name_separate(tmp_path, monk
     assert seen["plan"].agents == ("Codex",)
     assert seen["plan"].placement == "new"
     assert seen["plan"].layout == "tiled"
-    assert flow == ["agent", "role"]
-    assert opened == ["%51"]
-    assert overrides.get_task_name("%51", "main", "5151") == "로그인 버그 수정"
-    assert overrides.get_role("%51", "main", "5151") == "builder"
+    assert overrides.get_task_name("%51", "main", "5151") == "SamplePortal · Codex"
+    assert overrides.get_role("%51", "main", "5151") is None
     assert overrides.get_project("%51", "main", "5151") is None
 
 
@@ -110,7 +101,7 @@ def test_saved_work_entry_routes_saved_work_and_templates_through_one_hub(tmp_pa
     assert all(args == ("screen", "tower", tmp_path) for _kind, args in opened)
 
 
-def test_create_hub_keeps_advanced_entries_under_more(monkeypatch):
+def test_create_hub_keeps_advanced_entries_out_of_basic_choices(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         structure_menu, "run_list_picker",
@@ -121,7 +112,7 @@ def test_create_hub_keeps_advanced_entries_under_more(monkeypatch):
     structure_menu.open_create_hub(None, object())
 
     keys = [key for key, _label in captured["items"]]
-    assert keys == ["task", "folder", "group", "saved", "template", "more", "cancel"]
+    assert keys == ["task", "folder", "group", "saved", "template", "advanced", "cancel"]
 
 
 def test_task_menu_separates_result_and_screen_copy(monkeypatch):
@@ -153,12 +144,13 @@ def test_task_menu_separates_result_and_screen_copy(monkeypatch):
     assert copied == [True]
 
 
-def test_create_remote_task_binds_name_to_exact_namespaced_remote_identity(tmp_path, monkeypatch):
+def test_remote_quick_start_binds_auto_name_to_exact_namespaced_identity(tmp_path, monkeypatch):
     from tmux_agent_tower.launcher.browse import ProjectEntry
 
     overrides = OverrideStore(tmp_path / "overrides.json")
     tower = type("TowerStub", (), {})()
     tower.session = "main"
+    tower.load = lambda: None
     tower.selected = 0
     tower.visible_rows = []
     tower.rows = []
@@ -169,13 +161,13 @@ def test_create_remote_task_binds_name_to_exact_namespaced_remote_identity(tmp_p
         "workstation-b", "workstation-b", True, ProjectEntry("SamplePortal", "/work/SamplePortal", True)
     )
     seen = {}
-    monkeypatch.setattr(workspace_browser, "prompt_text", lambda *_: "로그인 버그 수정")
-    monkeypatch.setattr(workspace_browser, "pick_workspaces", lambda *a, **k: [pick])
-    monkeypatch.setattr(workspace_browser, "_pick_agent", lambda *a, **k: "Codex")
-    monkeypatch.setattr(workspace_browser, "_pick_role", lambda *a, **k: "e2e")
-    monkeypatch.setattr(workspace_browser, "_pick_placement", lambda *a, **k: ("new", "새 작업 묶음"))
-    monkeypatch.setattr(workspace_browser, "_pick_layout", lambda *a, **k: ("auto", "자동"))
-    monkeypatch.setattr(workspace_browser, "run_list_picker", lambda *a, **k: PickResult(selected_key="create"))
+    tower.local_host = "local-machine"
+    tower.remote_hosts = [{"alias": "workstation-b", "name": "원격 개발 서버"}]
+    monkeypatch.setattr(workspace_browser, "_pick_task_environment", lambda *_: ("workstation-b", "원격 개발 서버", True))
+    monkeypatch.setattr(workspace_browser, "_pick_task_project", lambda *_: pick)
+    monkeypatch.setattr(workspace_browser, "load_config", lambda: {"agents": {"Codex": "codex"}})
+    monkeypatch.setattr(workspace_browser, "_available_remote_agents", lambda *_: {"Codex"})
+    monkeypatch.setattr(workspace_browser, "run_list_picker", lambda *a, **k: PickResult(selected_key="Codex"))
     def execute(plan, **kwargs):
         seen["plan"] = plan
         return [SpawnResult(
@@ -189,13 +181,59 @@ def test_create_remote_task_binds_name_to_exact_namespaced_remote_identity(tmp_p
     assert seen["plan"].host_key == "workstation-b"
     assert seen["plan"].agents == ("Codex",)
     assert seen["plan"].placement == "new"
-    assert overrides.get_task_name("workstation-b:%51", "remote-session", "5151") == "로그인 버그 수정"
-    assert overrides.get_role("workstation-b:%51", "remote-session", "5151") == "e2e"
+    assert overrides.get_task_name("workstation-b:%51", "remote-session", "5151") == "SamplePortal · Codex"
+    assert overrides.get_role("workstation-b:%51", "remote-session", "5151") is None
     assert overrides.get_task_name("%51", "remote-session", "5151") is None
     assert overrides.get_task_name("workstation-b:%51", "remote-session", "5152") is None
     assert overrides.get_task_name("workstation-b:%51", "other-session", "5151") is None
     assert overrides.get_project("workstation-b:%51", "remote-session", "5151") is None
     assert overrides.get_agent("workstation-b:%51", "remote-session", "5151") is None
+
+
+def test_offline_environment_requires_explicit_retry_or_environment_choice(monkeypatch):
+    from types import SimpleNamespace
+
+    tower = SimpleNamespace(
+        local_host="local-machine",
+        remote_hosts=[{"alias": "remote-host", "name": "원격 개발 서버", "display_name": "원격 개발 서버"}],
+    )
+    selections = iter(("remote-host", "other", "local"))
+    screens = []
+    monkeypatch.setattr("tmux_agent_tower.state.environments.ssh_target_available", lambda _target: False)
+    monkeypatch.setattr(
+        workspace_browser, "run_list_picker",
+        lambda _s, title, items, **_kw: screens.append((title, items))
+        or PickResult(selected_key=next(selections)),
+    )
+
+    selected = workspace_browser._pick_task_environment(None, tower)
+
+    assert selected == ("local-machine", "이 컴퓨터", False)
+    assert screens[0][0] == workspace_browser.t("environment.step1")
+    assert ("remote-host", "원격 개발 서버 · SSH") in screens[0][1]
+    assert screens[1][0] == workspace_browser.t("environment.offline")
+    assert screens[1][1] == [
+        ("retry", workspace_browser.t("environment.retry")),
+        ("other", workspace_browser.t("environment.other")),
+    ]
+
+
+def test_remote_agent_probe_returns_installed_agents_when_later_binaries_are_missing(monkeypatch):
+    from types import SimpleNamespace
+
+    seen = []
+    monkeypatch.setattr(
+        workspace_browser.subprocess, "run",
+        lambda argv, **_kwargs: seen.append(argv) or SimpleNamespace(returncode=0, stdout="3\n"),
+    )
+
+    available = workspace_browser._available_remote_agents(
+        "remote-host", {"Codex": "codex", "Claude": "claude", "Grok": "grok",
+                 "OpenCode": "opencode", "Cursor": "cursor"},
+    )
+
+    assert available == {"OpenCode"}
+    assert seen[0][-1].splitlines()[-1] == "true"
 
 
 def test_same_agent_can_keep_different_roles_on_two_tasks(tmp_path):

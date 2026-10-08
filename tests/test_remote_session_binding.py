@@ -418,7 +418,7 @@ def test_status_names_the_session_while_it_exists(api_server):
     assert status == 200
     assert body["ok"] is True
     assert body["session"] == "main"
-    assert any(p["host"] == "REMOTE-FIXTURE" for p in body["panes"])
+    assert any(p["host"] == "remote-fixture" for p in body["panes"])
 
 
 def test_deleted_source_session_is_an_explicit_error_not_an_empty_list(api_server):
