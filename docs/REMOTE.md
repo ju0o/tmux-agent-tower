@@ -1,12 +1,13 @@
-# Tower Remote (experimental, `feat/tower-remote`)
+# Tower Remote (experimental)
 
 A small local web UI + API so you can check Tower's status -- and send an
 explicit prompt into one specific pane -- from your phone's browser,
 without installing a terminal app or exposing a full terminal.
 
-**Status: MVP, not merged to `main`.** This lives on `feat/tower-remote`
-until it's been dogfooded enough to trust. See "Known gaps" below before
-relying on it for anything you can't afford to get wrong.
+**Status:** The phone web UI and API are included in the public v0.3.0-rc1
+source and remain experimental. Phone acceptance gaps for LIVE PANE, identity
+editing, and prompt send are listed under "Known gaps." The SSH Grok Result
+binding described below is an RC2 change.
 
 ## Quick start
 

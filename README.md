@@ -68,8 +68,11 @@ TMUX AGENT TOWER       Current access: This laptop · Copy: This laptop · Auto
   `capture-pane` and does not change tmux layout. Focus, split, grid,
   main-and-side, the 42×14 fallback, and the 160×45 layout were exercised in
   an isolated tmux session.
-* `/` live-filters tasks by task name, Work Group, project, Agent, or role;
-  `Esc` clears it.
+* `/` opens one search and command palette. Search tasks, Work Groups,
+  projects, Agent names, folders, and screens, or choose a matching command:
+  create a task, add or view SSH environments, open Live, saved setups,
+  templates, settings, or advanced workflows. Use `↑`/`↓` to move, `Enter`
+  to open, and `Esc` to close.
 * Project name is auto-discovered with a real priority chain: your own
   override, then the enclosing git repo's name, then a meaningful pane
   title, then the directory name -- a meaningless single-letter or
@@ -380,7 +383,7 @@ answer, Tower says it cannot connect and the local session keeps
 working. Search stays inside the usual project directories, with a
 depth and result cap.
 
-### From your phone (experimental, this branch only)
+### From your phone (experimental; included in v0.3.0-rc1)
 
 Inside Tower, press `M` and choose **Start phone remote**. Tower prints
 an `https://…ts.net` address and a pairing code on screen. Save that
