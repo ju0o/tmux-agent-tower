@@ -42,7 +42,7 @@ from ..control.actions import enter_intent, update_identity
 from . import render
 from . import folder_tree
 from .perf_trace import draw as trace_draw, event, refresh as trace_refresh
-from .widgets import is_backspace, is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
+from .widgets import is_ctrl_c, is_enter, is_escape, matches_letter, prompt_text, read_key, run_list_picker, safe_add
 
 REFRESH_SECONDS = 2.0
 REMOTE_REFRESH_SECONDS = 6.0
@@ -102,24 +102,14 @@ def local_host_label() -> str:
 
 
 def load_remote_hosts() -> List[Dict[str, str]]:
-    """Each non-comment line: ``alias`` or ``alias:DisplayName``."""
+    """Load legacy SSH destinations as generic execution environments."""
 
-    hosts: List[Dict[str, str]] = []
+    from ..state.environments import load_profiles
+
     try:
-        for raw in REMOTE_HOSTS_FILE.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if ":" in line:
-                alias, name = line.split(":", 1)
-            else:
-                alias, name = line, line
-            hosts.append({"alias": alias.strip(), "name": name.strip().upper()})
-    except FileNotFoundError:
-        pass
-    except Exception:
-        pass
-    return hosts
+        return load_profiles(REMOTE_HOSTS_FILE)
+    except (OSError, UnicodeError):
+        return []
 
 
 def location_lines(row: Dict) -> List[str]:
@@ -533,7 +523,10 @@ class Tower:
             adapter = resolve_adapter(
                 pane["command"], pane["title"], pane.get("cmdline") or "", pane.get("lines") or ()
             )
-            ctx = PaneContext(title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]))
+            ctx = PaneContext(
+                title=pane["title"], command=pane["command"], lines=tuple(pane["lines"]),
+                pane_pid=str(pane.get("pane_pid") or ""),
+            )
             visit = self.visits.visit_label(self.session, pane["pane_id"])
 
             key = pane["pane_id"]
@@ -1580,11 +1573,7 @@ def _build_selected_summary(tower: Tower, row: Dict) -> List[str]:
     return [str(name), identity_line] + ([" · ".join(details)] if details else [])
 
 
-def _home_footer_lines(tower: Tower, filtering: bool, width: int) -> List[str]:
-    if filtering:
-        return render.wrap_items(
-            [t("hint.search_done"), t("hint.search_back")], max(1, width - 4)
-        )
+def _home_footer_lines(tower: Tower, width: int) -> List[str]:
     keys = [
         t("hint.move"), t("hint.open"), t("hint.actions"), t("hint.create"),
         t("hint.saved"), t("hint.live"), t("hint.settings"), t("hint.filter"),
@@ -1641,7 +1630,7 @@ def _build_physical_lines(tower: Tower, narrow: bool) -> List[Dict]:
 
 
 @trace_draw("home")
-def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "stopped") -> None:
+def draw(stdscr, tower: Tower, remote_state: str = "stopped") -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     narrow = render.use_narrow_layout(width)
@@ -1667,45 +1656,40 @@ def draw(stdscr, tower: Tower, filtering: bool = False, remote_state: str = "sto
         if x + render.display_width(host_line) < width:
             safe_add(stdscr, 0, x, host_line, curses.A_BOLD)
 
-    # -- row 1: access/copy context, or the live search-filter input ------
-
-    if filtering:
-        safe_add(stdscr, 1, 2, f'{t("filter.label")} {tower.filter_text}_', curses.A_BOLD)
-        start_y = 2
-    else:
-        context = getattr(tower, "access_context", None)
-        if context:
-            preference = load_preference()
-            if preference == COPY_AUTO:
-                destination = (
-                    context.display_name
-                    if context.clipboard_capability in {"host", "bridge"}
-                    else t("access.unknown_destination")
-                )
-                access_line = t("access.copy_auto", client=context.display_name, destination=destination)
-            else:
-                destination = {
-                    LOCAL_HOST: context.display_name,
-                    CURRENT_TERMINAL: t("access.terminal"),
-                    TMUX_BUFFER: t("access.tower_buffer"),
-                }.get(preference, t("access.unknown_destination"))
-                access_line = t("access.copy_manual", client=context.display_name, destination=destination)
+    # -- row 1: access and copy context ----------------------------------
+    context = getattr(tower, "access_context", None)
+    if context:
+        preference = load_preference()
+        if preference == COPY_AUTO:
+            destination = (
+                context.display_name
+                if context.clipboard_capability in {"host", "bridge"}
+                else t("access.unknown_destination")
+            )
+            access_line = t("access.copy_auto", client=context.display_name, destination=destination)
         else:
-            access_line = t("access.unknown_context")
-        safe_add(stdscr, 1, 2, render.truncate_to_width(access_line, max(0, width - 4)), curses.A_DIM)
-        start_y = 2
+            destination = {
+                LOCAL_HOST: context.display_name,
+                CURRENT_TERMINAL: t("access.terminal"),
+                TMUX_BUFFER: t("access.tower_buffer"),
+            }.get(preference, t("access.unknown_destination"))
+            access_line = t("access.copy_manual", client=context.display_name, destination=destination)
+    else:
+        access_line = t("access.unknown_context")
+    safe_add(stdscr, 1, 2, render.truncate_to_width(access_line, max(0, width - 4)), curses.A_DIM)
+    start_y = 2
 
     if tower.visible_rows and all(row.get("kind") == "zero" for row in tower.visible_rows):
         safe_add(stdscr, start_y, 2, t("zero.title"), curses.A_BOLD)
         safe_add(stdscr, start_y + 1, 2, render.truncate_to_width(t("zero.description"), max(0, width - 4)), curses.A_DIM)
         start_y += 2
-    footer_lines = _home_footer_lines(tower, filtering, width)
+    footer_lines = _home_footer_lines(tower, width)
     footer_y = max(0, height - len(footer_lines) - (1 if tower.notice else 0))
 
     # -- selected-item detail, immediately below the work list -----------
 
     detail_lines: List[str] = []
-    if (not filtering and render.should_show_detail_panel(height) and tower.visible_rows
+    if (render.should_show_detail_panel(height) and tower.visible_rows
             and tower.visible_rows[tower.selected].get("kind") != "zero"):
         selected_row = tower.visible_rows[tower.selected]
         if getattr(tower, "view_mode", USER_WORK_VIEW) == TERMINAL_STRUCTURE_VIEW:
@@ -1887,13 +1871,40 @@ def _remote_state() -> str:
         return "error"
 
 
+def _open_selected_row(stdscr, tower) -> None:
+    row = tower.visible_rows[tower.selected] if tower.visible_rows else None
+    intent = enter_intent(row)
+    if intent == "control" and row:
+        event("VIEW_STATE_CHANGED", view="conversation")
+    if intent == "group" and row:
+        tower.toggle_work_group(row.get("group_id") or "")
+    elif intent == "toggle" and row:
+        if row.get("kind") in {"folder", "other_section"}:
+            tower.toggle_folder(row.get("folder_id") or "__unfiled__")
+        elif row.get("kind") == "window_asset":
+            tower.toggle_window_asset(row.get("window_ref") or "")
+    elif intent == "control":
+        pane_key = tower.control_key()
+        if pane_key:
+            from .control_view import open_control_view
+
+            open_control_view(stdscr, tower, pane_key)
+    elif intent == "window" and row:
+        from .structure_menu import open_window_control
+
+        open_window_control(stdscr, tower, row.get("window_id") or "")
+    elif intent == "zero" and row:
+        from .structure_menu import run_zero_action
+
+        run_zero_action(stdscr, tower, row.get("action") or "")
+
+
 def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
     from ..server import service
 
     tower = Tower(session, own_pane_id, results=ResultTracker(shared_result_state_path()))
     tower.load()
     tower.last_refresh = time.monotonic()
-    filtering = False
     try:
         # Autostart binds the remote to this Tower's session -- never a guess.
         service.maybe_autostart(session=tower.session, own_pane_id=tower.own_pane_id)
@@ -1909,11 +1920,11 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             needs_draw = True
         now = time.monotonic()
 
-        if not filtering and now - tower.last_refresh >= REFRESH_SECONDS:
+        if now - tower.last_refresh >= REFRESH_SECONDS:
             _request_background_refresh(tower)
 
         if needs_draw:
-            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
+            draw(stdscr, tower, remote_state=remote_state)
             needs_draw = False
 
         try:
@@ -1926,30 +1937,18 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if key == curses.KEY_RESIZE:
-            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if is_ctrl_c(key):
             break
 
-        # -- live search filter ("/" to start typing; Esc always clears) --
-
-        if filtering:
-            if is_escape(key):
-                tower.clear_filter()
-                filtering = False
-            elif is_enter(key):
-                filtering = False
-            elif is_backspace(key):
-                tower.set_filter(tower.filter_text[:-1])
-            elif isinstance(key, str) and key.isprintable():
-                tower.set_filter(tower.filter_text + key)
-            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
-            continue
-
         if key == "/":
-            filtering = True
-            draw(stdscr, tower, filtering=filtering, remote_state=remote_state)
+            from .palette import open_palette
+
+            open_palette(stdscr, tower)
+            _request_background_refresh(tower)
+            draw(stdscr, tower, remote_state=remote_state)
             continue
 
         if is_escape(key) and tower.filter_text:
@@ -1978,31 +1977,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if is_enter(key):
-            row = tower.visible_rows[tower.selected] if tower.visible_rows else None
-            intent = enter_intent(row)
-            if intent == "control":
-                event("VIEW_STATE_CHANGED", view="conversation")
-            if intent == "group" and row:
-                tower.toggle_work_group(row.get("group_id") or "")
-            elif intent == "toggle" and row:
-                if row.get("kind") in {"folder", "other_section"}:
-                    tower.toggle_folder(row.get("folder_id") or "__unfiled__")
-                elif row.get("kind") == "window_asset":
-                    tower.toggle_window_asset(row.get("window_ref") or "")
-            elif intent == "control":
-                pane_key = tower.control_key()
-                if pane_key:
-                    from .control_view import open_control_view
-
-                    open_control_view(stdscr, tower, pane_key)
-            elif intent == "window" and row:
-                from .structure_menu import open_window_control
-
-                open_window_control(stdscr, tower, row.get("window_id") or "")
-            elif intent == "zero" and row:
-                from .structure_menu import run_zero_action
-
-                run_zero_action(stdscr, tower, row.get("action") or "")
+            _open_selected_row(stdscr, tower)
             _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
@@ -2017,9 +1992,9 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
             continue
 
         if key == "+":
-            from .structure_menu import open_create_hub
+            from .structure_menu import start_task
 
-            open_create_hub(stdscr, tower)
+            start_task(stdscr, tower)
             _request_background_refresh(tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
@@ -2124,7 +2099,7 @@ def _run_loop(stdscr, session: str, own_pane_id: str) -> None:
         if matches_letter(key, "c"):
             from .settings_menu import open_settings
 
-            open_settings(stdscr)
+            open_settings(stdscr, tower)
             draw(stdscr, tower, remote_state=remote_state)
             continue
 

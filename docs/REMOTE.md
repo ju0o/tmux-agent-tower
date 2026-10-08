@@ -336,10 +336,11 @@ is bound to one tmux client. Connecting to a Tower host does not register an
 Agent Result Source; that remains a separate, explicit target binding.
 
 Remote tmux Result reads use the configured SSH host plus the exact remote
-session ID, pane ID, and pane PID from the current host snapshot. A plain
-SSH Agent TUI running inside a local pane has no remote Result Provider unless
-that exact Tower pane has a provider binding; Tower does not infer a remote
-pane from the SSH host name.
+session ID, pane ID, and pane PID from the current host snapshot. A local SSH
+Grok pane uses a copy-time socket and process binding to its native Grok
+provider; ambiguous sockets or sessions fail closed without suffix fallback.
+Other SSH Agent panes need an exact Tower provider binding; Tower does not
+infer a remote pane from the SSH host name.
 
 The phone uses the same pane rows as the PC. A row's `host` is the
 execution host. `tmux_host`, `transport`, and `place_label` say where

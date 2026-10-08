@@ -213,7 +213,7 @@ PAGE_HTML = """<!doctype html>
   <h1>에이전트 관제탑</h1>
   <p class="page-intro">작업 묶음과 Agent 상태를 보고 필요한 작업을 눌러 보세요.</p>
   <div id="counts"></div>
-  <section class="worksets"><h2>저장된 작업</h2><p>하던 작업</p><div id="saved-worksets"></div><p>작업 템플릿</p><div id="work-templates"></div></section>
+  <section class="worksets"><h2>저장한 구성</h2><p>전에 하던 프로젝트와 Agent 구성을 다시 엽니다.</p><div id="saved-worksets"></div><p>템플릿</p><p>Agent/역할 구성을 다른 프로젝트에 재사용합니다.</p><div id="work-templates"></div></section>
   <div id="banner"></div>
   <div id="source-gone">
     <div class="title">연결하던 작업 화면이 끝났어요.</div>
@@ -546,7 +546,7 @@ PAGE_HTML = """<!doctype html>
         card.appendChild(pathLabel); card.appendChild(pathInput);
 
         var targetLabel = document.createElement("label");
-        targetLabel.textContent = "실행 위치";
+        targetLabel.textContent = "실행 환경";
         var targetSelect = document.createElement("select");
         (payload.execution_targets || [{ id: "auto", name: "자동" }]).forEach(function (target) {
           var option = document.createElement("option");
@@ -580,7 +580,7 @@ PAGE_HTML = """<!doctype html>
 
         var start = document.createElement("button");
         start.type = "button";
-        start.textContent = "구성 확인 후 시작";
+        start.textContent = "저장한 구성으로 시작";
         start.addEventListener("click", function () {
           var path = pathInput.value.trim();
           if (isTemplate && !path) { showToast("프로젝트 경로를 입력하세요."); return; }
@@ -615,8 +615,8 @@ PAGE_HTML = """<!doctype html>
     }
     renderItems(payload.saved_work, false, savedBox);
     renderItems(payload.work_templates, true, templateBox);
-    if (!savedBox.children.length) savedBox.textContent = "저장된 작업이 없습니다.";
-    if (!templateBox.children.length) templateBox.textContent = "작업 템플릿이 없습니다.";
+    if (!savedBox.children.length) savedBox.textContent = "저장한 구성이 없습니다.";
+    if (!templateBox.children.length) templateBox.textContent = "템플릿이 없습니다.";
   }
 
   function render(payload) {
@@ -820,7 +820,7 @@ PAGE_HTML = """<!doctype html>
     if (!paneRows.length && !groups.length && !(workspace.folders || []).length) {
       var empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.textContent = "아직 실행 중인 작업이 없습니다. PC Tower에서 작업을 시작하거나 저장된 작업을 열어주세요.";
+      empty.textContent = "아직 실행 중인 작업이 없습니다. PC Tower에서 작업을 시작하거나 저장한 구성을 열어주세요.";
       list.appendChild(empty);
     }
 

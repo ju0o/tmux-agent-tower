@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ..launcher.browse import validate_local_path, validate_remote_path
+from ..state.environments import valid_ssh_target
 from ..state.bindings import ProjectBindingStore
 from ..tmux import structure
 from .config import AGENT_LABEL_TO_CONFIG_KEY, load_config
@@ -54,9 +55,7 @@ def validate_launch_plan(plan: LaunchPlan) -> None:
         raise LaunchPlanError("실행 컴퓨터를 선택하세요.")
     if any(ch.isspace() or ord(ch) < 32 for ch in plan.host_key):
         raise LaunchPlanError("실행 컴퓨터 이름을 확인할 수 없습니다.")
-    if plan.is_remote and (plan.host_key.startswith("-") or not all(
-        ch.isalnum() or ch in "_.-" for ch in plan.host_key
-    )):
+    if plan.is_remote and not valid_ssh_target(plan.host_key):
         raise LaunchPlanError("원격 호스트 이름을 확인할 수 없습니다.")
     if not plan.workspaces:
         raise LaunchPlanError("작업공간을 하나 이상 선택하세요.")

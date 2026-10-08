@@ -355,6 +355,12 @@ SSH pane first uses its local tmux history; if that history is incomplete,
 Tower uses a remote source only when that exact local pane has a persisted
 provider binding. A plain `ssh workstation-b` TUI without such a binding fails closed;
 Tower does not infer a remote Agent pane from its execution host.
+Local SSH Grok panes use a copy-time binding: Tower matches the pane's unique
+SSH process and established socket to one remote `SSH_CONNECTION`, sshd
+ancestry, and Grok process/session. WSL sockets may use only their unique
+WinNAT source-tuple mapping. Grok Result comes from the newest ended native
+turn and `grok export`; an ambiguous binding or failed provider never falls
+back to the local screen suffix.
 `turn_complete` records the Agent's completion boundary; `body_complete` records
 proof that the copied body starts at this turn's boundary. A result is ready or
 copyable only when both are true. Tower-submitted turns keep only the pane's
@@ -443,7 +449,7 @@ The older file is retained and is not rewritten or deleted by Workset actions.
 
 ## 단계별 Workflow 실행
 
-`+` → `작업 순서`에서 **새 단계별 실행**을 고르면 기존
+**고급 설정 → 작업 흐름**에서 **새 단계별 실행**을 고르면 기존
 `WorkspacePreset`과 별도의 `WorkflowPreset`을 각각 선택한다. Workspace는
 Host·경로·사용 가능한 Agent를 정하고 Workflow는 역할 순서만 정한다. 두 모델은
 별도로 유지한다. 기본 순서는 빠른 수정(구현→확인), 기능 개발(계획→구현→검수→확인),
@@ -512,6 +518,8 @@ data configuration includes all seven Markdown defaults in built distributions.
 * **New agent**: add `adapters/<name>.py` implementing `AgentAdapter`,
   register it in `adapters/__init__.py`'s `ADAPTERS` list order (order
   matters: first match wins), add fixtures + tests.
-* **New host**: add a line to `~/.config/tmux-agent-tower/remote-hosts.txt`
-  (`alias` or `alias:Display Name`), using an SSH alias you've already set
-  up in `~/.ssh/config`. No code changes needed.
+* **New execution environment**: use Settings → Connections → Execution
+  environments → Add SSH environment. The profile stores a display name and
+  SSH destination in the compatible `remote-hosts.txt` format
+  (`alias` or `alias:Display Name`). Existing entries migrate in memory;
+  transport is SSH and the alias remains the execution target.

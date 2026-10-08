@@ -99,7 +99,7 @@ def open_create_hub(stdscr, tower) -> None:
             ("group", t("group.create")),
             ("saved", t("struct.create_saved")),
             ("template", t("struct.create_template")),
-            ("more", t("menu.more")),
+            ("advanced", t("settings.advanced")),
             ("cancel", t("menu.cancel")),
         ],
         footer_hint=t("wizard.hint_list"),
@@ -124,8 +124,8 @@ def open_create_hub(stdscr, tower) -> None:
         run_zero_action(stdscr, tower, "workflow")
     elif pick.selected_key == "group":
         create_work_group(stdscr, tower)
-    elif pick.selected_key == "more":
-        extra = run_list_picker(stdscr, t("menu.more"), [
+    elif pick.selected_key == "advanced":
+        extra = run_list_picker(stdscr, t("settings.advanced"), [
             ("workspace", t("struct.create_workspace")),
             ("workflow", t("struct.create_workflow")),
             ("terminal", t("nav.terminal_structure")),
@@ -421,7 +421,7 @@ def open_pane_menu(stdscr, tower, row: dict) -> str:
         elif action == "settings":
             from .settings_menu import open_settings
 
-            open_settings(stdscr)
+            open_settings(stdscr, tower)
         elif action == "terminal":
             tower.toggle_navigator()
         elif action == "prompt":
@@ -828,7 +828,7 @@ def open_work_group_menu(stdscr, tower, row: dict) -> None:
         elif extra.selected_key == "settings":
             from .settings_menu import open_settings
 
-            open_settings(stdscr)
+            open_settings(stdscr, tower)
         elif extra.selected_key == "terminal":
             tower.toggle_navigator()
         elif extra.selected_key == "physical":
@@ -926,7 +926,7 @@ def change_role(stdscr, tower, row: dict) -> None:
 
 
 def start_task(stdscr, tower) -> None:
-    """Ask for a task name, then reuse the existing host and workspace flow."""
+    """Start a task through environment, project, and Agent."""
 
     from .tower import STATE_DIR
     from .workspace_browser import run_workspace_create

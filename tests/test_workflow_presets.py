@@ -156,7 +156,7 @@ def test_create_hub_exposes_a_separate_workflow_route(monkeypatch, tmp_path):
     opened = []
     tower = object()
     monkeypatch.setattr(tower_ui, "STATE_DIR", tmp_path)
-    picks = iter(("more", "workflow"))
+    picks = iter(("advanced", "workflow"))
     def pick(_screen, _title, items, **_kwargs):
         seen.setdefault("menus", []).append(dict(items))
         return PickResult(selected_key=next(picks))

@@ -24,7 +24,7 @@ from ..clipboard_dest import (
 )
 from ..i18n import t
 from ..tmux import keybind
-from .widgets import run_list_picker, show_message_screen
+from .widgets import prompt_text, run_list_picker, show_message_screen
 
 
 def keys_menu_items(installed: bool) -> List[Tuple[str, str]]:
@@ -54,7 +54,7 @@ def copy_menu_items() -> List[Tuple[str, str]]:
     ]
 
 
-def open_settings(stdscr) -> None:
+def open_settings(stdscr, tower=None) -> None:
     while True:
         pick = run_list_picker(
             stdscr,
@@ -63,6 +63,7 @@ def open_settings(stdscr) -> None:
                 ("copy", t("settings.copy")),
                 ("language", t("settings.language")),
                 ("agents", t("settings.agents")),
+                ("connection", t("settings.connection")),
                 ("advanced", t("settings.advanced")),
                 ("back", t("settings.back")),
             ],
@@ -76,15 +77,126 @@ def open_settings(stdscr) -> None:
             _language_screen(stdscr)
         elif pick.selected_key == "agents":
             _agent_status_screen(stdscr)
+        elif pick.selected_key == "connection":
+            connection = run_list_picker(
+                stdscr,
+                t("settings.connection"),
+                [("environments", t("settings.environments")), ("back", t("settings.back"))],
+                footer_hint=t("wizard.hint_list"),
+            )
+            if connection.selected_key == "environments":
+                open_environment_profiles(stdscr, tower)
         elif pick.selected_key == "advanced":
             advanced = run_list_picker(
                 stdscr,
                 t("settings.advanced"),
-                [("keys", t("settings.keys")), ("back", t("settings.back"))],
+                [("keys", t("settings.keys")), ("workflow", t("struct.create_workflow")), ("back", t("settings.back"))],
                 footer_hint=t("wizard.hint_list"),
             )
             if advanced.selected_key == "keys":
                 _keys_screen(stdscr)
+            elif advanced.selected_key == "workflow":
+                from .tower import STATE_DIR
+                from .workflow_presets import open_workflow_presets
+
+                open_workflow_presets(stdscr, tower, STATE_DIR)
+
+
+def open_environment_profiles(stdscr, tower=None, *, start_add: bool = False) -> None:
+    """Manage SSH profiles; removing one never touches its remote machine."""
+
+    from ..state.environments import add_profile, load_profiles, remove_profile, rename_profile, ssh_target_available
+    from .tower import REMOTE_HOSTS_FILE, load_remote_hosts
+
+    def refresh_tower() -> None:
+        if tower is None:
+            return
+        tower.remote_hosts = load_remote_hosts()
+        registry = getattr(tower, "_host_registry", None)
+        if registry is not None:
+            registry.peers = list(tower.remote_hosts)
+        if hasattr(tower, "load"):
+            tower.load()
+
+    def add_one() -> None:
+        name = prompt_text(stdscr, t("environment.name_prompt"))
+        if name is None:
+            return
+        target = prompt_text(stdscr, t("environment.target_prompt"))
+        if target is None:
+            return
+        try:
+            add_profile(REMOTE_HOSTS_FILE, name, target)
+            refresh_tower()
+        except (OSError, ValueError) as exc:
+            show_message_screen(stdscr, t("environment.add"), [str(exc)])
+
+    if start_add:
+        add_one()
+
+    while True:
+        profiles = load_profiles(REMOTE_HOSTS_FILE)
+        statuses = {row["ssh_target"]: ssh_target_available(row["ssh_target"]) for row in profiles}
+        items = [("local", f'{t("environment.local")}  ·  {t("environment.available")}')]
+        items.extend(
+            (f'profile:{row["ssh_target"]}', f'{row["display_name"]}  ·  '
+             f'{t("environment.available" if statuses[row["ssh_target"]] else "environment.offline")}')
+            for row in profiles
+        )
+        items.extend([("add", t("environment.add")), ("back", t("settings.back"))])
+        pick = run_list_picker(
+            stdscr, t("settings.environments"), items,
+            footer_hint=t("wizard.hint_list"),
+            preamble=[t("environment.manage_help")],
+        )
+        if pick.cancelled or pick.selected_key in (None, "back"):
+            return
+        if pick.selected_key == "local":
+            show_message_screen(stdscr, t("environment.local"), [t("environment.local_fixed")])
+            continue
+        if pick.selected_key == "add":
+            add_one()
+            continue
+
+        target = str(pick.selected_key).partition(":")[2]
+        profile = next((row for row in profiles if row["ssh_target"] == target), None)
+        if profile is None:
+            continue
+        action = run_list_picker(
+            stdscr, profile["display_name"],
+            [("test", t("environment.test")), ("rename", t("environment.rename")),
+             ("remove", t("environment.remove")), ("back", t("settings.back"))],
+            footer_hint=t("wizard.hint_list"),
+            preamble=[f'{t("environment.transport")}: SSH',
+                      f'{t("environment.target")}: {profile["ssh_target"]}'],
+        )
+        if action.selected_key == "test":
+            ok = ssh_target_available(target)
+            show_message_screen(
+                stdscr, t("environment.test"),
+                [t("environment.available" if ok else "environment.offline_message").format(name=profile["display_name"])],
+            )
+        elif action.selected_key == "rename":
+            name = prompt_text(stdscr, t("environment.rename_prompt"), initial=profile["display_name"])
+            if name is not None:
+                try:
+                    rename_profile(REMOTE_HOSTS_FILE, target, name)
+                    refresh_tower()
+                except (OSError, ValueError) as exc:
+                    show_message_screen(stdscr, t("environment.rename"), [str(exc)])
+        elif action.selected_key == "remove":
+            confirm = run_list_picker(
+                stdscr, t("environment.remove_title"),
+                [("remove", t("environment.remove")), ("cancel", t("menu.cancel"))],
+                preamble=[profile["display_name"], t("environment.remove_help")],
+                footer_hint=t("wizard.hint_list"),
+            )
+            if confirm.selected_key == "remove":
+                try:
+                    remove_profile(REMOTE_HOSTS_FILE, target)
+                    refresh_tower()
+                except (OSError, ValueError) as exc:
+                    show_message_screen(stdscr, t("environment.remove"), [str(exc)])
 
 
 def _language_screen(stdscr) -> None:

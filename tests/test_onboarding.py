@@ -13,7 +13,7 @@ def test_empty_home_has_three_plain_choices_and_no_tmux_identity():
     rows = zero_state_rows()
     assert [row["action"] for row in rows] == ["task", "saved", "template"]
     assert [row["project"] for row in rows] == [
-        "첫 작업 시작", "저장된 작업 열기", "템플릿으로 시작"
+        "첫 작업 시작", "저장한 구성 열기", "템플릿으로 시작"
     ]
     visible = " ".join((ko.STRINGS[key] for key in (
         "zero.title", "zero.description", "zero.footer", "zero.task", "zero.saved", "zero.template"
@@ -50,13 +50,12 @@ def test_current_folder_is_recommended_only_for_project_directories(tmp_path):
     assert entry.path == str(tmp_path.resolve())
 
 
-def test_task_quick_start_uses_current_folder_defaults_and_opens_conversation(monkeypatch, tmp_path):
+def test_task_quick_start_is_three_steps_with_automatic_defaults(monkeypatch, tmp_path):
     from tmux_agent_tower.launcher.browse import ProjectEntry
 
-    selected = iter(("current", "create"))
+    selected = iter(("local", "current", "Codex"))
     menus = []
     launches = []
-    opened = []
     overrides = OverrideStore(tmp_path / "overrides.json")
     tower = SimpleNamespace(
         session="isolated",
@@ -70,11 +69,9 @@ def test_task_quick_start_uses_current_folder_defaults_and_opens_conversation(mo
     )
     current = ProjectEntry("Sample", str(tmp_path), True)
 
-    monkeypatch.setattr(workspace_browser, "prompt_text", lambda *_: "첫 테스트 작업")
     monkeypatch.setattr(workspace_browser, "current_project_entry", lambda: current)
-    monkeypatch.setattr(workspace_browser, "_pick_agent", lambda *_a, **_k: "Codex")
-    monkeypatch.setattr(workspace_browser, "_pick_role", lambda *_a, **_k: "")
-    monkeypatch.setattr(workspace_browser, "pick_workspaces", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("current project should skip browse")))
+    monkeypatch.setattr(workspace_browser, "load_config", lambda: {"agents": {"Codex": "codex"}})
+    monkeypatch.setattr(workspace_browser, "resolve_agent_command", lambda *_: "codex")
 
     def pick(_screen, title, items, **_kwargs):
         menus.append((title, items, _kwargs.get("preamble") or []))
@@ -88,19 +85,24 @@ def test_task_quick_start_uses_current_folder_defaults_and_opens_conversation(mo
         return [SpawnResult(target, True, "started", "%42", "isolated", "4242")]
 
     monkeypatch.setattr(workspace_browser, "execute_launch_plan", launch)
-    monkeypatch.setattr(control_view, "open_control_view", lambda _screen, _tower, key: opened.append(key))
+    monkeypatch.setattr(workspace_browser, "show_message_screen", lambda *_a, **_k: None)
 
     workspace_browser.run_workspace_create(None, tower, tmp_path, multi=False, open_tree=True, task_flow=True)
 
-    assert menus[0][0] == ko.STRINGS["wizard.current_folder_title"]
-    assert any("첫 테스트 작업" in line for line in menus[-1][2])
-    assert not any(line.startswith("Host:") for line in menus[-1][2])
+    assert [menu[0] for menu in menus] == [
+        ko.STRINGS["environment.step1"],
+        ko.STRINGS["environment.step2"],
+        ko.STRINGS["environment.step3"],
+    ]
+    assert menus[1][2] == [ko.STRINGS["environment.local"]]
+    assert str(tmp_path) not in menus[1][2]
     assert launches[0].host_key == "LOCAL"
     assert launches[0].workspaces[0].path == str(tmp_path)
     assert launches[0].agents == ("Codex",)
     assert launches[0].placement == "new"
     assert launches[0].layout == "tiled"
-    assert opened == ["%42"]
+    assert overrides.get_task_name("%42", "isolated", "4242") == "Sample · Codex"
+    assert overrides.get_role("%42", "isolated", "4242") is None
 
 
 def test_agent_picker_shows_install_state_and_never_falls_back(monkeypatch):
@@ -127,7 +129,7 @@ def test_agent_picker_shows_install_state_and_never_falls_back(monkeypatch):
 def test_help_and_saved_work_explain_actions_without_internal_terms(monkeypatch):
     assert "Y 최신 결과 전체 복사" in ko.STRINGS["help.results"]
     assert "G 실제 터미널" in ko.STRINGS["help.results"]
-    assert "첫 작업" in ko.STRINGS["help.start"]
+    assert "새 작업" in ko.STRINGS["help.start"]
     assert "복사" in ko.STRINGS["help.destinations"]
 
     captured = {}
@@ -156,7 +158,7 @@ def test_settings_keep_language_choice_after_first_run_setup_is_removed(monkeypa
 def test_phone_empty_home_explains_where_to_start():
     from tmux_agent_tower.server.webui import PAGE_HTML
 
-    assert "아직 실행 중인 작업이 없습니다. PC Tower에서 작업을 시작하거나 저장된 작업을 열어주세요." in PAGE_HTML
+    assert "아직 실행 중인 작업이 없습니다. PC Tower에서 작업을 시작하거나 저장한 구성을 열어주세요." in PAGE_HTML
 
 
 def test_unknown_access_does_not_block_first_use_or_fake_destination():
