@@ -2,7 +2,41 @@
 
 **English | [한국어](README.ko.md)**
 
-See your AI work, talk to its Agent, and collect complete results from one place.
+Keep your tmux coding agents in view. Find the task that needs attention and
+start local or SSH work from one TUI.
+
+![Tmux Agent Tower showing synthetic Shell demo tasks](media/tower-readme-loop.gif)
+
+> Demo data: synthetic Shell task rows; this image does not show a live Agent
+> run or a verified Result.
+
+[Try the v0.3.0-rc2 pre-release](https://github.com/ju0o/tmux-agent-tower/releases/tag/v0.3.0-rc2) · [Install](#install)
+
+## Quick Start
+
+1. Install Tower using the instructions below.
+2. Run `tower` inside tmux.
+3. Press `+`, choose an environment if prompted, then a project and Agent.
+
+## What Tower helps you do
+
+- See work and attention across tmux panes.
+- Start tasks locally or in a configured SSH environment.
+- Result copy depends on Agent/provider evidence; in one isolated test, Tower v0.3.0-rc2 with Codex CLI 0.161.0 did not return the full native response.
+
+## Supported Agents and limitations
+
+Recognized CLIs: Codex, Claude Code, OpenCode, Grok CLI, and Cursor Agent CLI.
+Cline native full Result copy is not supported; other commands use the generic
+Shell/SSH fallback.
+
+Status detection is best-effort and can change when Agent CLIs change. Result
+copy depends on a verifiable complete turn and varies by Agent, SSH setup,
+terminal, and clipboard. Generic remote overview does not show full pane
+contents. v0.3.0-rc2 is a pre-release; see
+[`Limitations`](#limitations).
+
+[Install](#install) · [Documentation](docs/STATUS_ENGINE.md) · [Contributing](CONTRIBUTING.md) · [Report an issue](https://github.com/ju0o/tmux-agent-tower/issues)
 
 If you run Codex, Claude Code, OpenCode, Grok CLI, or Cursor Agent CLI in
 several tmux panes at once (maybe across more than one machine), it's easy
@@ -10,20 +44,6 @@ to lose track of which one is still working, which one is stuck waiting
 for your approval, and which one finished ten minutes ago. Tmux Agent
 Tower is a small, local-first TUI that lists them all in one screen and
 jumps you straight to the one that needs you.
-
-```
-TMUX AGENT TOWER       Current access: This laptop · Copy: This laptop · Auto
-
-▼ Mobile app · API update
-   ● Build       Codex
-   ! QA          Claude
-   ✓ Review      Cursor
-▶ Tower · Remote improvement
-   ● 2 working · ! 1 needs attention · ✓ 1 new result
-
-↑↓ Move  Enter Open  Space Menu  + New task  S Saved setup  L Live  C Settings
-/ Find and commands  Y Copy result  G Open terminal  Esc Back  ? Help
-```
 
 ## What it is (and isn't)
 
@@ -54,15 +74,16 @@ TMUX AGENT TOWER       Current access: This laptop · Copy: This laptop · Auto
   project, and execution location. Internal terminal identifiers are in
   the advanced terminal view.
 * Persistent conversations keep the live output and message composer on
-  one screen. Multiline prompts, per-task drafts, and complete-result copy
-  are supported.
+  one screen. Multiline prompts and per-task drafts are supported. Result
+  copy is available only when the selected Agent's provider can verify a
+  complete turn; see [Limitations](#limitations) for tested exceptions.
 * `L` opens Live directly for the selected task or Work Group. A task opens in
   focus view; a group uses its saved focus, split, grid, or main-and-side
   layout. Groups with more visible members move through pages instead of
   squeezing every task into the screen. With no task selected, choose a layout
-  and its members. `Enter` opens the selected conversation, `Y` copies that
-  task's newest complete result, `Space` opens its existing task menu, and `G`
-  focuses its terminal. PageUp/PageDown scroll output; Home returns to the
+  and its members. `Enter` opens the selected conversation, `Y` requests the newest Result
+  that Tower marks complete (see Limitations), `Space` opens its existing task menu, and
+  `G` focuses its terminal. PageUp/PageDown scroll output; Home returns to the
   latest output. Short or narrow terminals show one focused task. Remote,
   ended, or identity-changed panes never reuse old output. Live reads with
   `capture-pane` and does not change tmux layout. Focus, split, grid,
@@ -174,7 +195,7 @@ command, not another TUI, so it's safe to bind to a key.
 | `L` | Open Live; a selected Work Group opens as one view |
 | `C` | Open settings |
 | `/` | Find work, folders, screens, and Agents, or run a command |
-| `Y` | Copy the selected task's latest complete result |
+| `Y` | Request the latest result Tower marks complete; availability varies by Agent (see Limitations) |
 | `G` | Open the selected task in its real terminal |
 | `Esc` | Go back one level |
 | `?` | Show the basic help |
@@ -304,7 +325,9 @@ folder/work screen; Enter on a task opens its conversation. Windows without a
 folder appear under **Other**. Work Groups remain a separate logical Agent-team
 membership and are shown with their tasks. The physical host/window/pane view
 is available from **More → Terminal structure**. In a task conversation, `Y`
-copies the complete latest result; it never copies only the visible screen.
+requests the latest result Tower marks complete. Copy availability and
+completeness depend on the Agent provider; this is not verified for every
+Agent version. See [Limitations](#limitations).
 
 `+` starts a task with environment, project, and Agent. `N` and `W` open the
 advanced create menu for folders, Work Groups, multi-project launches, and
@@ -330,7 +353,8 @@ replaces the composer with its observed safe controls; an unknown
 interaction blocks input. Submit confirmation is based on visible
 agent-side evidence, with no blind retry.
 
-In Pane Control, `Ctrl+Y` copies the complete latest result, `Ctrl+S` shows it,
+In Pane Control, `Ctrl+Y` requests a copy of the latest result Tower marks
+complete, `Ctrl+S` shows it,
 `Ctrl+E` edits the display name, `Ctrl+G` moves to the pane, and `Ctrl+X`
 asks before closing that pane. Cancel is the default. Tower's own pane
 cannot be closed there. `Ctrl+b w` still comes back. Tower does not guess
@@ -471,6 +495,16 @@ whether you've opened that pane from the Tower before, shown as a small
 * Status detection is pattern-based against each CLI's *current* terminal
   UI. It will drift out of date as those tools change; PRs updating a
   pattern (with a sanitized fixture) are welcome.
+* Cline CLI is shown through the generic Shell/SSH fallback. Native Cline
+  transcript extraction and complete Result copy are not supported.
+* Some agents do not expose a reliable completion boundary. In one isolated
+  test of Tower v0.3.0-rc2 with Codex CLI 0.161.0, both short and long Result
+  payloads differed from their native responses, and the long candidate was
+  marked complete despite containing only a suffix. Avoid Ctrl+Y in this tested
+  setup until a maintenance fix is available. Other Codex versions and
+  configurations were not tested.
+* SSH execution and clipboard delivery depend on the host, terminal, and
+  clipboard combination. Not every combination has been verified.
 * The remote/multi-host view only sees pane titles, not full content (a
   deliberate simplification to avoid installing anything remotely -- see
   `docs/ARCHITECTURE.md`), so remote status is coarser than local.
@@ -480,6 +514,7 @@ whether you've opened that pane from the Tower before, shown as a small
   are looking at makes it current.
 * Linux/WSL + tmux is the tested target. macOS should mostly work (same
   Python + tmux + curses stack) but hasn't been verified here.
+* v0.3.0-rc2 is a pre-release, not a stable release.
 
 ## Uninstall
 
