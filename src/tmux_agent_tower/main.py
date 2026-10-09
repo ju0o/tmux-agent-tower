@@ -308,6 +308,12 @@ def cli(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="tower", description="A local-first TUI control tower for monitoring coding agents across tmux panes.")
     parser.add_argument("--version", action="store_true", help="print version and exit")
     parser.add_argument("--doctor", action="store_true", help="run environment diagnostics and exit")
+    update_group = parser.add_mutually_exclusive_group()
+    update_group.add_argument("--check-update", action="store_true", help="check the official GitHub Release for an update")
+    update_group.add_argument("--update", action="store_true", help="review and apply an official Release update")
+    update_group.add_argument("--migrate-update", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--dry-run", action="store_true", help="show an update plan without changing files")
+    parser.add_argument("--channel", choices=("auto", "stable", "rc"), default="auto", help="Release channel (default: follow the installed version track)")
     parser.add_argument(
         "--here",
         action="store_true",
@@ -357,6 +363,28 @@ def cli(argv=None) -> None:
     connect_internal.add_argument("--_resolve-session", nargs="?", const="", metavar="SESSION", help=argparse.SUPPRESS)
 
     args = parser.parse_args(argv)
+    update_action = args.check_update or args.update or args.migrate_update
+    if args.dry_run and not (args.update or args.migrate_update):
+        parser.error("--dry-run requires --update or the migration command")
+    if args.channel != "auto" and not update_action:
+        parser.error("--channel requires an update command")
+    if update_action and (args.version or args.doctor or args.here or args.focus or args.has_active or args.command):
+        parser.error("update commands cannot be combined with other Tower commands")
+    if update_action:
+        from .update_manager import run_cli
+
+        action = "check" if args.check_update else "update"
+        raise SystemExit(
+            run_cli(
+                action,
+                current_facts=runtime_facts(),
+                requested_channel=args.channel,
+                dry_run=args.dry_run,
+                bootstrap=args.migrate_update,
+                argv0=sys.argv[0],
+            )
+        )
+
     if args.command == "connect":
         from .connect import connect, register_from_stdin, resolve_active_tower_session
 

@@ -384,6 +384,13 @@ Runs a quick environment check (tmux/Python/curses availability, whether
 you're inside tmux, configured remote hosts) and prints PASS/WARN/FAIL per
 check.
 
+### Checking and applying updates
+
+Tower checks for updates only when asked. Run `tower --check-update` to compare
+the installed runtime with the official Release channel, or
+`tower --update --dry-run` to preview a safe update. See [`docs/UPDATING.md`](docs/UPDATING.md)
+for channel selection, confirmation, migration, and rollback behavior.
+
 ### A second host
 
 Use **Settings → Connections → Execution environments → Add SSH environment**

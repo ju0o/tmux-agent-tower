@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add explicit official Release checks and a confirmed, rollback-capable CLI
+  updater for clean managed installs; startup remains network-free.
+
 ## v0.3.0-rc2
 
 - Grok remote Result uses exact SSH session binding and a complete native export.
