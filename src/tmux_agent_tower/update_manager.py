@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -430,10 +431,15 @@ def classify_installation(path_info: dict, *, invoked_from_path: bool = True) ->
             marker = json.loads(marker_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
             marker = {}
+        if not isinstance(marker, dict):
+            marker = {}
         if (
             _inside(Path(source), site_path)
             and marker.get("version") == version
-            and marker.get("launcher_path") == str(executable)
+            and (
+                marker.get("launcher_path") == str(executable)
+                or _launcher_registered(site_path.parent, executable, marker)
+            )
             and _SHA_RE.fullmatch(str(marker.get("commit_sha", "")))
         ):
             return InstallInfo(True, "update-manager", "", executable, python, source, version, site_path.parent)
@@ -472,6 +478,87 @@ def classify_installation(path_info: dict, *, invoked_from_path: bool = True) ->
     else:
         return InstallInfo(False, "unmanaged", "Editable install does not use the supported user or installer-fallback venv launcher.", executable, python, source, version, source_root)
     return InstallInfo(True, kind, "", executable, python, source, version, source_root)
+
+
+def _launcher_registration_path(release_dir: Path, launcher: Path) -> Path:
+    identity = os.path.abspath(str(launcher))
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return release_dir / "launchers" / f"{digest}.json"
+
+
+def _launcher_registered(release_dir: Path, launcher: Path, release: dict) -> bool:
+    identity = os.path.abspath(str(launcher))
+    directory = release_dir / "launchers"
+    record = _launcher_registration_path(release_dir, launcher)
+    try:
+        directory_info = directory.lstat()
+        record_info = record.lstat()
+        if (
+            not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_uid != os.getuid()
+            or directory_info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or not stat.S_ISREG(record_info.st_mode)
+            or record_info.st_uid != os.getuid()
+            or record_info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            return False
+        data = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return (
+        data.get("schema_version") == 1
+        and data.get("launcher_path") == identity
+        and data.get("version") == release.get("version")
+        and data.get("commit_sha") == release.get("commit_sha")
+    )
+
+
+def _register_launcher(release_dir: Path, launcher: Path, release: Release) -> None:
+    directory = release_dir / "launchers"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    directory_info = directory.lstat()
+    if (
+        not stat.S_ISDIR(directory_info.st_mode)
+        or directory_info.st_uid != os.getuid()
+        or directory_info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise UpdateError("UNSAFE_UPDATE_DIRECTORY", "The release launcher registry is not a private user-owned directory.")
+    target = _launcher_registration_path(release_dir, launcher)
+    identity = os.path.abspath(str(launcher))
+    payload = {
+        "schema_version": 1,
+        "launcher_path": identity,
+        "version": release.package_version,
+        "commit_sha": release.commit_sha,
+    }
+    fd, temporary_name = tempfile.mkstemp(prefix=".launcher-", dir=directory)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write(json.dumps(payload, sort_keys=True) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            if not _launcher_registered(release_dir, launcher, payload):
+                raise UpdateError("LAUNCHER_IDENTITY_COLLISION", "An existing launcher registration does not match this path and Release.")
+        directory_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except UpdateError:
+        raise
+    except OSError as exc:
+        raise UpdateError("LAUNCHER_REGISTRATION", "Could not safely register this launcher for the verified Release.") from exc
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def data_root() -> Path:
@@ -737,6 +824,8 @@ def apply_update(
         except BaseException:
             shutil.rmtree(stage, ignore_errors=True)
             raise
+
+    _register_launcher(final_dir, launcher, release)
 
     store_backups = store / "backups"
     store_backups.mkdir(mode=0o700, parents=True, exist_ok=True)

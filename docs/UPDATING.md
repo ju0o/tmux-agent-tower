@@ -40,6 +40,10 @@ processes are not changed. Restart Tower yourself to use the new version.
 Previous version directories and launcher backups are retained for rollback and
 are not automatically pruned.
 
+If multiple supported launchers reuse one verified version directory, each
+launcher receives its own private path-bound registration. A launcher is not
+treated as managed merely because another launcher uses the same package copy.
+
 Ctrl-C during launcher activation restores the previous launcher. A forced
 process kill or power loss cannot run rollback; the new launcher is checked
 before the atomic switch, and the previous launcher backup remains available.

@@ -278,6 +278,139 @@ def _prepared_apply(tmp_path, monkeypatch):
     return launcher, installation
 
 
+def _isolated_launcher(home, name, *, kind):
+    source_root = home / name
+    package = source_root / "src" / "tmux_agent_tower"
+    package.mkdir(parents=True)
+    source_root.chmod(0o755)
+    (source_root / "src").chmod(0o755)
+    (package / "__init__.py").write_text("__version__ = '0.3.0rc2'\n")
+    (package / "main.py").write_text(
+        "from . import __version__\n"
+        "def cli():\n"
+        "    print('tower ' + __version__)\n"
+    )
+    if kind == "user":
+        user_base = home / ".local"
+        prefix = base_prefix = sys.prefix
+        launcher_dir = user_base / "bin"
+    else:
+        user_base = home / ".local"
+        prefix, base_prefix = source_root / ".venv", home / "python-base"
+        launcher_dir = prefix / "bin"
+    launcher_dir.mkdir(parents=True)
+    launcher_dir.parent.chmod(0o755)
+    launcher_dir.chmod(0o755)
+    launcher = launcher_dir / "tower"
+    launcher.write_text(
+        f"#!{sys.executable}\n"
+        f"import sys; sys.path.insert(0, {str(source_root / 'src')!r})\n"
+        "from tmux_agent_tower.main import cli\ncli()\n"
+    )
+    launcher.chmod(0o755)
+    return launcher, {
+        "executable": str(launcher),
+        "python": sys.executable,
+        "source": str(package / "__init__.py"),
+        "version": "0.3.0rc2",
+        "direct_url": json.dumps({"url": source_root.as_uri(), "dir_info": {"editable": True}}),
+        "prefix": str(prefix),
+        "base_prefix": str(base_prefix),
+        "user_base": str(user_base),
+        "managed_site": "",
+    }
+
+
+def _install_version_fixture(site_dir, version):
+    package = site_dir / "tmux_agent_tower"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(f"__version__ = {version!r}\n")
+    (package / "main.py").write_text(
+        "from . import __version__\n"
+        "def cli():\n"
+        "    print('tower ' + __version__)\n"
+    )
+    dist = site_dir / f"tmux_agent_tower-{version}.dist-info"
+    dist.mkdir()
+    (dist / "METADATA").write_text(f"Name: tmux-agent-tower\nVersion: {version}\n")
+    (dist / "direct_url.json").write_text("{}\n")
+
+
+def test_two_supported_launchers_reuse_sidecar_and_plan_next_update(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+    first, first_info = _isolated_launcher(home, "user-install", kind="user")
+    second, second_info = _isolated_launcher(home, "venv-install", kind="venv")
+    data = home / ".local" / "share" / "tower"
+    release = _release_for_apply()
+    downloads, installs = [], []
+
+    monkeypatch.setattr(updates, "_official_checkout", lambda _root: True)
+    monkeypatch.setattr(updates, "_checkout_dirty", lambda _root: False)
+    monkeypatch.setattr(updates.os, "geteuid", lambda: 1000)
+
+    def download(_sha, path):
+        downloads.append(path.write_bytes(b"release fixture"))
+
+    def install(_archive, site, _python):
+        installs.append(site)
+        _install_version_fixture(site, release.package_version)
+
+    def apply(info):
+        installation = updates.classify_installation(info)
+        assert installation.managed
+        updates.apply_update(
+            release,
+            installation,
+            root=data,
+            download_archive=download,
+            install_archive=install,
+        )
+
+    apply(first_info)
+    monkeypatch.setenv("PATH", str(first.parent))
+    first_path = updates.inspect_path_tower()
+    assert subprocess.run(["tower", "--version"], capture_output=True, text=True, check=True).stdout.strip() == "tower 0.4.0"
+    assert updates.classify_installation(first_path).managed
+
+    apply(second_info)
+    monkeypatch.setenv("PATH", str(second.parent))
+    second_path = updates.inspect_path_tower()
+    assert subprocess.run(["tower", "--version"], capture_output=True, text=True, check=True).stdout.strip() == "tower 0.4.0"
+    assert updates.classify_installation(first_path).managed
+    assert updates.classify_installation(second_path).managed
+    version_dir = data / "versions" / f"{release.package_version}-{release.commit_sha[:12]}"
+    assert len(list((version_dir / "launchers").glob("*.json"))) == 2
+    assert downloads == [len(b"release fixture")] and len(installs) == 1
+
+    next_release = updates.Release("v0.5.0", "0.5.0", False, (0, 5, 0, 1, 0), SHA_STABLE)
+    monkeypatch.setattr(updates, "data_root", lambda: data)
+    monkeypatch.setattr(updates, "check_for_updates", lambda *_args, **_kwargs: updates.UpdateStatus(
+        updates.parse_version("0.4.0"), "stable", next_release, True, ()
+    ))
+    for launcher, info in ((first, first_path), (second, second_path)):
+        monkeypatch.setenv("PATH", str(launcher.parent))
+        output = __import__("io").StringIO()
+        code = updates.run_cli(
+            "update",
+            current_facts={"version": info["version"], "source": info["source"], "python": info["python"], "mismatch": False},
+            argv0=str(launcher),
+            dry_run=True,
+            output=output,
+        )
+        assert code == 0 and "0.5.0" in output.getvalue()
+
+    relocated_dir = home / "relocated-bin"
+    relocated_dir.mkdir(mode=0o755)
+    relocated = relocated_dir / "tower"
+    relocated.write_bytes(second.read_bytes())
+    relocated.chmod(0o755)
+    relocated_info = updates.inspect_path_tower(str(relocated))
+    assert not updates.classify_installation(relocated_info).managed
+
+
 def test_apply_installs_sidecar_then_atomically_switches_launcher(tmp_path, monkeypatch):
     launcher, installation = _prepared_apply(tmp_path, monkeypatch)
     old_text = launcher.read_text()
