@@ -427,6 +427,13 @@ Agent 단계에서는 Harness 전체를 미리 보여주고, 사용자가 pane�
 환경을 빠르게 점검합니다(tmux/Python/curses 사용 가능 여부, tmux 안에서
 실행 중인지, 설정된 원격 호스트 등)와 항목별 결과를 출력합니다.
 
+### 업데이트 확인 및 적용
+
+Tower는 요청했을 때만 업데이트를 확인합니다. `tower --check-update`로
+실제 실행 버전과 공식 Release 채널을 비교하고, `tower --update --dry-run`으로
+변경 계획을 미리 볼 수 있습니다. 채널 선택, 확인 절차, 이전 설치 전환과
+롤백은 [`docs/UPDATING.md`](docs/UPDATING.md)를 참고하세요.
+
 ### 두 번째 호스트
 
 **설정 → 연결 → 실행 환경**에서 **SSH 환경 추가**를 고릅니다. 환경 이름과
