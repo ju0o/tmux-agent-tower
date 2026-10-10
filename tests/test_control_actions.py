@@ -2,6 +2,8 @@
 
 import inspect
 
+import pytest
+
 from tmux_agent_tower.control import actions
 from tmux_agent_tower.server import httpapi
 from tmux_agent_tower.ui import control_view, tower as tower_module
@@ -44,6 +46,57 @@ def test_enter_opens_control_and_does_not_focus(tmp_path, monkeypatch):
     assert moved == []
 
 
+def test_selected_pane_diagnostics_show_metadata_without_result_text(monkeypatch):
+    from types import SimpleNamespace
+
+    row = {
+        "key": "%44", "pane_id": "%44", "pane_pid": "4400", "session": "isolated",
+        "tmux_host": "test-host", "execution_host": "test-host", "transport": "local",
+        "auto_detected_agent": "Codex", "result_adapter": "Codex",
+        "result_provider_type": "local_tmux", "result_state": "none",
+    }
+    diagnostic = {
+        "pane_key": "%44", "pane_id": "%44", "pane_pid": "4400", "session": "isolated",
+        "stage": "not_entered", "outcome": "blocked", "provider_type": "local_tmux",
+        "result_state": "none", "turn_complete": True, "body_complete": False,
+        "reason_code": "SOURCE_PARTIAL",
+    }
+    tower = SimpleNamespace(
+        rows=[row], last_result_copy_diagnostic=diagnostic,
+        results=SimpleNamespace(observe=lambda *_a, **_k: pytest.fail("diagnostics mutated ResultTracker")),
+        load=lambda: pytest.fail("diagnostics must not refresh or mutate Tower state"),
+    )
+    row_before = dict(row)
+    diagnostic_before = dict(diagnostic)
+    monkeypatch.setattr(
+        control_view, "get_result",
+        lambda *_args, **_kwargs: pytest.fail("diagnostics must not extract a Result"),
+    )
+
+    lines = control_view.pane_diagnostic_lines(tower, row)
+
+    rendered = "\n".join(lines)
+    assert "%44" in rendered and "4400" in rendered
+    assert "Codex" in rendered and "local_tmux" in rendered
+    assert "SOURCE_PARTIAL" in rendered
+    assert "PRIVATE ANSWER BODY" not in rendered
+    assert "not_entered / blocked" in rendered
+    assert row == row_before
+    assert tower.last_result_copy_diagnostic == diagnostic_before
+
+
+def test_selected_pane_diagnostics_refuse_reused_pane_identity(monkeypatch):
+    from types import SimpleNamespace
+
+    selected = {"key": "%44", "pane_id": "%44", "pane_pid": "old-pid", "session": "isolated"}
+    tower = SimpleNamespace(
+        rows=[{**selected, "pane_pid": "new-pid"}],
+        load=lambda: None,
+    )
+    monkeypatch.setattr(control_view, "get_result", lambda *_a, **_k: pytest.fail("stale pane read"))
+
+    assert control_view.pane_diagnostic_lines(tower, selected) == [control_view.t("diagnostics.stale")]
+
 def test_g_focuses_the_exact_pane_id(monkeypatch):
     calls = []
 
@@ -82,9 +135,31 @@ def test_live_capture_checks_expected_identity_before_and_after_read(monkeypatch
 
     assert ok and reason == ""
     assert payload["lines"] == ["fixture output"]
-    assert captured == [("%44", actions.MAX_SCREEN_LINES)]
+    assert captured == [("%44", actions.MAX_SCREEN_LINES + 1)]
     assert len([call for call in calls if call[0] == "list-panes"]) == 3
     assert all(call[0] in {"list-panes"} for call in calls)
+
+
+def test_screen_capture_marks_earlier_output_as_omitted(monkeypatch):
+    monkeypatch.setattr(
+        actions.tmux_capture,
+        "run_tmux",
+        lambda args, capture=True, timeout=3.0: "%44" if args[-1] == "#{pane_id}" else "%44\t123\t0",
+    )
+    monkeypatch.setattr(actions.tmux_capture, "pane_exists", lambda _pane_id: True)
+    captured = []
+    monkeypatch.setattr(
+        actions.tmux_capture,
+        "capture_pane",
+        lambda pane_id, lines: captured.append((pane_id, lines)) or [f"line {i}" for i in range(lines)],
+    )
+
+    ok, reason, payload = actions.get_pane_screen("isolated", "%44", expected_pane_pid="123")
+
+    assert ok and reason == ""
+    assert captured == [("%44", actions.MAX_SCREEN_LINES + 1)]
+    assert len(payload["lines"]) == actions.MAX_SCREEN_LINES
+    assert payload["truncated"] is True
 
 
 def test_live_capture_rejects_a_reused_or_dead_pane_before_capture(monkeypatch):

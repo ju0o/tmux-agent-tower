@@ -401,6 +401,7 @@ def open_pane_menu(stdscr, tower, row: dict) -> str:
             ("terminal", t("nav.terminal_structure")),
             ("prompt", t("struct.act_prompt")),
             ("screen_copy", t("nav.copy_screen")),
+            ("diagnostics", t("nav.diagnostics")),
         ]
         if local:
             more_items.extend([
@@ -431,8 +432,15 @@ def open_pane_menu(stdscr, tower, row: dict) -> str:
         elif action == "screen_copy":
             from .control_view import _copy_screen
 
-            message = _copy_screen(tower, row.get("key"), stdscr)
+            message = _copy_screen(
+                tower, row.get("key"), stdscr,
+                expected_pane_pid=str(row.get("pane_pid") or ""),
+            )
             show_message_screen(stdscr, t("nav.copy_screen"), [message or t("control.no_screen")])
+        elif action == "diagnostics":
+            from .control_view import pane_diagnostic_lines
+
+            show_message_screen(stdscr, t("diagnostics.title"), pane_diagnostic_lines(tower, row))
         elif action == "physical":
             move_pane_physical(stdscr, tower, row)
         elif action == "close":

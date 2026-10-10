@@ -344,8 +344,10 @@ a visible turn boundary is partial, even when its body is long; Y recovers
 bounded history and refuses to route text unless the adapter can identify
 the complete turn. User prompts, prior turns, tool rows, and UI chrome are
 excluded by the adapter. If completeness cannot be established, the UI says
-"최신 결과 전체를 찾지 못했습니다" and writes nothing. Current live
-screen copy is separate: open details, press `Ctrl+I`, then `Ctrl+L`.
+"최신 결과 전체를 찾지 못했습니다" and writes nothing. Recent terminal
+output copy is separate: open details, press `Ctrl+I`, then `Ctrl+L`. It copies
+up to the last 60 captured lines and reports when earlier output was omitted;
+it does not claim to be a complete Agent Result.
 
 Configured remote tmux hosts are read-only `remote_tmux` result providers.
 Each target is identified by provider endpoint, tmux session ID, pane ID, and
@@ -376,6 +378,21 @@ One Y writes one primary destination. The notice names that destination and
 confirms a complete result.
 A Codex trust chooser appearing after the last `Worked for` marker
 invalidates that older screen candidate; recovery returns no new Result.
+Codex completion markers inside fenced or indented Markdown code are ignored,
+and an elapsed-time line must be followed by the exact idle prompt. An earlier
+turn boundary also requires Codex model and shortcut status chrome before the
+next prompt. Unknown status text between a prior completion and a later prompt
+is ambiguous too; it cannot be treated as harmless UI. A prompt-shaped line
+without that structure cannot reset the turn. A result without an unambiguous
+current user-turn start remains incomplete, including a capture that may begin inside
+code. History is bounded to 800 lines and 256 KiB;
+`OUTPUT_RANGE_EXCEEDED` is used only when capture or that bound proves rows
+were discarded. Other uncertain boundaries report an incomplete/unknown
+reason. Remote provider failures preserve their distinct reason codes.
+The pane menu's Diagnostics view reads the current row and in-memory copy
+metadata only; it does not extract a Result or update ResultTracker/SQLite.
+It shows provider, completeness, failure, and clipboard-stage metadata without
+showing prompt or Result text.
 The TUI and Phone Remote share ready/read metadata in the local SQLite
 store; only a current pane extraction can supply the body after restart.
 The stored fields and stale-pane rules are documented in
