@@ -85,6 +85,266 @@ def test_codex_result_drops_the_tool_diff_and_keeps_a_code_block():
     assert "print('tower')" in result.text
 
 
+def test_codex_completion_words_inside_fences_do_not_truncate_2751_byte_answer():
+    prefix = ["```text", *(["A" * 29] * 65), "B" * 80, "Worked for 5s", "Worked for 6s"]
+    suffix = ["```", *(["C" * 29] * 21), "D" * 50]
+    body = prefix + suffix
+    body_text = "\n".join(body)
+    assert len(body) == 92
+    assert len(body_text.encode("utf-8")) == 2751
+    assert len("\n".join(suffix).encode("utf-8")) == 684
+
+    history = ["› synthetic request", *body, "Worked for 1s", "› Ask Codex to do anything"]
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is not None and candidate.complete
+    assert candidate.body_complete is True and candidate.turn_complete is True
+    assert candidate.text == body_text
+
+
+def test_codex_result_without_a_start_boundary_stays_partial():
+    history = ["visible suffix only", "Worked for 1s", "› Ask Codex to do anything"]
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is not None
+    assert candidate.turn_complete is True
+    assert candidate.body_complete is False
+    assert candidate.complete is False
+
+
+def test_codex_indented_worked_for_line_stays_in_complete_answer():
+    history = [
+        "› synthetic request",
+        "    Worked for 5s",
+        "actual answer",
+        "Worked for 1s",
+        "› Ask Codex to do anything",
+    ]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is not None and candidate.complete
+    assert candidate.text == "    Worked for 5s\nactual answer"
+
+
+def test_codex_capture_starting_inside_code_fails_closed_without_turn_start():
+    history = [
+        "    code continuation",
+        "Worked for 5s",
+        "more code continuation",
+        "```",
+        "another code block",
+        "```",
+        "actual answer",
+        "Worked for 1s",
+        "› Ask Codex to do anything",
+    ]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is None or not candidate.complete
+
+
+def test_codex_fenced_worked_for_and_prompt_text_stay_inside_the_answer():
+    history = [
+        "› synthetic request",
+        "```text",
+        "Worked for 5s",
+        "› Ask Codex to do anything",
+        "actual code continuation",
+        "```",
+        "actual answer",
+        "Worked for 1s",
+        "› Ask Codex to do anything",
+    ]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is not None and candidate.complete
+    assert candidate.text == "\n".join(history[1:6] + ["actual answer"])
+
+
+def test_codex_terminal_example_prompt_is_not_a_completion_or_turn_start():
+    body = [
+        "답변 첫 문단 - 반드시 포함되어야 함",
+        "예시 CLI 로그:",
+        "Worked for 5s",
+        "› example next command",
+        "예시 로그 아래의 설명",
+        "정상적인 답변 마지막 문단",
+    ]
+    history = ["› 실제 사용자 요청", *body, "Worked for 1s", "› Ask Codex to do anything"]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is not None and candidate.complete
+    assert candidate.text == "\n".join(body)
+
+
+def test_codex_mid_answer_capture_with_example_prompt_stays_partial():
+    history = [
+        "예시 CLI 로그:",
+        "Worked for 5s",
+        "› example next command",
+        "예시 로그 아래의 설명",
+        "정상적인 답변 마지막 문단",
+        "Worked for 1s",
+        "› Ask Codex to do anything",
+    ]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is None or candidate.complete is False
+
+
+def test_codex_exact_footer_example_is_ambiguous_and_stays_partial():
+    history = [
+        "› actual user request",
+        "Answer before the terminal example.",
+        "Worked for 5s",
+        "› Ask Codex to do anything",
+        "› example next command",
+        "Answer after the terminal example.",
+        "Worked for 1s",
+        "› Ask Codex to do anything",
+    ]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is not None
+    assert candidate.complete is False
+    assert candidate.body_complete is False
+
+
+def test_codex_unknown_status_after_prior_completion_is_ambiguous():
+    history = [
+        "› first user question",
+        "FIRST TURN ANSWER",
+        "Worked for 5s",
+        "› Ask Codex to do anything",
+        "Updated status: context 62%",
+        "› second user question",
+        "SECOND TURN ANSWER",
+        "Worked for 1s",
+        "› Ask Codex to do anything",
+    ]
+
+    candidate = CodexAdapter().extract_result(PaneContext("", "codex", tuple(history)))
+
+    assert candidate is not None
+    assert candidate.complete is False
+    assert candidate.body_complete is False
+
+
+def test_get_result_rejects_reused_local_pane_before_recovery(monkeypatch):
+    from tmux_agent_tower.control.actions import get_result
+
+    tower = _RecoverTower()
+    tower.rows[0].update({"pane_id": "%9", "pane_pid": "current-pid"})
+    monkeypatch.setattr(
+        "tmux_agent_tower.control.actions._pane_matches_live_identity",
+        lambda *_args: False,
+    )
+    monkeypatch.setattr(
+        "tmux_agent_tower.control.actions._recover_result",
+        lambda *_args, **_kwargs: pytest.fail("reused pane must not reach result recovery"),
+    )
+
+    ok, reason, payload = get_result(tower, "%9", expected_pane_pid="current-pid")
+
+    assert not ok and reason == "stale"
+    assert payload["reason_code"] == "UNKNOWN"
+
+
+def test_get_result_rejects_local_pane_without_expected_pid(monkeypatch):
+    from tmux_agent_tower.control.actions import get_result
+
+    tower = _RecoverTower()
+    tower.rows[0].update({"pane_id": "%9", "pane_pid": ""})
+    monkeypatch.setattr(
+        "tmux_agent_tower.control.actions._pane_matches_live_identity",
+        lambda *_args: pytest.fail("PID-less pane must fail before identity lookup"),
+    )
+    monkeypatch.setattr(
+        "tmux_agent_tower.control.actions._recover_result",
+        lambda *_args, **_kwargs: pytest.fail("PID-less pane must not reach result recovery"),
+    )
+
+    ok, reason, payload = get_result(tower, "%9", expected_pane_pid="")
+
+    assert not ok and reason == "stale"
+    assert payload["reason_code"] == "UNKNOWN"
+
+
+def test_get_result_rechecks_local_pid_after_capture(monkeypatch):
+    from tmux_agent_tower.control.actions import get_result
+
+    tower = _RecoverTower()
+    tower.rows[0].update({"pane_id": "%9", "pane_pid": "1234"})
+    _patch_history(monkeypatch, tower, [
+        "› user request", "complete answer", "Worked for 1s", "› Ask Codex to do anything",
+    ])
+    checks = iter((True, True, False))
+    monkeypatch.setattr(
+        "tmux_agent_tower.control.actions._pane_matches_live_identity",
+        lambda *_args: next(checks),
+    )
+
+    ok, _reason, payload = get_result(tower, "%9", expected_pane_pid="1234")
+
+    assert ok and payload["complete"] is False
+    assert payload["reason_code"] == "UNKNOWN"
+
+
+def test_result_recovery_reports_when_history_byte_range_was_exceeded(monkeypatch):
+    from tmux_agent_tower.control.actions import get_result
+
+    tower = _RecoverTower()
+    _patch_history(monkeypatch, tower, ["partial answer", "Worked for 1s", "› Ask Codex to do anything"])
+    monkeypatch.setattr("tmux_agent_tower.control.actions.RECOVERY_BYTES", 1)
+
+    ok, _reason, payload = get_result(tower, "%9")
+
+    assert ok and payload["complete"] is False
+    assert payload["reason_code"] == "OUTPUT_RANGE_EXCEEDED"
+
+
+def test_recovery_range_reason_requires_actual_truncation():
+    from tmux_agent_tower.control.actions import (
+        RECOVERY_BYTES, RECOVERY_LINES, _bounded_history_with_truncation,
+    )
+
+    exact_lines, exact_lines_truncated = _bounded_history_with_truncation(["x"] * RECOVERY_LINES)
+    over_lines, over_lines_truncated = _bounded_history_with_truncation(["x"] * (RECOVERY_LINES + 1))
+    exact_bytes, exact_bytes_truncated = _bounded_history_with_truncation(["x" * RECOVERY_BYTES])
+    over_bytes, over_bytes_truncated = _bounded_history_with_truncation(["x" * (RECOVERY_BYTES + 1)])
+
+    assert len(exact_lines) == RECOVERY_LINES and not exact_lines_truncated
+    assert len(over_lines) == RECOVERY_LINES and over_lines_truncated
+    assert exact_bytes == ["x" * RECOVERY_BYTES] and not exact_bytes_truncated
+    assert over_bytes == [] and over_bytes_truncated
+
+
+@pytest.mark.parametrize(
+    ("history_size", "expected_reason"),
+    [(800, "UNKNOWN"), (801, "OUTPUT_RANGE_EXCEEDED")],
+)
+def test_recovery_range_reason_uses_history_size_evidence(monkeypatch, history_size, expected_reason):
+    from tmux_agent_tower.control.actions import get_result
+
+    tower = _RecoverTower()
+    _patch_history(monkeypatch, tower, ["unrecognized idle output"] * 800)
+    monkeypatch.setattr(
+        "tmux_agent_tower.control.actions.tmux_capture.pane_history_position",
+        lambda _pane: (history_size, 2000),
+    )
+
+    ok, _reason, payload = get_result(tower, "%9")
+
+    assert ok and not payload["complete"]
+    assert payload["reason_code"] == expected_reason
+
+
 def test_codex_prose_worked_for_is_not_a_turn_boundary():
     body = [
         "START_MARKER",
@@ -691,6 +951,9 @@ def test_newest_turn_is_the_only_recovered_body():
         "› Done",
         "older answer that must stay in history",
         "Worked for 10s",
+        "› Ask Codex to do anything",
+        "GPT-6-Luna medium · local project · Previous task",
+        "← for agents · ? for shortcuts",
         "› next question",
         "한글 최종 답변입니다.",
         "```python",
@@ -726,6 +989,9 @@ def test_an_old_working_line_does_not_hide_a_finished_turn():
         "› first",
         "older answer that must stay in history",
         "Worked for 10s",
+        "› Ask Codex to do anything",
+        "GPT-6-Luna medium · local project · Previous task",
+        "← for agents · ? for shortcuts",
         "› second",
         "second turn answer is this paragraph",
         "Worked for 2s",
@@ -1078,7 +1344,12 @@ def test_empty_tracker_recovers_a_visible_final_and_a_buried_one(monkeypatch):
     assert tower.captures == [RECOVERY_LINES]
 
     buried = ["noise"] * 40
-    buried += ["› question", "buried final answer here", "Worked for 4s", "› Ask Codex to do anything"]
+    buried += [
+        "Worked for 2s", "› Ask Codex to do anything",
+        "GPT-6-Luna medium · local project · Previous task",
+        "← for agents · ? for shortcuts", "› question",
+        "buried final answer here", "Worked for 4s", "› Ask Codex to do anything",
+    ]
     tower = _RecoverTower()
     _patch_history(monkeypatch, tower, buried)
     ok, _reason, payload = get_result(tower, "%9")
@@ -1465,6 +1736,9 @@ def test_y_copies_the_newest_turn_not_a_stored_fragment_or_a_working_screen(monk
         "› first question",
         "Result A stays in history only.",
         "Worked for 10s",
+        "› Ask Codex to do anything",
+        "GPT-6-Luna medium · local project · Previous task",
+        "← for agents · ? for shortcuts",
         "› second question",
         "Result B is the finished answer.",
         "```python",
@@ -1489,6 +1763,61 @@ def test_y_copies_the_newest_turn_not_a_stored_fragment_or_a_working_screen(monk
     _patch_history(monkeypatch, tower, working)
     ok, _reason, payload = get_result(tower, "%9")
     assert ok
+    assert payload["text"] == ""
+
+
+@pytest.mark.parametrize("overflow", ["lines", "bytes"])
+def test_codex_range_truncation_does_not_promote_example_tail_to_complete(monkeypatch, overflow):
+    from tmux_agent_tower.control.actions import RECOVERY_BYTES, RECOVERY_LINES, get_result
+
+    if overflow == "lines":
+        history = ["› actual user request", "required answer beginning"]
+        history += ["filler"] * (RECOVERY_LINES - 6)
+        history += [
+            "Worked for 5s", "› example next command", "required answer ending",
+            "Worked for 1s", "› Ask Codex to do anything",
+        ]
+        assert len(history) == RECOVERY_LINES + 1
+    else:
+        history = [
+            "› actual user request", "x" * RECOVERY_BYTES, "Worked for 5s",
+            "› example next command", "required answer ending", "Worked for 1s",
+            "› Ask Codex to do anything",
+        ]
+
+    tower = _RecoverTower()
+    _patch_history(monkeypatch, tower, history)
+
+    ok, _reason, payload = get_result(tower, "%9")
+
+    assert ok and payload["complete"] is False
+    assert payload["reason_code"] == "OUTPUT_RANGE_EXCEEDED"
+    assert payload["text"] == ""
+
+
+def test_get_result_rejects_unknown_status_between_codex_turns(monkeypatch):
+    from tmux_agent_tower.control.actions import get_result
+
+    history = [
+        "› first user question",
+        "FIRST TURN ANSWER",
+        "Worked for 5s",
+        "› Ask Codex to do anything",
+        "Updated status: context 62%",
+        "› second user question",
+        "SECOND TURN ANSWER",
+        "Worked for 1s",
+        "› Ask Codex to do anything",
+    ]
+    tower = _RecoverTower()
+    _patch_history(monkeypatch, tower, history)
+
+    ok, _reason, payload = get_result(tower, "%9")
+
+    assert ok
+    assert payload["complete"] is False
+    assert payload["body_complete"] is False
+    assert payload["reason_code"] == "SOURCE_PARTIAL"
     assert payload["text"] == ""
 
 

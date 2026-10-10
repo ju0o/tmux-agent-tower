@@ -26,6 +26,7 @@ from ..control.actions import (
     close_notice_lines,
     close_pane,
     focus_pane,
+    find_row,
     get_pane_screen,
     get_result,
     respond_attention,
@@ -137,7 +138,10 @@ def open_control_view(stdscr, tower, pane_key: str, *, show_result_on_open: bool
                 notice, show_result = _show_result(tower, pane_key)
                 continue
             if show_advanced and _control_shortcut(key, "l"):
-                notice = _copy_screen(tower, pane_key, stdscr)
+                notice = _copy_screen(
+                    tower, pane_key, stdscr,
+                    expected_pane_pid=str(row.get("pane_pid") or ""),
+                )
                 continue
             if _control_shortcut(key, "e"):
                 _select(tower, pane_key)
@@ -439,7 +443,7 @@ def _draw_actions(stdscr, y: int, row: dict, show_advanced: bool = False) -> Non
     if row.get("reject_known") and not _unknown_interaction(row.get("interaction") or {}):
         items.append("Ctrl+N 거절")
     if show_advanced:
-        items.extend(["Ctrl+L 현재 화면 복사", "Ctrl+I 간단히"])
+        items.extend(["Ctrl+L 최근 터미널 출력 복사", "Ctrl+I 간단히"])
     else:
         items.append("Ctrl+I 자세히")
     safe_add(stdscr, y, 2, "   ".join(items), curses.A_BOLD)
@@ -554,43 +558,184 @@ def _copy_result(tower, pane_key: str, stdscr=None) -> str:
     the result read. An unclear client is asked, never guessed.
     """
 
-    ok, reason, payload = get_result(tower, pane_key)
+    row = find_row(tower, pane_key)
+    if row is None or row.get("placeholder"):
+        return t("nav.stale")
+    pane_pid = str(row.get("pane_pid") or "")
+    if not row.get("remote") and not pane_pid:
+        payload = {"state": row.get("result_state") or "none", "reason_code": "UNKNOWN"}
+        _remember_result_copy(tower, row, payload, "not_entered", "blocked", "UNKNOWN")
+        return t("control.result_copy_unavailable").format(code="UNKNOWN")
+    result = get_result(tower, pane_key) if row.get("remote") else get_result(
+        tower, pane_key, expected_pane_pid=pane_pid,
+    )
+    ok, reason, payload = result
     if not ok:
-        return reason or ""
+        code = _result_failure_code(row, payload, reason)
+        _remember_result_copy(tower, row, payload, "not_entered", "blocked", code)
+        if reason == "not_found":
+            return t("nav.stale")
+        return t("control.result_copy_unavailable").format(code=code) if reason == "stale" else reason or ""
     text = payload.get("text") or ""
     if not payload.get("complete") or not text:
-        return t("control.result_incomplete")
+        reason_code = _result_failure_code(row, payload)
+        _remember_result_copy(tower, row, payload, "not_entered", "blocked", reason_code)
+        return t("control.result_copy_unavailable").format(code=reason_code)
     outcome, reason = _route_clipboard(tower, text, stdscr)
     if outcome is None:
-        return reason or t("control.copy_failed")
+        if reason == t("copy.choose_destination"):
+            _remember_result_copy(tower, row, payload, "not_entered", "destination_required", "UNKNOWN")
+            return reason
+        _remember_result_copy(tower, row, payload, "entered", "failed", "CLIPBOARD_FAILED")
+        return t("control.clipboard_failed")
     if outcome.clipboard:
         _mark_shown(tower, pane_key, payload)
+    clipboard_result = (
+        "readback_verified" if outcome.clipboard else
+        "tmux_buffer" if outcome.buffer else
+        "terminal_requested" if outcome.terminal_requested else
+        "failed"
+    )
+    _remember_result_copy(
+        tower, row, payload, "entered", clipboard_result,
+        "" if clipboard_result != "failed" else "CLIPBOARD_FAILED",
+    )
+    if clipboard_result == "failed":
+        return t("control.clipboard_failed")
     access = getattr(tower, "last_copy_access_context", None)
     host = access.display_name if access else getattr(tower, "local_host", "") or ""
     return _result_copy_notice(outcome, host)
 
 
-def _copy_screen(tower, pane_key: str, stdscr=None) -> str:
-    """Copy the explicitly requested recent live terminal screen."""
+def pane_diagnostic_lines(tower, selected_row: dict) -> list[str]:
+    """Read metadata for this exact pane; never expose prompt or Result text."""
 
+    pane_key = str(selected_row.get("key") or "")
+    row = next((item for item in getattr(tower, "rows", ()) if item.get("key") == pane_key), None)
+    if row is None or row.get("placeholder") or _pane_binding(row) != _pane_binding(selected_row):
+        return [t("diagnostics.stale")]
+    pane_pid = str(row.get("pane_pid") or "")
+    last = getattr(tower, "last_result_copy_diagnostic", {}) or {}
+    same_binding = (
+        last.get("pane_key"), last.get("pane_id"), last.get("pane_pid"), last.get("session")
+    ) == _pane_binding(row)
+    if same_binding:
+        turn_complete = last.get("turn_complete")
+        body_complete = last.get("body_complete")
+        code = str(last.get("reason_code") or "UNKNOWN")
+        if code == "-" and not (turn_complete is True and body_complete is True):
+            code = "UNKNOWN"
+        clipboard = f'{last.get("stage", "UNKNOWN")} / {last.get("outcome", "UNKNOWN")}'
+    else:
+        turn_complete = row.get("turn_complete")
+        body_complete = row.get("body_complete")
+        code = _result_failure_code(row, {})
+        clipboard = "not_attempted"
+    return [
+        t("diagnostics.pane").format(pane=row.get("pane_id") or "-", pid=pane_pid or "-"),
+        t("diagnostics.session").format(tmux=row.get("tmux_host") or "-", session=row.get("session") or "-"),
+        t("diagnostics.host").format(
+            transport=row.get("transport") or "-", execution=row.get("execution_host") or row.get("host") or "-",
+        ),
+        t("diagnostics.agent").format(
+            detected=row.get("auto_detected_agent") or row.get("auto_agent") or "-",
+            adapter=row.get("result_adapter") or "UNKNOWN",
+        ),
+        t("diagnostics.provider").format(
+            provider=row.get("result_provider_type") or "UNKNOWN",
+            state=(last.get("result_state") if same_binding else "") or row.get("result_state") or "UNKNOWN",
+        ),
+        t("diagnostics.completeness").format(
+            turn=_truth(turn_complete), body=_truth(body_complete),
+        ),
+        t("diagnostics.reason").format(code=code),
+        t("diagnostics.clipboard").format(result=clipboard),
+    ]
+
+
+def _pane_binding(row: dict) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("key") or ""), str(row.get("pane_id") or ""),
+        str(row.get("pane_pid") or ""), str(row.get("session") or ""),
+    )
+
+
+def _truth(value) -> str:
+    return "true" if value is True else "false" if value is False else "UNKNOWN"
+
+
+def _result_failure_code(row: dict, payload: dict, reason: str = "") -> str:
+    code = str(payload.get("reason_code") or payload.get("source") or "")
+    if code in {
+        "AGENT_UNSUPPORTED", "PROVIDER_UNBOUND", "TURN_NOT_COMPLETE", "SOURCE_PARTIAL",
+        "OUTPUT_RANGE_EXCEEDED", "CLIPBOARD_FAILED", "UNKNOWN",
+        "REMOTE_PROVIDER_UNBOUND", "REMOTE_PROVIDER_UNAVAILABLE", "REMOTE_RESULT_INCOMPLETE",
+    }:
+        return code
+    if reason == "stale":
+        return "UNKNOWN"
+    if row.get("result_adapter") == "Shell":
+        return "AGENT_UNSUPPORTED"
+    if payload.get("turn_complete") is False:
+        return "TURN_NOT_COMPLETE"
+    if payload.get("body_complete") is False:
+        return "SOURCE_PARTIAL"
+    return "UNKNOWN"
+
+
+def _remember_result_copy(tower, row: dict, payload: dict, stage: str, outcome: str, reason_code: str) -> None:
+    """Store copy diagnostics only; never retain body text or clipboard data."""
+
+    tower.last_result_copy_diagnostic = {
+        "pane_key": str(row.get("key") or ""),
+        "pane_id": str(row.get("pane_id") or ""),
+        "pane_pid": str(row.get("pane_pid") or ""),
+        "session": str(row.get("session") or ""),
+        "stage": stage,
+        "outcome": outcome,
+        "provider_type": str(row.get("result_provider_type") or "UNKNOWN"),
+        "result_state": str(payload.get("state") or row.get("result_state") or "UNKNOWN"),
+        "turn_complete": payload.get("turn_complete"),
+        "body_complete": payload.get("body_complete"),
+        "reason_code": reason_code or "-",
+    }
+
+
+def _copy_screen(tower, pane_key: str, stdscr=None, *, expected_pane_pid: str = "") -> str:
+    """Copy the explicitly requested recent terminal output, not a Result."""
+
+    row = find_row(tower, pane_key)
+    if row is None or row.get("placeholder"):
+        return t("nav.stale")
+    if row.get("remote"):
+        return t("control.remote_unsupported")
+    pane_pid = str(row.get("pane_pid") or "")
+    if not pane_pid or (expected_pane_pid and pane_pid != expected_pane_pid):
+        return t("nav.stale")
     ok, reason, payload = get_pane_screen(
         getattr(tower, "session", "") or "",
         pane_key,
         getattr(tower, "own_pane_id", "") or "",
+        expected_pane_pid=expected_pane_pid or pane_pid,
     )
     if not ok:
         return t("control.remote_unsupported") if reason == "remote_unsupported" else t("nav.stale")
-    text = "\n".join(payload.get("lines") or [])
+    lines = payload.get("lines") or []
+    text = "\n".join(lines)
     if not text:
         return t("control.no_screen")
     outcome, reason = _route_clipboard(tower, text, stdscr)
     if outcome is None:
         return reason or t("control.copy_failed")
-    return t("control.copied_screen") if outcome.clipboard or outcome.buffer else _copy_notice(
-        outcome,
+    host = (
         getattr(getattr(tower, "last_copy_access_context", None), "display_name", "")
-        or getattr(tower, "local_host", "") or "",
+        or getattr(tower, "local_host", "") or ""
     )
+    notice = _copy_notice(outcome, host)
+    if outcome.clipboard or outcome.buffer or outcome.terminal_requested:
+        key = "control.copied_screen_truncated" if payload.get("truncated") else "control.copied_screen"
+        notice += " · " + t(key).format(lines=len(lines))
+    return notice
 
 
 def _route_clipboard(tower, text: str, stdscr=None):

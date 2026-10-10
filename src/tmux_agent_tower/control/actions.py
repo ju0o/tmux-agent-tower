@@ -143,14 +143,14 @@ def get_pane_screen(
     *,
     expected_pane_pid: str = "",
 ) -> Tuple[bool, str, dict]:
-    """Recent visible text of one local pane. ``capture-pane`` only."""
+    """Recent terminal output of one local pane. ``capture-pane`` only."""
 
     ok, reason, pane_id = find_screen_target(session, pane_key, own_pane_id)
     if not ok or not pane_id:
         return False, reason or "not_found", {}
     if expected_pane_pid and not _pane_matches_live_identity(session, pane_id, expected_pane_pid):
         return False, "stale", {}
-    raw = tmux_capture.capture_pane(pane_id, lines=MAX_SCREEN_LINES)
+    raw = tmux_capture.capture_pane(pane_id, lines=MAX_SCREEN_LINES + 1)
     if expected_pane_pid and not _pane_matches_live_identity(session, pane_id, expected_pane_pid):
         return False, "stale", {}
     return True, "", build_screen_payload(pane_key, raw)
@@ -501,7 +501,9 @@ def focus_pane(session: str, pane_key: str, own_pane_id: str = "") -> Tuple[bool
     return True, ""
 
 
-def get_result(tower, pane_key: str) -> Tuple[bool, str, dict]:
+def get_result(
+    tower, pane_key: str, *, expected_pane_pid: Optional[str] = None,
+) -> Tuple[bool, str, dict]:
     """Result state and, when ready or read, the extracted body.
 
     A fresh Tower process has an empty tracker. Y and S then read a
@@ -511,6 +513,15 @@ def get_result(tower, pane_key: str) -> Tuple[bool, str, dict]:
     row = find_row(tower, pane_key)
     if row is None or row.get("placeholder"):
         return False, "not_found", {}
+    if expected_pane_pid is not None and not row.get("remote"):
+        row_pid = str(row.get("pane_pid") or "")
+        if (
+            not expected_pane_pid or not row_pid or row_pid != expected_pane_pid
+            or not _pane_matches_live_identity(
+                getattr(tower, "session", "") or "", str(row.get("pane_id") or ""), expected_pane_pid,
+            )
+        ):
+            return False, "stale", {"reason_code": "UNKNOWN"}
     target = ResultTarget.from_row(row)
     if row.get("remote"):
         provider = _RecoveryProvider(lambda target: _recover_remote_result(target.remote_provider_row()))
@@ -565,6 +576,7 @@ def get_result(tower, pane_key: str) -> Tuple[bool, str, dict]:
     provider = _RecoveryProvider(
         lambda resolved: _recover_result(
             tower, resolved.tower_pane_id or pane_key, tracker, identity, source=source,
+            expected_pane_pid=expected_pane_pid or target.tower_pane_pid,
         )
     )
     candidate = provider.get_latest_complete_result(target)
@@ -749,7 +761,7 @@ def _recover_ssh_grok_result(row: dict) -> dict:
     result = fetch_remote_grok_result(endpoint, requested)
     if not isinstance(result, dict):
         return _remote_grok_failure("REMOTE_PROVIDER_UNAVAILABLE")
-    status = str(result.get("status") or "REMOTE_PROVIDER_UNBOUND")
+    status = str(result.get("status") or "UNKNOWN")
     if status != "ok":
         return _remote_grok_failure(status)
     if result.get("ssh_connection") != list(connection):
@@ -820,7 +832,9 @@ def _recover_registered_remote_result(row: dict) -> Optional[dict]:
     return _recover_remote_result(provider_row)
 
 
-def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str = "local_tmux") -> Optional[dict]:
+def _recover_result(
+    tower, pane_key: str, tracker, identity=None, *, source: str = "local_tmux", expected_pane_pid: str = "",
+) -> Optional[dict]:
     """Newest finished body in bounded history, using the screen adapter.
 
     ``None`` means this pane's screen was not read. A working turn and a
@@ -835,14 +849,19 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
     )
     if not ok or not pane_id:
         return None
+    session = getattr(tower, "session", "") or ""
+    if expected_pane_pid and not _pane_matches_live_identity(session, pane_id, expected_pane_pid):
+        return {"state": "none", "text": "", "complete": False, "reason_code": "UNKNOWN"}
     found = pane_title_and_command(pane_id)
     if found is None:
         return None
     title, command = found
     watermark = tracker.turn_start_watermark(pane_key, identity) if tracker is not None else None
     capture_lines = RECOVERY_LINES
+    history_position = tmux_capture.pane_history_position(pane_id)
+    watermark_scoped = False
     if watermark is not None:
-        current = tmux_capture.pane_history_position(pane_id)
+        current = history_position
         start_size, start_limit = watermark
         if (
             current is not None
@@ -851,11 +870,20 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
             and start_size <= current[0] < current[1]
         ):
             capture_lines = min(RECOVERY_LINES, max(0, current[0] - start_size))
-    lines = _bounded_history(tmux_capture.capture_pane(
+            watermark_scoped = True
+    raw_lines = tmux_capture.capture_pane(
         pane_id, lines=capture_lines, join_wrapped=True,
-    ))
+    )
+    if expected_pane_pid and not _pane_matches_live_identity(session, pane_id, expected_pane_pid):
+        return {"state": "none", "text": "", "complete": False, "reason_code": "UNKNOWN"}
+    lines, range_exceeded = _bounded_history_with_truncation(raw_lines)
+    if not watermark_scoped and history_position is not None:
+        range_exceeded = range_exceeded or history_position[0] > capture_lines
     if not lines:
-        return {"state": "none", "text": "", "fingerprint": "", "generated_at": 0.0, "complete": False}
+        return {
+            "state": "none", "text": "", "fingerprint": "", "generated_at": 0.0,
+            "complete": False, "reason_code": "OUTPUT_RANGE_EXCEEDED" if range_exceeded else "UNKNOWN",
+        }
     from ..adapters.base import PaneContext
     from ..detection.topology import resolve_runtime
 
@@ -867,11 +895,17 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
         snap = tracker.observe(pane_key, "WORKING", None, identity=identity)
         return {
             "state": snap.state, "text": "", "fingerprint": snap.fingerprint,
-            "generated_at": snap.generated_at, "complete": False,
+            "generated_at": snap.generated_at, "complete": False, "reason_code": "TURN_NOT_COMPLETE",
         }
     candidate = adapter.extract_result(ctx)
     if candidate is None or not candidate.text:
-        return {"state": "none", "text": "", "fingerprint": "", "generated_at": 0.0, "complete": False}
+        reason_code = "OUTPUT_RANGE_EXCEEDED" if range_exceeded else "UNKNOWN"
+        if getattr(adapter, "name", "") == "Shell":
+            reason_code = "AGENT_UNSUPPORTED"
+        return {
+            "state": "none", "text": "", "fingerprint": "", "generated_at": 0.0,
+            "complete": False, "reason_code": reason_code,
+        }
     snap = tracker.observe(
         pane_key, "IDLE", candidate, identity=identity, full_recovery=candidate.complete,
     )
@@ -883,6 +917,11 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
             "generated_at": snap.generated_at, "complete": False,
             "turn_complete": candidate.turn_complete,
             "body_complete": candidate.body_complete,
+            "reason_code": (
+                "OUTPUT_RANGE_EXCEEDED" if range_exceeded else
+                "SOURCE_PARTIAL" if candidate.turn_complete and not candidate.body_complete else
+                "TURN_NOT_COMPLETE"
+            ),
         }
     turn_identity = hashlib.sha256(
         json.dumps(identity or {}, sort_keys=True, default=str).encode("utf-8")
@@ -897,10 +936,19 @@ def _recover_result(tower, pane_key: str, tracker, identity=None, *, source: str
 def _bounded_history(lines: List[str]) -> List[str]:
     """Keep the newest lines, and stop if the bytes exceed the cap."""
 
-    kept = list(lines)[-RECOVERY_LINES:]
+    return _bounded_history_with_truncation(lines)[0]
+
+
+def _bounded_history_with_truncation(lines: List[str]) -> Tuple[List[str], bool]:
+    """Return bounded history and whether this function actually discarded rows."""
+
+    kept = list(lines)
+    truncated = len(kept) > RECOVERY_LINES
+    kept = kept[-RECOVERY_LINES:]
     while kept and len("\n".join(kept).encode("utf-8", "replace")) > RECOVERY_BYTES:
         kept.pop(0)
-    return kept
+        truncated = True
+    return kept, truncated
 
 
 _SAFE_ATTENTION_KEY = re.compile(r"^[0-9yn]$")
