@@ -183,12 +183,15 @@ def drop_scrolled_user_prompt(lines: Sequence[str]) -> list:
     return list(lines[first:])
 
 
-def prose_body(lines: Sequence[str]) -> Optional[str]:
+def prose_body(
+    lines: Sequence[str], *, preserve_indented_code: bool = False,
+    preserve_elapsed_examples: bool = False,
+) -> Optional[str]:
     """Drop tool logs and status chrome while preserving answer formatting.
 
     "Finished" alone is still chrome. Length is not evidence: the caller
-    has already found that agent's completion marker. Indentation and blank
-    lines are part of the body, especially inside Markdown code fences.
+    has already found that agent's completion marker. Fenced code and blank
+    lines are preserved; callers may preserve indentation when it denotes code.
     """
 
     kept = []
@@ -206,6 +209,12 @@ def prose_body(lines: Sequence[str]) -> Optional[str]:
             continue
         if stripped.startswith(("```", "~~~")):
             fence = stripped[0]
+            kept.append(raw)
+            continue
+        if preserve_indented_code and line.startswith(("    ", "\t")):
+            kept.append(raw)
+            continue
+        if preserve_elapsed_examples and re.match(r"^(?:Worked|Cooked) for \d", stripped, re.IGNORECASE):
             kept.append(raw)
             continue
         if _BOX_ONLY.match(stripped) or _CHROME_LINE.match(stripped) or _TOOL_LINE.match(stripped):
