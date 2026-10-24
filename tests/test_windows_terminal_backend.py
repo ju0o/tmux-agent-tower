@@ -46,6 +46,24 @@ def _screen_text(screen):
     return "\n".join("".join(cell.text for cell in row) for row in screen.rows)
 
 
+def _compact_screen_text(screen):
+    return "".join(line.rstrip() for line in _screen_text(screen).splitlines())
+
+
+def _expected_prompt_path(path, columns):
+    from pathlib import PureWindowsPath
+
+    text = str(path)
+    limit = max(12, columns - 36)
+    if len(text) > limit:
+        root = PureWindowsPath(text).anchor
+        if len(root) > limit - 5:
+            root = root[:limit - 5]
+        tail = max(1, limit - len(root) - 4)
+        text = root + "...\\" + text[-tail:]
+    return "PS " + text + ">"
+
+
 def _wait(client, predicate, timeout=15):
     deadline = time.monotonic() + timeout
     last = None
@@ -96,7 +114,8 @@ def test_native_powershell_create_io_resize_detach_reconnect_stop(tmp_path, monk
         )
         assert _process_same(identity.shell_pid, identity.shell_start)
         _wait(client, lambda update: update.screen is not None
-              and "JTT>" in _screen_text(update.screen))
+              and _expected_prompt_path(work, 100)
+              in _compact_screen_text(update.screen))
         assert client.acquire()
         marker = _generated_marker(client, "CREATE")
         assert marker
@@ -970,6 +989,94 @@ def test_native_input_reply_sequence_does_not_ack_unread_output(tmp_path):
         current = client.observe()
         assert current.screen is not None
         assert "JTT_MUST_NOT_BE_DELIVERED" not in _screen_text(current.screen)
+    finally:
+        client.close()
+        current = next((item for item in registry.list_sessions()
+                        if item.session_id == identity.session_id), None)
+        if current is not None:
+            registry.stop(
+                identity.session_id, expected_generation=identity.generation,
+                expected_shell_pid=identity.shell_pid,
+            )
+
+
+@pytest.mark.parametrize("columns,lines", [(80, 24), (160, 44)])
+def test_native_powershell_prompt_tracks_long_current_location(
+        tmp_path, monkeypatch, columns, lines):
+    import ju0_terminal_tower  # noqa: F401 - installs the guarded shared namespace
+    from tmux_agent_tower.terminal import TerminalRegistry
+
+    start = tmp_path / "isolated-start"
+    destination = start / "dest"
+    start.mkdir()
+    destination.mkdir(parents=True)
+    assert len(str(destination)) > 100
+    monkeypatch.chdir(start)
+    registry = TerminalRegistry(tmp_path / "isolated-jtt" / "terminals")
+    client = registry.create("PowerShell current path prompt")
+    identity = client.identity
+
+    try:
+        initial = _wait(
+            client,
+            lambda update: update.screen is not None
+            and _expected_prompt_path(start, 100)
+            in _compact_screen_text(update.screen),
+        )
+        assert _expected_prompt_path(start, 100) in _compact_screen_text(initial.screen)
+        assert client.acquire()
+        client.resize(columns, lines)
+
+        # Wait until PowerShell reports the resized dimensions and returns to
+        # the prompt before sending the path change. The marker alone can be
+        # emitted before PowerShell has finished the command and is ready for
+        # the next line.
+        width_marker = f"JTT_WIDTH_{columns}_END"
+        width_query = (
+            f"[Console]::WriteLine('JTT_WIDTH_' + [Console]::WindowWidth + '_END')"
+        )
+        assert width_marker not in width_query
+        client.send((width_query + "\r").encode("ascii"))
+        resized_prompt = _expected_prompt_path(start, columns)
+        resized = _wait(client, lambda item: item.screen is not None
+                        and width_marker in _screen_text(item.screen)
+                        and resized_prompt in _screen_text(item.screen).split(
+                            width_marker, 1
+                        )[1])
+        assert (resized.columns, resized.lines) == (columns, lines)
+
+        # Navigate relatively so the test command itself remains short even
+        # though the resolved working directory is over 100 characters.
+        command = f"cd '{destination.name}'"
+        assert str(destination) not in command
+        client.send((command + "\r").encode("utf-8"))
+        try:
+            update = _wait(
+                client,
+                lambda item: item.screen is not None
+                and _expected_prompt_path(destination, columns)
+                in _compact_screen_text(item.screen),
+            )
+        except AssertionError as exc:
+            last = client.poll()
+            captured = (_compact_screen_text(last.screen)
+                        if last is not None and last.screen is not None else "<no screen>")
+            raise AssertionError(f"PowerShell cwd prompt was not observed; screen={captured!r}") from exc
+        display = _compact_screen_text(update.screen)
+        assert (update.columns, update.lines) == (columns, lines)
+
+        # The actual path comes from PowerShell after cd; it is not embedded
+        # in the command echo and remains distinct from the shortened prompt.
+        query = "pwd"
+        assert str(destination) not in query
+        client.send((query + "\r").encode("ascii"))
+        output = _wait(
+            client,
+            lambda item: item.screen is not None
+            and str(destination) in _compact_screen_text(item.screen),
+        )
+        assert str(destination) in _compact_screen_text(output.screen)
+        assert _expected_prompt_path(destination, columns) in _compact_screen_text(output.screen)
     finally:
         client.close()
         current = next((item for item in registry.list_sessions()
